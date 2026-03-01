@@ -425,12 +425,40 @@ async def run_pipeline(
             # Primary language for voices
             primary_lang = langs[0] if langs else None
 
+            # ── Sub-progress for Images + Voices (step 2, global 15-55%) ──
+            # Images track local 0-100%, voices track local 0-100%.
+            # Combined bar = avg(img_pct, voice_pct) mapped to global range.
+            _m_start, _m_end = STEP_WEIGHTS[STEP_MEDIA]
+            _media_local: dict[str, float] = {"img": 0.0, "voice": 0.0}
+
+            def _emit_media_pct(msg: str = "") -> None:
+                combined = (_media_local["img"] + _media_local["voice"]) / 2.0
+                global_pct = _m_start + (combined / 100.0) * (_m_end - _m_start)
+                _emit(
+                    progress_callback,
+                    type="sub_progress",
+                    step=STEP_MEDIA,
+                    pct=round(global_pct, 1),
+                    message=msg,
+                )
+
+            def _img_sub_cb(event: dict) -> None:
+                if event.get("type") == "sub_progress":
+                    _media_local["img"] = float(event.get("pct", 0.0))
+                    _emit_media_pct(event.get("message", ""))
+
+            def _voice_sub_cb(event: dict) -> None:
+                if event.get("type") == "sub_progress":
+                    _media_local["voice"] = float(event.get("pct", 0.0))
+                    _emit_media_pct(event.get("message", ""))
+
             # Images + primary voice in parallel
             img_task = generate_images(
                 s_path,
                 channel_config_path,
                 dry_run=dry_run,
                 skip_existing=True,
+                progress_callback=_img_sub_cb,
                 # TODO: image_style override — module 02 reads style from channel_config
             )
             voice_task = generate_voices(
@@ -439,6 +467,7 @@ async def run_pipeline(
                 lang=primary_lang,
                 dry_run=dry_run,
                 skip_existing=True,
+                progress_callback=_voice_sub_cb,
                 # TODO: voice_id override — module 03 reads voice_id from channel_config
             )
 

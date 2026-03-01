@@ -283,6 +283,7 @@ async def generate_images(
     dry_run: bool = False,
     max_retries: int = MAX_VALIDATION_RETRIES,
     size: str | None = None,
+    progress_callback: Any | None = None,
 ) -> GenerationSummary:
     """
     Generate images for all blocks in a script.json.
@@ -350,6 +351,22 @@ async def generate_images(
     from clients.voidai_client import VoidAIClient       # noqa: PLC0415
     from clients.wavespeed_client import WaveSpeedClient  # noqa: PLC0415
 
+    # ── Progress helper (reports 0-100% of image generation) ──
+    n_img_total = len(blocks_with_prompts)
+    _img_done = [0]
+
+    def _emit_img_progress(done: int) -> None:
+        if progress_callback and n_img_total > 0:
+            try:
+                pct = round(done / n_img_total * 100.0, 1)
+                progress_callback({
+                    "type": "sub_progress",
+                    "pct": pct,
+                    "message": f"Image {done}/{n_img_total}",
+                })
+            except Exception:
+                pass
+
     results: list[ImageResult] = []
 
     async with WaveSpeedClient() as wavespeed, VoidAIClient() as voidai:
@@ -379,15 +396,18 @@ async def generate_images(
                 unit="img",
             ):
                 results.append(await fut)
+                _img_done[0] += 1
+                _emit_img_progress(_img_done[0])
 
         except ImportError:
             log.info("tqdm not available — running without progress bar")
             raw = await asyncio.gather(*coros, return_exceptions=True)
-            for item in raw:
+            for i, item in enumerate(raw):
                 if isinstance(item, Exception):
                     log.error("Unexpected gather exception: %s", item)
                 else:
                     results.append(item)
+                _emit_img_progress(i + 1)
 
         wavespeed_cost = wavespeed.session_cost
         voidai_cost    = voidai.session_cost

@@ -21,6 +21,10 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+# Windows cp1252 → UTF-8 fix (allows Unicode chars in print output)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).parent
 PROJECT_PLAN = ROOT / "PROJECT_PLAN.md"
 CONTEXT_MD = ROOT / "CONTEXT.md"

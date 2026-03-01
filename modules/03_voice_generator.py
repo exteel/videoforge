@@ -225,6 +225,7 @@ async def generate_voices(
     skip_existing: bool = True,
     dry_run: bool = False,
     no_normalize: bool = False,
+    progress_callback: Any | None = None,
 ) -> VoiceSummary:
     """
     Generate TTS audio for all narration blocks in script.json.
@@ -293,6 +294,22 @@ async def generate_voices(
 
     from clients.voiceapi_client import VoiceAPIClient  # noqa: PLC0415
 
+    # ── Progress helper (reports 0-100% of voice generation) ──
+    n_voice_total = len(voiced_blocks)
+    _voice_done = [0]
+
+    def _emit_voice_progress(done: int) -> None:
+        if progress_callback and n_voice_total > 0:
+            try:
+                pct = round(done / n_voice_total * 100.0, 1)
+                progress_callback({
+                    "type": "sub_progress",
+                    "pct": pct,
+                    "message": f"Voice {done}/{n_voice_total}",
+                })
+            except Exception:
+                pass
+
     results: list[AudioResult] = []
 
     async with VoiceAPIClient() as voiceapi:
@@ -319,15 +336,18 @@ async def generate_voices(
                 unit="block",
             ):
                 results.append(await fut)
+                _voice_done[0] += 1
+                _emit_voice_progress(_voice_done[0])
 
         except ImportError:
             log.info("tqdm not available — running without progress bar")
             raw = await asyncio.gather(*coros, return_exceptions=True)
-            for item in raw:
+            for i, item in enumerate(raw):
                 if isinstance(item, Exception):
                     log.error("Unexpected gather exception: %s", item)
                 else:
                     results.append(item)
+                _emit_voice_progress(i + 1)
 
         fallback_count = voiceapi.fallback_count
 

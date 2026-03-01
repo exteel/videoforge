@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 18:30
+Останнє оновлення: 2026-03-01 20:00
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -28,9 +28,21 @@
 - [x] №16 Pipeline Runner
 - [x] №17 Cost Tracker
 - [x] №18 Batch Runner
+- [x] №19 SQLite Tracker (utils/db.py + інтеграція pipeline/batch)
+- [x] №20 FastAPI бекенд (REST + WebSocket прогрес)
+- [x] №21 React Dashboard (Vite + React + TypeScript + TailwindCSS v4)
+- [x] №22 UI покращення (ETA, live timer, крапки кроків, batch pulse)
+- [x] №23 UI канали і промпти (Channels + Prompts вкладки в дашборді)
+- [x] №24 Docker контейнеризація
+- [x] №25 README документація
+- [x] №26 Transcriber integration (YouTube URL → yt-dlp → Transcriber → pipeline)
+- [x] YouTube Panel UI (вибір відео, thumbnails A/B, title variants, upload)
+- [x] 3 thumbnail A/B variants + 3 title variants (pipeline.py + backend/routes)
+- [x] ETA + real-time progress bar наскрізний (pipeline.py + job_manager.py + JobCard.tsx)
+- [x] FFmpeg block-by-block sub-progress (05_video_compiler.py → sub_progress WS events)
 
 ## Поточний стан
-Image Generator (№7) завершено. Наступний: Voice Generator (№8).
+Всі основні модулі та UI завершені. Ведеться покращення прогресбару (sub-progress для кроку 2).
 
 ## Відомі баги
 (немає)
