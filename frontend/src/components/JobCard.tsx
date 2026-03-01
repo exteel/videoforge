@@ -4,8 +4,20 @@ import { useWebSocket } from '../hooks/useWebSocket'
 
 const STEPS = ['', 'Script', 'Images + Voices', 'Subtitles', 'Video', 'Thumbnail', 'Metadata']
 
-// Estimated seconds per step (based on typical runs)
-const STEP_EST_SEC = [0, 60, 120, 15, 30, 30, 10]
+// Estimated seconds per step (for time-based animation fallback)
+const STEP_EST_SEC = [0, 60, 180, 15, 60, 60, 15]
+
+// Global % range per step — must match STEP_WEIGHTS in pipeline.py
+//   [start%, end%] for steps 0..6
+const STEP_PCT_RANGE: [number, number][] = [
+  [0,  0],    // 0: unused
+  [0,  15],   // 1: Script
+  [15, 55],   // 2: Images + Voices
+  [55, 60],   // 3: Subtitles
+  [60, 80],   // 4: Video
+  [80, 93],   // 5: Thumbnail
+  [93, 100],  // 6: Metadata
+]
 
 const STATUS_COLOR: Record<string, string> = {
   queued:    'bg-yellow-900 text-yellow-300',
@@ -31,17 +43,22 @@ function calcETAfromPct(pct: number, elapsedSec: number): string | null {
   return `ETA ~${fmtSec(remaining)}`
 }
 
-/** Fallback estimate % when no real pct is available */
+/**
+ * Time-based pct estimate within the current step's expected % range.
+ * Fills 95% of the step range based on elapsed time so the bar
+ * always moves forward even without WS sub-progress events.
+ */
 function calcPct(step: number, elapsedSec: number): number {
-  if (step > 6) return 100
   if (step < 1) return 0
-  // Time estimated to have been spent in previous steps
+  if (step > 6) return 100
+  const [stepStart, stepEnd] = STEP_PCT_RANGE[step]
+  // Seconds estimated for all previous steps
   const prevEst = STEP_EST_SEC.slice(1, step).reduce((a, b) => a + b, 0)
-  const timeInStep = elapsedSec - prevEst
+  const timeInStep = Math.max(0, elapsedSec - prevEst)
   const curEst = STEP_EST_SEC[step] || 30
-  const stepFrac = Math.min(1, Math.max(0, timeInStep / curEst))
-  // Each step is 1/6 of total; fraction within current step is bonus
-  return Math.min(100, ((step - 1 + stepFrac) / 6) * 100)
+  // Cap at 95% of the step range — backend step_done event will push it to 100%
+  const frac = Math.min(0.95, timeInStep / curEst)
+  return stepStart + frac * (stepEnd - stepStart)
 }
 
 interface Props {
@@ -109,12 +126,17 @@ export function JobCard({ job, onRefresh }: Props) {
     return { livePctFromWS: null, liveSubMsg: null }
   })()
 
-  // Priority: WS real pct > snapshot job.pct > time-based estimate
+  // Best known real pct (from WS events or last polled snapshot)
+  const realPct = livePctFromWS !== null ? livePctFromWS : job.pct
+  // Time-based estimate within current step's expected range
+  const timePct = calcPct(liveStep, elapsedSec)
+
+  // Take the MAXIMUM of real and time-based: bar always moves forward.
+  // realPct=0 at step boundary → timePct fills in smooth animation.
+  // When real pct arrives (step_done / sub_progress), it overrides if higher.
   const pct =
     liveStatus === 'done' ? 100
-    : livePctFromWS !== null ? livePctFromWS
-    : (job.pct > 0) ? job.pct
-    : calcPct(liveStep, elapsedSec)
+    : Math.max(realPct, timePct)
 
   const eta = liveStatus === 'running' ? calcETAfromPct(pct, elapsedSec) : null
 
