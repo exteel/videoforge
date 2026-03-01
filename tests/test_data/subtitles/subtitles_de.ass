@@ -1,0 +1,40 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial Bold,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,10,10,60,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:04.31,Default,,0,0,0,,What if everything you learned about\NRome's fall was wrong?
+Dialogue: 0,0:00:04.31,0:00:09.50,Default,,0,0,0,,Today, we uncover the truth that\Nhistorians have debated for centuries.
+Dialogue: 0,0:00:09.50,0:00:14.54,Default,,0,0,0,,The Roman Empire didn't fall in a day.
+Dialogue: 0,0:00:14.54,0:00:26.07,Default,,0,0,0,,For over three hundred years, it slowly\Ncrumbled under the weight of its own\Nambitions.
+Dialogue: 0,0:00:26.07,0:00:38.00,Default,,0,0,0,,Economic collapse, military overextension,\Nand political corruption all played their\Npart.
+Dialogue: 0,0:00:38.00,0:00:41.91,Default,,0,0,0,,Let's start with the economy.
+Dialogue: 0,0:00:41.91,0:00:48.11,Default,,0,0,0,,By the third century, Rome was bleeding\Nmoney.
+Dialogue: 0,0:00:48.11,0:00:55.79,Default,,0,0,0,,The cost of maintaining a vast army\Ndrained the treasury.
+Dialogue: 0,0:00:55.79,0:01:09.00,Default,,0,0,0,,Emperors debased the currency, flooding\Nthe market with coins that contained less\Nand less silver.
+Dialogue: 0,0:01:09.00,0:01:13.25,Default,,0,0,0,,Then came the military crisis.
+Dialogue: 0,0:01:13.25,0:01:30.79,Default,,0,0,0,,Rome's legions, once the most feared\Nfighting force in the world, were\Nstretched thin across thousands of miles\Nof frontier.
+Dialogue: 0,0:01:30.79,0:01:34.47,Default,,0,0,0,,Barbarian raids increased.
+Dialogue: 0,0:01:34.47,0:01:39.00,Default,,0,0,0,,The empire struggled to respond.
+Dialogue: 0,0:01:39.00,0:01:43.58,Default,,0,0,0,,Political chaos made everything worse.
+Dialogue: 0,0:01:43.58,0:01:49.61,Default,,0,0,0,,In just fifty years, Rome had over fifty\Nemperors.
+Dialogue: 0,0:01:49.61,0:01:52.38,Default,,0,0,0,,Most were assassinated.
+Dialogue: 0,0:01:52.38,0:01:55.75,Default,,0,0,0,,Stability became impossible.
+Dialogue: 0,0:01:55.75,0:02:06.00,Default,,0,0,0,,The Senate lost its authority, and the\Nrule of law gave way to the rule of the\Nsword.
+Dialogue: 0,0:02:06.00,0:02:19.53,Default,,0,0,0,,And yet, the Eastern Roman Empire survived\Nfor another thousand years.
+Dialogue: 0,0:02:19.53,0:02:28.100,Default,,0,0,0,,This tells us that Rome's fall wasn't\Ninevitable.
+Dialogue: 0,0:02:28.100,0:02:46.00,Default,,0,0,0,,It was the result of specific choices made\Nby specific people in specific\Ncircumstances.
+Dialogue: 0,0:02:46.00,0:02:49.92,Default,,0,0,0,,That's the lesson history teaches us.
+Dialogue: 0,0:02:49.92,0:02:54.89,Default,,0,0,0,,Great civilizations don't fall because of\Nfate.
+Dialogue: 0,0:02:54.89,0:02:58.18,Default,,0,0,0,,They fall because of decisions.
+Dialogue: 0,0:02:58.18,0:03:04.00,Default,,0,0,0,,And that's a lesson we would do well to\Nremember today.
+Dialogue: 0,0:03:04.00,0:03:11.58,Default,,0,0,0,,If you found this video valuable, hit the\Nlike button and subscribe for more history\Nthat challenges what you think you know.
+Dialogue: 0,0:03:11.58,0:03:14.30,Default,,0,0,0,,What do you think was Rome's biggest\Nmistake?
+Dialogue: 0,0:03:14.30,0:03:16.00,Default,,0,0,0,,Let us know in the comments.
