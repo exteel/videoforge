@@ -54,5 +54,12 @@
     "provider": "wavespeed",
     "fallback": "gpt-image-1.5"
   },
-  "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}"
+  "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}",
+  "background_music": {
+    "tracks_dir": "assets/music",
+    "random": false,
+    "volume_db": -20
+  },
+  "intro_video": "assets/intro/history_intro.mp4",
+  "outro_video": "assets/outro/history_outro.mp4"
 }
