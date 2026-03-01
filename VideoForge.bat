@@ -1,31 +1,32 @@
 @echo off
+chcp 65001 >nul 2>&1
 title VideoForge
 cd /d "%~dp0"
 
 echo ============================================================
-echo   VideoForge — AI Video Generator
+echo   VideoForge - AI Video Generator
 echo ============================================================
 echo.
 
-:: Перевірити чи Python доступний
+:: Check Python
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python не знайдено. Встановіть Python 3.11+ та додайте до PATH.
+    echo [ERROR] Python not found. Install Python 3.11+ and add to PATH.
     pause
     exit /b 1
 )
 
-:: Перевірити чи є frontend/dist (production build)
+:: Launch
 if exist "frontend\dist\index.html" (
-    echo [MODE] Production ^(frontend/dist^)
-    echo [INFO] Запускаємо backend + відкриваємо браузер...
-    python launch.pyw
+    echo [MODE] Production (frontend/dist)
+    echo [INFO] Starting backend + opening browser...
 ) else (
-    echo [MODE] Development ^(Vite dev server^)
-    echo [INFO] Запускаємо backend + Vite + відкриваємо браузер...
-    python launch.pyw
+    echo [MODE] Development (Vite dev server)
+    echo [INFO] Starting backend + Vite + opening browser...
 )
 
+python launch.pyw
+
 echo.
-echo VideoForge зупинено.
+echo VideoForge stopped.
 pause
