@@ -14,6 +14,16 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №12 Metadata Generator
+
+- **Зроблено:** modules/07_metadata_generator.py (397 рядків)
+- **Логіка:** script.json → timestamps (з audio_duration) → VoidAI gpt-4.1-mini → title + description + tags → metadata.json
+- **Timestamps:** cumulative sum audio_duration, формат M:SS, skip пусті CTA блоки; вбудовуються в description
+- **Output:** output/metadata.json: title, description, tags, category_id, language, timestamps, total_duration_seconds
+- **Dry-run:** 3 timestamps правильні (0:00→0:45→3:05 з 45+130+55 сек)
+- **Git:** feat: №12 Metadata Generator; dev.py next -md → №13
+- **Далі:** №13 YouTube Uploader
+
 ## 2026-03-01 — №11 Thumbnail Generator
 
 - **Зроблено:** modules/06_thumbnail_generator.py (485 рядків)

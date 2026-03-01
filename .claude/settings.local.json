@@ -13,7 +13,8 @@
       "Bash(gh pr create:*)",
       "Bash(git branch:*)",
       "Bash(__NEW_LINE_91600aa692645cc0__ python modules/06_thumbnail_generator.py --script projects/test_thumb/script.json --channel config/channels/example_history.json --text \"THE REAL STORY\" --dry-run)",
-      "Bash(__NEW_LINE_a8d3a39e88a81b2f__ python modules/07_metadata_generator.py --script projects/test_meta/script.json --channel config/channels/example_history.json --dry-run)"
+      "Bash(__NEW_LINE_a8d3a39e88a81b2f__ python modules/07_metadata_generator.py --script projects/test_meta/script.json --channel config/channels/example_history.json --dry-run)",
+      "Bash(__NEW_LINE_f96b623b210944f5__ python modules/08_youtube_uploader.py --script projects/test_yt/script.json --channel config/channels/example_history.json --schedule \"2026-12-31 18:00\" --dry-run)"
     ]
   }
 }
