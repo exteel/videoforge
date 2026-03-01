@@ -4,6 +4,48 @@
 
 ---
 
+## 2026-03-02 — Ken Burns fix + Validators + Review checkpoints
+
+### utils/ffmpeg_utils.py
+- `trunc()` у всіх 4 zoompan анімаціях (zoom_in, pan_left, pan_right) → прибрано тремтіння
+
+### modules/05_video_compiler.py
+- `_KB_CYCLE = ["zoom_in","pan_left","zoom_in","pan_right"]` — почерговий цикл анімацій
+- `_animation_for_block(block, channel_config, block_index)` → `block_index % 4`
+
+### modules/01b_script_validator.py (NEW)
+- Структурні перевірки: cut_off, missing_cta, bad_prompt, duplicate_prompt
+- Auto-fix: claude-sonnet-4-5 (cut_off), gpt-4.1-mini batch (bad_prompt, cta)
+- Семафор: asyncio всередині функції (не module-level)
+
+### modules/02b_image_validator.py (NEW)
+- Vision scoring: gpt-4.1, concurrent (Semaphore 5), повертає score/reason/improved_prompt
+- Auto-regen: WaveSpeed T2I, concurrent (Semaphore 3), max 2 attempts, re-score після
+- Threshold: 7.0/10
+
+### pipeline.py
+- `review_callback: Any | None = None` — новий параметр (async callable)
+- Після Step 1: `validate_and_fix_script()` + review pause (CLI: --review; WS: review_callback)
+- Після images: `validate_and_fix_images()` + review_callback("images", {...})
+
+### backend/job_manager.py
+- `Job`: `review_stage: str | None`, `_review_events: dict[str, asyncio.Event]`
+- `Job.approve(stage)` → sets Event → unblocks pipeline
+- `review_callback` async в `_run_pipeline_job` → status="waiting_review", emit WS event, await event
+- Передає `review_callback` в `run_pipeline()`
+
+### backend/routes/pipeline.py
+- `POST /api/jobs/{id}/approve?stage=script|images`
+
+### backend/routes/ws.py
+- Початковий статус включає `review_stage`
+- При `waiting_review` — надсилає синтетичний `review_required` для late joiners
+
+### backend/models.py
+- `JobResponse`: додано `pct: float = 0.0`, `review_stage: str | None = None`
+
+---
+
 ## 2026-03-01 — ETA + Smooth Progress Bar (наскрізний від транскрибації до відео)
 
 ### backend/job_manager.py

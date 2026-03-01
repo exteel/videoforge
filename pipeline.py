@@ -246,6 +246,7 @@ async def run_pipeline(
     db_tracker: Any | None = None,   # VideoTracker instance (optional)
     db_video_id: int | None = None,  # Pre-created video row id (passed by batch_runner)
     progress_callback: Any | None = None,  # Callable({type, step, ...}) for real-time updates
+    review_callback: Any | None = None,    # async callable(stage, data) → None; WebSocket review
     background_music: bool = True,   # Mix background music (False = no_music in compile_video)
     image_style: str | None = None,  # Override image style from channel config
     voice_id: str | None = None,     # Override voice ID from channel config
@@ -392,6 +393,21 @@ async def run_pipeline(
             _require_files([s_path], min_bytes=200, step="Script")
             log.info("Script saved: %s  (%.1fs)", s_path, time.monotonic() - t0)
 
+            # ── Script validation + auto-fix ───────────────────────────────
+            def _script_val_cb(ev: dict) -> None:
+                _emit(progress_callback, **ev)
+            try:
+                _validate_script = _fn("modules/01b_script_validator.py", "validate_and_fix_script")
+                _chan_cfg = json.loads(channel_config_path.read_text(encoding="utf-8"))
+                _val = await _validate_script(s_path, _chan_cfg, progress_callback=_script_val_cb)
+                if _val.issues:
+                    log.info(
+                        "Script validator: %d issues found, %d fixed",
+                        len(_val.issues), len(_val.fixes_applied),
+                    )
+            except Exception as _vexc:
+                log.warning("Script validation skipped (non-fatal): %s", _vexc)
+
             # Rough cost: ~3000 input + 1500 output tokens; max preset = Opus pricing
             cost.add("Script LLM", 0.035)
             if cost.over_budget():
@@ -401,9 +417,20 @@ async def run_pipeline(
             log.info("[DRY RUN] Script step complete (no file written)")
         _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SCRIPT][1])
 
-    # Review pause (only when not dry-run and not skipping step 1)
-    if review and not dry_run and from_step <= STEP_SCRIPT:
-        _review_pause(s_path)
+    # Review pause — CLI (--review flag) or WebSocket (review_callback)
+    if not dry_run and from_step <= STEP_SCRIPT:
+        if review:
+            _review_pause(s_path)
+        elif review_callback is not None:
+            _sd = _load_script(s_path)
+            _blocks = _sd.get("blocks", [])
+            await review_callback("script", {
+                "script_path": str(s_path),
+                "block_count": len(_blocks),
+                "duration_min": round(
+                    sum(b.get("audio_duration") or 0.0 for b in _blocks) / 60, 1
+                ),
+            })
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 2 — IMAGES + VOICES (parallel)
@@ -473,6 +500,32 @@ async def run_pipeline(
             )
 
             img_summary, voice_summary = await asyncio.gather(img_task, voice_task)
+
+            # ── Image validation + auto-regen ──────────────────────────────
+            _img_val_data: dict = {}
+            try:
+                _validate_images = _fn("modules/02b_image_validator.py", "validate_and_fix_images")
+                _chan_cfg2 = json.loads(channel_config_path.read_text(encoding="utf-8"))
+                _images_dir = proj / "images"
+                _img_val = await _validate_images(
+                    s_path, _images_dir, _chan_cfg2, progress_callback=_img_sub_cb,
+                )
+                _img_val_data = _img_val.to_dict()
+                log.info(
+                    "Image validator: %d/%d OK, %d regen, %d failed",
+                    _img_val.ok_count, _img_val.total,
+                    _img_val.regenerated, _img_val.failed,
+                )
+            except Exception as _ivexc:
+                log.warning("Image validation skipped (non-fatal): %s", _ivexc)
+
+            # Review checkpoint after images
+            if review_callback is not None:
+                await review_callback("images", {
+                    "images_dir": str(proj / "images"),
+                    "script_path": str(s_path),
+                    "validation": _img_val_data,
+                })
 
             # Additional language voices (sequential to respect rate limits)
             if langs and len(langs) > 1:

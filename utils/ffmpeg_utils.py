@@ -273,12 +273,13 @@ def ken_burns(
 
         if animation == "zoom_in":
             # Zoom from 1.0× to 1.15× (scale from w→ow over duration)
+            # trunc() on x/y prevents 1-pixel jitter caused by float→int rounding in zoompan
             vf = (
                 f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
                 f"crop={ow}:{oh},"
                 f"zoompan=z='1+{(overscan-1)/total_frames:.6f}*on':"
-                f"x='iw/2-(iw/zoom/2)':"
-                f"y='ih/2-(ih/zoom/2)':"
+                f"x='trunc(iw/2-(iw/zoom/2))':"
+                f"y='trunc(ih/2-(ih/zoom/2))':"
                 f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
                 f"scale={w}:{h},"
                 f"fps={fps}"
@@ -289,8 +290,8 @@ def ken_burns(
                 f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
                 f"crop={ow}:{oh},"
                 f"zoompan=z='{overscan:.4f}-{(overscan-1)/total_frames:.6f}*on':"
-                f"x='iw/2-(iw/zoom/2)':"
-                f"y='ih/2-(ih/zoom/2)':"
+                f"x='trunc(iw/2-(iw/zoom/2))':"
+                f"y='trunc(ih/2-(ih/zoom/2))':"
                 f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
                 f"scale={w}:{h},"
                 f"fps={fps}"
@@ -301,8 +302,8 @@ def ken_burns(
                 f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
                 f"crop={ow}:{oh},"
                 f"zoompan=z='{overscan:.4f}':"
-                f"x='iw/zoom*(on/{total_frames})':"
-                f"y='ih/2-(ih/zoom/2)':"
+                f"x='trunc(iw/zoom*(on/{total_frames}))':"
+                f"y='trunc(ih/2-(ih/zoom/2))':"
                 f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
                 f"scale={w}:{h},"
                 f"fps={fps}"
@@ -313,8 +314,8 @@ def ken_burns(
                 f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
                 f"crop={ow}:{oh},"
                 f"zoompan=z='{overscan:.4f}':"
-                f"x='iw/zoom*(1-on/{total_frames})':"
-                f"y='ih/2-(ih/zoom/2)':"
+                f"x='trunc(iw/zoom*(1-on/{total_frames}))':"
+                f"y='trunc(ih/2-(ih/zoom/2))':"
                 f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
                 f"scale={w}:{h},"
                 f"fps={fps}"

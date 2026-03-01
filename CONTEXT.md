@@ -40,9 +40,14 @@
 - [x] 3 thumbnail A/B variants + 3 title variants (pipeline.py + backend/routes)
 - [x] ETA + real-time progress bar наскрізний (pipeline.py + job_manager.py + JobCard.tsx)
 - [x] FFmpeg block-by-block sub-progress (05_video_compiler.py → sub_progress WS events)
+- [x] Ken Burns zoompan shaking fix (trunc() у всіх 4 анімаціях) + alternating cycle zoom_in/pan_left/pan_right
+- [x] Script validator 01b (structural checks + LLM auto-fix: cut_off, missing_cta, bad_prompt)
+- [x] Image validator 02b (vision scoring gpt-4.1 + WaveSpeed auto-regen, threshold 7/10)
+- [x] Review checkpoints: pipeline паузи після script та після images, WebSocket review_required event
+- [x] POST /api/jobs/{id}/approve endpoint; Job.approve() + waiting_review status
 
 ## Поточний стан
-Всі основні модулі та UI завершені. Ведеться покращення прогресбару (sub-progress для кроку 2).
+Validators + review checkpoints готові. Наступне: frontend review UI (модалки script/images + кнопка approve).
 
 ## Відомі баги
 (немає)

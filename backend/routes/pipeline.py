@@ -102,6 +102,20 @@ async def cancel_job(job_id: str) -> dict:
     return {"job_id": job_id, "status": "cancelled"}
 
 
+@router.post("/jobs/{job_id}/approve", status_code=200)
+async def approve_job(job_id: str, stage: str = "script") -> dict:
+    """Approve a review checkpoint and continue the pipeline."""
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, f"Job not found: {job_id}")
+    if job.status != "waiting_review":
+        raise HTTPException(400, f"Job is not waiting for review (status: {job.status})")
+    ok = await job.approve(stage)
+    if not ok:
+        raise HTTPException(400, f"No pending review for stage: {stage}")
+    return {"job_id": job_id, "stage": stage, "approved": True}
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_channel(channel: str) -> Path:

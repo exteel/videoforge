@@ -47,7 +47,7 @@ class JobResponse(BaseModel):
     """Status of a pipeline or batch job."""
     job_id: str
     kind: str            # "pipeline" | "batch"
-    status: str          # "queued" | "running" | "done" | "failed" | "cancelled"
+    status: str          # "queued" | "running" | "waiting_review" | "done" | "failed" | "cancelled"
     source: str
     channel: str
     quality: str
@@ -57,9 +57,11 @@ class JobResponse(BaseModel):
     elapsed: float | None
     step: int
     step_name: str
+    pct: float = 0.0
     error: str
     logs: list[str]
     db_video_id: int | None
+    review_stage: str | None = None
 
 
 # ─── Video list / detail ──────────────────────────────────────────────────────

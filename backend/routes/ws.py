@@ -47,9 +47,14 @@ async def ws_progress(ws: WebSocket, job_id: str) -> None:
         "status": job.status,
         "step": job.step,
         "step_name": job.step_name,
+        "review_stage": job.review_stage,
     })
     for msg in list(job.logs):
         await ws.send_json({"type": "log", "message": msg})
+
+    # If waiting for review, re-send the review_required event so late joiners see it
+    if job.status == "waiting_review" and job.review_stage:
+        await ws.send_json({"type": "review_required", "stage": job.review_stage, "data": {}})
 
     # If job already finished, close immediately
     if job.status in ("done", "failed", "cancelled"):

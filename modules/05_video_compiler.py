@@ -61,6 +61,10 @@ MIN_IMAGE_BYTES = 5_000
 MIN_AUDIO_BYTES = 1_000
 BLOCK_VIDEO_EXT = ".mp4"
 
+# Alternating Ken Burns cycle applied to blocks without an explicit animation.
+# Pattern: zoom_in → pan_left → zoom_in → pan_right → repeat
+_KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -104,12 +108,20 @@ def _get_block_image(
     return None
 
 
-def _animation_for_block(block: dict[str, Any], channel_config: dict[str, Any]) -> str:
-    """Return animation type for a block (from block data or channel default)."""
+def _animation_for_block(
+    block: dict[str, Any],
+    channel_config: dict[str, Any],
+    block_index: int = 0,
+) -> str:
+    """Return animation type for a block.
+
+    If the block has an explicit non-default animation set in script.json, use that.
+    Otherwise rotate through _KB_CYCLE: zoom_in → pan_left → zoom_in → pan_right → …
+    """
     anim = block.get("animation", "")
-    if not anim or anim == "zoom_in":
-        return channel_config.get("default_animation", "zoom_in")
-    return anim
+    if anim and anim not in ("zoom_in", ""):
+        return anim
+    return _KB_CYCLE[block_index % len(_KB_CYCLE)]
 
 
 # ─── Main compiler ────────────────────────────────────────────────────────────
@@ -318,7 +330,7 @@ def compile_video(
 
             for i, block in enumerate(voiced_blocks, 1):
                 duration  = float(block["audio_duration"])
-                animation = _animation_for_block(block, channel_config)
+                animation = _animation_for_block(block, channel_config, block_index=i - 1)
                 image_path = _get_block_image(block, images_dir, prev_image)
                 clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
 

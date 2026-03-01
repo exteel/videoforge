@@ -28,7 +28,7 @@ def _now() -> str:
 class Job:
     job_id: str
     kind: str          # "pipeline" | "batch"
-    status: str        # "queued" | "running" | "done" | "failed" | "cancelled"
+    status: str        # "queued" | "running" | "waiting_review" | "done" | "failed" | "cancelled"
     source: str        # source_dir.name or input_dir.name
     channel: str
     quality: str
@@ -42,9 +42,13 @@ class Job:
     error: str = ""
     logs: list[str] = field(default_factory=list)
     db_video_id: int | None = None
+    review_stage: str | None = None
     task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     subscribers: list[asyncio.Queue] = field(
         default_factory=list, repr=False, compare=False,
+    )
+    _review_events: dict[str, asyncio.Event] = field(
+        default_factory=dict, repr=False, compare=False,
     )
 
     # ── Fan-out ───────────────────────────────────────────────────────────────
@@ -60,6 +64,16 @@ class Job:
     def log(self, message: str) -> None:
         self.logs.append(message)
         self.emit(type="log", message=message)
+
+    # ── Review checkpoints ────────────────────────────────────────────────────
+
+    async def approve(self, stage: str) -> bool:
+        """Unblock a review checkpoint. Returns False if no pending review for stage."""
+        event = self._review_events.get(stage)
+        if event is None:
+            return False
+        event.set()
+        return True
 
     def to_response(self) -> dict:
         return {
@@ -79,6 +93,7 @@ class Job:
             "error": self.error,
             "logs": self.logs,
             "db_video_id": self.db_video_id,
+            "review_stage": self.review_stage,
         }
 
 
@@ -194,6 +209,21 @@ class JobManager:
                     job.pct = float(event["pct"])
             job.emit(**event)
 
+        async def review_callback(stage: str, data: dict) -> None:
+            """Pause pipeline at a review checkpoint until approved via REST."""
+            ev = asyncio.Event()
+            job._review_events[stage] = ev
+            job.review_stage = stage
+            job.status = "waiting_review"
+            job.emit(type="review_required", stage=stage, data=data)
+            job.log(f"[Review] Waiting for approval at stage: {stage}")
+            await ev.wait()
+            job._review_events.pop(stage, None)
+            job.review_stage = None
+            job.status = "running"
+            job.emit(type="review_approved", stage=stage)
+            job.log(f"[Review] Approved: {stage}")
+
         try:
             await run_pipeline(
                 source_dir=source_dir,
@@ -201,6 +231,7 @@ class JobManager:
                 db_tracker=db_tracker,
                 db_video_id=db_video_id,
                 progress_callback=progress_callback,
+                review_callback=review_callback,
                 **kwargs,
             )
             elapsed = time.monotonic() - t0
