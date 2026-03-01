@@ -1,14 +1,12 @@
 # Поточна задача
 
-## Задача №8 — Voice Generator
-- script.json → VoiceAPI → audio/block_NNN.mp3 + ffprobe duration → оновлює script.json → concat full_narration.mp3
-- **Audio normalization:** після конкатенації → loudnorm (EBU R128) через FFmpeg utils
-- Fallback: VoidAI TTS (tts-1-hd)
-- **Multi-lang ready:** `--lang de` → юзає voice_ids_multilang з конфігу, зберігає в audio/de/
-- Залежить від: 4, 5, 6
+## Задача №9 — Subtitle Generator
+- script.json (з audio_duration) → subtitles.srt + subtitles.ass (стиль з конфігу)
+- Опція: використати оригінальний transcript.srt від Transcriber як базу для word-level timing
+- Залежить від: 8
 
 ## Наступна задача
-№9 — Subtitle Generator
+№10 — Video Compiler
 
 ---
 Після виконання: `python dev.py next -md` → git commit
