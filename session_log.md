@@ -14,6 +14,17 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №10 Video Compiler
+
+- **Зроблено:** modules/05_video_compiler.py (489 рядків)
+- **Логіка:** images/ + audio/ + subtitles.ass → final.mp4 (1920x1080 H.264)
+- **Кроки:** Ken Burns (zoompan) → concat з crossfade → add_audio → mix_audio (-20dB) → burn subs → intro/outro → final.mp4
+- **Draft mode:** 854x480, без Ken Burns, без crossfade, ultrafast encode
+- **Особливості:** tempfile.TemporaryDirectory для проміжних файлів, fallback на попередній image для CTA-блоків, random pick background music track
+- **Dry-run тест:** пройшов — 2 voiced blocks, 1 image, 10.5s audio, output path OK
+- **Git:** feat: №10 Video Compiler; dev.py next -md → №11
+- **Далі:** №11 Thumbnail Generator
+
 ## 2026-03-01 — №7 Image Generator
 
 - **Зроблено:** modules/02_image_generator.py (523 рядки)
