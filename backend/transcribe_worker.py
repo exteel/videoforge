@@ -332,10 +332,12 @@ async def transcribe_url(
         channel_path = _P(pipeline_kwargs.get("channel", "config/channels/history.json"))
         if not channel_path.is_absolute():
             channel_path = ROOT / channel_path
+        # 'channel' is already resolved to channel_config_path — exclude it from kwargs
+        extra = {k: v for k, v in (pipeline_kwargs or {}).items() if k != "channel"}
         await manager.start_pipeline(
             source_dir=out_dir,
             channel_config_path=channel_path,
-            **(pipeline_kwargs or {}),
+            **extra,
         )
 
     return out_dir

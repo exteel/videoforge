@@ -235,6 +235,10 @@ async def run_pipeline(
     db_tracker: Any | None = None,   # VideoTracker instance (optional)
     db_video_id: int | None = None,  # Pre-created video row id (passed by batch_runner)
     progress_callback: Any | None = None,  # Callable({type, step, ...}) for real-time updates
+    background_music: bool = True,   # Mix background music (False = no_music in compile_video)
+    image_style: str | None = None,  # Override image style from channel config
+    voice_id: str | None = None,     # Override voice ID from channel config
+    master_prompt: str | None = None,  # Override master prompt path
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -366,6 +370,7 @@ async def run_pipeline(
             preset=quality,
             dry_run=dry_run,
             output_dir=proj,
+            # TODO: master_prompt override — modules/01 reads from channel_config directly
         )
 
         if not dry_run:
@@ -415,6 +420,7 @@ async def run_pipeline(
                 channel_config_path,
                 dry_run=dry_run,
                 skip_existing=True,
+                # TODO: image_style override — module 02 reads style from channel_config
             )
             voice_task = generate_voices(
                 s_path,
@@ -422,6 +428,7 @@ async def run_pipeline(
                 lang=primary_lang,
                 dry_run=dry_run,
                 skip_existing=True,
+                # TODO: voice_id override — module 03 reads voice_id from channel_config
             )
 
             img_summary, voice_summary = await asyncio.gather(img_task, voice_task)
@@ -542,6 +549,7 @@ async def run_pipeline(
                     draft=draft,
                     dry_run=dry_run,
                     no_subs=True,   # subtitles disabled until format is settled
+                    no_music=not background_music,
                 ),
             )
 
