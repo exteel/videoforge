@@ -17,7 +17,9 @@
       "Bash(__NEW_LINE_f96b623b210944f5__ python modules/08_youtube_uploader.py --script projects/test_yt/script.json --channel config/channels/example_history.json --schedule \"2026-12-31 18:00\" --dry-run)",
       "Bash(test:*)",
       "WebFetch(domain:voiceapi.csv666.ru)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)"
     ]
   }
 }

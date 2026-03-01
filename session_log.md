@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-03-01 — №21 React Dashboard
+- **Зроблено:** `frontend/` — Vite + React + TypeScript + TailwindCSS v4
+- **Структура:** `api.ts` (HTTP клієнт), `hooks/useWebSocket.ts`, 4 компоненти + App.tsx
+- **Jobs tab:** форма запуску Single Video / Batch; активні jobs з real-time step progress bar через WS; логи (розгортаються); Cancel кнопка
+- **History tab:** таблиця відео з SQLite; фільтр по статусу; клік → модальне вікно з cost breakdown
+- **Stats tab:** 4 stat cards (total, done, failed, total cost); таблиця by model; прогрес-бари by preset
+- **WS:** `useWebSocket` hook → live step updates → `JobCard` progress bar 1/6 → 6/6
+- **Проксі:** vite.config.ts `/api` → `localhost:8000`, `/ws` → `ws://localhost:8000`
+- **Build:** `npm run build` ✓ (35 modules, 215kB JS, 14.7kB CSS)
+- **Далі:** №22 UI ревью і створення
+
+---
+
 ## 2026-03-01 — №20 FastAPI бекенд
 - **Зроблено:** `backend/` пакет — REST API + WebSocket прогрес
 - **pipeline.py:** `progress_callback` параметр + `_emit()` helper; виклики на початку/кінці кожного з 6 кроків
