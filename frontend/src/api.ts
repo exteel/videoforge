@@ -109,6 +109,19 @@ export interface BatchRunRequest {
   dry_run?: boolean
 }
 
+export interface ChannelMeta {
+  name: string
+  channel_name: string
+  niche: string
+  language: string
+}
+
+export interface PromptMeta {
+  name: string
+  filename: string
+  size_bytes: number
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
@@ -166,6 +179,29 @@ export const api = {
       req<{ saved: boolean; path: string }>(`/script?source_dir=${encodeURIComponent(source_dir)}`, {
         method: 'PUT',
         body: JSON.stringify(script),
+      }),
+  },
+
+  channels: {
+    list: () => req<ChannelMeta[]>('/channels'),
+    get: (name: string) => req<Record<string, unknown>>(`/channels/${name}`),
+    save: (name: string, data: Record<string, unknown>) =>
+      req<{ saved: boolean; name: string }>(`/channels/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (name: string) =>
+      req<{ deleted: boolean }>(`/channels/${name}`, { method: 'DELETE' }),
+  },
+
+  prompts: {
+    list: () => req<PromptMeta[]>('/prompts'),
+    get: (name: string) =>
+      req<{ name: string; filename: string; content: string }>(`/prompts/${name}`),
+    save: (name: string, content: string, filename?: string) =>
+      req<{ saved: boolean; name: string }>(`/prompts/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content, filename }),
       }),
   },
 }

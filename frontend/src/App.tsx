@@ -3,14 +3,16 @@ import { JobList } from './components/JobList'
 import { ScriptEditor } from './components/ScriptEditor'
 import { VideoList } from './components/VideoList'
 import { StatsPanel } from './components/StatsPanel'
+import { ChannelsPanel } from './components/ChannelsPanel'
 
-type Tab = 'jobs' | 'script' | 'history' | 'stats'
+type Tab = 'jobs' | 'script' | 'channels' | 'history' | 'stats'
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'jobs',    label: 'Jobs' },
-  { id: 'script',  label: 'Script' },
-  { id: 'history', label: 'History' },
-  { id: 'stats',   label: 'Stats' },
+  { id: 'jobs',     label: 'Jobs' },
+  { id: 'script',   label: 'Script' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'history',  label: 'History' },
+  { id: 'stats',    label: 'Stats' },
 ]
 
 export default function App() {
@@ -47,10 +49,11 @@ export default function App() {
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {tab === 'jobs'    && <JobList />}
-        {tab === 'script'  && <ScriptEditor />}
-        {tab === 'history' && <VideoList />}
-        {tab === 'stats'   && <StatsPanel />}
+        {tab === 'jobs'     && <JobList />}
+        {tab === 'script'   && <ScriptEditor />}
+        {tab === 'channels' && <ChannelsPanel />}
+        {tab === 'history'  && <VideoList />}
+        {tab === 'stats'    && <StatsPanel />}
       </main>
     </div>
   )
