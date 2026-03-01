@@ -38,7 +38,7 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 3.0
 
 # Text chunk size — split long texts to avoid API limits (~2500 chars safe)
-MAX_CHUNK_CHARS = 2400
+MAX_CHUNK_CHARS = 2000
 
 
 # ─── VoiceAPI Client ──────────────────────────────────────────────────────────
@@ -119,10 +119,11 @@ class VoiceAPIClient:
             "text": text,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
-                "stability": 0.5,
+                "stability": 0.85,
                 "similarity_boost": 0.75,
                 "style": 0.0,
                 "use_speaker_boost": True,
+                "speed": 1.1,
             },
         }
         headers = {

@@ -201,7 +201,10 @@ def cmd_check_apis(args):
                                       ("VoiceAPI","clients.voiceapi_client","VoiceAPIClient","№4")]:
             print(f"\n  {C.BD}{name}:{C.E}")
             try:
-                m = __import__(mod, fromlist=[cls]); await getattr(m, cls)().health_check(); ok("OK")
+                m = __import__(mod, fromlist=[cls])
+                async with getattr(m, cls)() as client:
+                    result = await client.health_check()
+                ok(f"OK {result}")
             except ImportError: warn(f"Ще не створено ({task})")
             except Exception as e: err(str(e))
         print(f"\n  {C.BD}FFmpeg:{C.E}")
