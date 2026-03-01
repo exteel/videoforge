@@ -1,20 +1,18 @@
 # Поточна задача
 
-## Задача №1 — Ініціалізація проекту
-- Створити структуру папок (modules/, clients/, utils/, config/, prompts/, tests/)
-- requirements.txt: httpx, python-dotenv, pydantic, tqdm
-- .env.example: VOIDAI_API_KEY, VOIDAI_BASE_URL, WAVESPEED_API_KEY, VOICEAPI_KEY, DEFAULT_VOICE_ID, TRANSCRIBER_OUTPUT_DIR
-- modules/common.py: логування (logging), load_env(), load_channel_config(path), load_transcriber_output(path) → dict з усіма файлами Transcriber, get_project_dir(channel, video_id), ensure_project_dirs()
-- config/channels/example_history.json: повний конфіг з llm.presets (max/high/balanced/bulk/test, default=max), tts/images providers+fallbacks, стилі
-- config/settings.json: глобальні defaults (VoidAI base_url, fallback models)
-- prompts/master_script_v1.txt: заглушка
-- prompts/hooks_guide.md: скопіювати з кореня (ГАЙД_ПО_ХУКАХ_YOUTUBE.md → prompts/hooks_guide.md)
-- prompts/hook_validator.txt: промпт для валідації intro — 4 критерії (clarity, curiosity, relevance, interest) + чеклист з гайду
-- tests/test_data/: порожня папка + sample_config.json
-- Результат: `pip install -r requirements.txt` + `python modules/common.py` працює, виводить конфіг
+## Задача №2 — VoidAI клієнт
+- OpenAI-сумісний (base_url від VoidAI). ОДИН клієнт для chat, vision, tts, image gen.
+- chat_completion(model, messages, **kwargs) — текстова генерація
+- vision_completion(model, messages_with_images) — аналіз зображень
+- generate_tts(model, text, voice) — text-to-speech (backup для VoiceAPI)
+- generate_image(model, prompt) — image gen (backup для WaveSpeed)
+- **Smart fallback chain:** якщо модель fail → автоматично наступна з fallback_chain конфігу (Opus → Sonnet → GPT)
+- Async httpx. Retry з exponential backoff. Cost tracking per model.
+- Результат: `python clients/voidai_client.py` тестує chat з gpt-4.1-nano
+- Залежить від: 1
 
 ## Наступна задача
-№2 — VoidAI клієнт (clients/voidai_client.py)
+№3 — WaveSpeed клієнт
 
 ---
 Після виконання: `python dev.py next -md` → git commit
