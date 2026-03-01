@@ -1,13 +1,13 @@
 # Поточна задача
 
-## Задача №11 — Thumbnail Generator
-- Якщо є thumbnail_prompt.txt від Transcriber → використати як базу
-- Інакше: script.json thumbnail_prompt + стиль → WaveSpeed → thumbnail.png (1280x720)
-- Опція: ітеративне покращення (логіка з Thumbnail Analyzer) — VoidAI vision порівняння
-- Залежить від: 2, 3, 6
+## Задача №12 — Metadata Generator
+- script.json + audio durations → metadata.json
+- VoidAI (gpt-4.1-mini) для SEO-оптимізації title/description/tags
+- Timestamps обчислюються з audio_duration
+- Залежить від: 2, 8
 
 ## Наступна задача
-№12 — Metadata Generator
+№13 — YouTube Uploader
 
 ---
 Після виконання: `python dev.py next -md` → git commit

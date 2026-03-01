@@ -12,7 +12,8 @@
       "Bash(git push:*)",
       "Bash(gh pr create:*)",
       "Bash(git branch:*)",
-      "Bash(__NEW_LINE_91600aa692645cc0__ python modules/06_thumbnail_generator.py --script projects/test_thumb/script.json --channel config/channels/example_history.json --text \"THE REAL STORY\" --dry-run)"
+      "Bash(__NEW_LINE_91600aa692645cc0__ python modules/06_thumbnail_generator.py --script projects/test_thumb/script.json --channel config/channels/example_history.json --text \"THE REAL STORY\" --dry-run)",
+      "Bash(__NEW_LINE_a8d3a39e88a81b2f__ python modules/07_metadata_generator.py --script projects/test_meta/script.json --channel config/channels/example_history.json --dry-run)"
     ]
   }
 }

@@ -14,6 +14,18 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №11 Thumbnail Generator
+
+- **Зроблено:** modules/06_thumbnail_generator.py (485 рядків)
+- **Логіка:** thumbnail_prompt (Transcriber > script.json) + channel style → WaveSpeed "1280*720" → thumbnail.png
+- **Validation:** VoidAI vision (gpt-4.1 з channel preset) → 6 критеріїв (composition, focal_point, colors, quality, topic_match, professional) → pass ≥ 5/6
+- **Retry:** seed=42 спроба 1, random потім; до max_attempts (дефолт 5); зберігає найкращий результат
+- **Fallback:** WaveSpeed → VoidAI gpt-image-1.5
+- **--no-iterate:** skip validation (single-pass, fast); **--text:** text overlay hint в промпт
+- **Dry-run тест:** пройшов — prompt = thumbnail_prompt + thumbnail_style + text overlay
+- **Git:** feat: №11 Thumbnail Generator; dev.py next -md → №12
+- **Далі:** №12 Metadata Generator
+
 ## 2026-03-01 — №10 Video Compiler
 
 - **Зроблено:** modules/05_video_compiler.py (489 рядків)
