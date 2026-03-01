@@ -47,8 +47,12 @@ log = setup_logging("script_gen")
 PROMPTS_DIR = ROOT / "prompts"
 VALIDATOR_MODEL = "gpt-4.1-nano"
 MAX_INTRO_REGEN = 2  # Default max intro regeneration attempts
-MAX_TRANSCRIPT_CHARS = 14_000  # ~10K tokens — keeps total prompt manageable for Opus
-MAX_HOOKS_GUIDE_CHARS = 6_000  # Hooks guide is 34KB — keep only the most essential part
+MAX_TRANSCRIPT_CHARS = 14_000   # ~10K tokens — keeps total prompt manageable for Opus
+MAX_HOOKS_GUIDE_CHARS = 8_000   # hooks_guide.md is now compact (~4KB), allow full pass-through
+
+# Chunked generation — each Opus call produces ~10K chars to avoid timeout
+MAX_TOKENS_PER_CHUNK = 2_500    # ~10K chars output per API call
+MAX_SCRIPT_CHUNKS = 4           # max continuation attempts before giving up
 
 BlockType = Literal["intro", "section", "cta", "outro"]
 
@@ -174,7 +178,7 @@ class HookValidationResult(BaseModel):
 
 # ─── Parser ───────────────────────────────────────────────────────────────────
 
-_SECTION_RE = re.compile(r"^\[SECTION\s+\d+\s*:\s*(.+?)\]\s*$", re.IGNORECASE)
+_SECTION_RE = re.compile(r"^\[SECTION\s+\d+\s*:\s*(.+?)\]\s*$", re.IGNORECASE | re.MULTILINE)
 _IMAGE_LINE_RE = re.compile(r"^\[IMAGE_PROMPT:\s*(.+?)\]\s*$", re.IGNORECASE | re.DOTALL)
 _IMAGE_INLINE_RE = re.compile(r"\[IMAGE_PROMPT:\s*(.+?)\]", re.IGNORECASE | re.DOTALL)
 _CTA_MID_RE = re.compile(r"^\[CTA_SUBSCRIBE_MID\]\s*$", re.IGNORECASE)
@@ -512,6 +516,10 @@ async def _validate_intro_hook(
 
 # ─── Core Generation ──────────────────────────────────────────────────────────
 
+_FINAL_CTA_RE = re.compile(r"\[CTA_SUBSCRIBE_FINAL\]|Thank you for being here", re.IGNORECASE)
+_LAST_SECTION_NUM_RE = re.compile(r"\[SECTION\s+(\d+)\s*:", re.IGNORECASE)
+
+
 async def _call_llm(
     system_prompt: str,
     user_prompt: str,
@@ -519,16 +527,68 @@ async def _call_llm(
     voidai_client: Any,
     temperature: float = 0.7,
 ) -> str:
-    """Send system + user message to VoidAI, return raw text."""
-    return await voidai_client.chat_completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=temperature,
-        max_tokens=8000,
-    )
+    """
+    Generate script in chunks of ~10K chars to avoid Opus timeout on long scripts.
+
+    Strategy:
+    - Call 1: normal prompt → max MAX_TOKENS_PER_CHUNK tokens
+    - If no final CTA found → continuation call with tail context (up to MAX_SCRIPT_CHUNKS)
+    - Continuation provides last 2K chars + "continue from Section N" instruction
+    """
+    full_output = ""
+
+    for chunk_num in range(1, MAX_SCRIPT_CHUNKS + 1):
+        if chunk_num == 1:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        else:
+            # Detect last section number so continuation knows where to resume
+            section_nums = _LAST_SECTION_NUM_RE.findall(full_output)
+            last_section = int(section_nums[-1]) if section_nums else 0
+            tail = full_output[-2_000:]  # last 2K chars as context anchor
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": (
+                    f"{user_prompt}\n\n"
+                    f"CONTINUATION — you already wrote sections 1-{last_section}. "
+                    f"Here is the end of what you wrote so far:\n```\n{tail}\n```\n\n"
+                    f"Continue the script starting with [SECTION {last_section + 1}: ...]. "
+                    f"Do NOT repeat any content from sections 1-{last_section}. "
+                    f"Write from Section {last_section + 1} through the final CTA."
+                )},
+            ]
+            log.info(
+                "Script continuation request: chunk %d/%d, resuming after Section %d",
+                chunk_num, MAX_SCRIPT_CHUNKS, last_section,
+            )
+
+        chunk = await voidai_client.chat_completion(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=MAX_TOKENS_PER_CHUNK,
+        )
+
+        full_output += ("\n" if full_output else "") + chunk
+        log.info(
+            "Script chunk %d/%d: %d chars → total %d chars",
+            chunk_num, MAX_SCRIPT_CHUNKS, len(chunk), len(full_output),
+        )
+
+        if _FINAL_CTA_RE.search(full_output):
+            log.info("Script complete (final CTA found) after %d chunk(s)", chunk_num)
+            break
+
+        if chunk_num == MAX_SCRIPT_CHUNKS:
+            log.warning(
+                "Reached max chunks (%d) without finding final CTA — using partial output (%d chars)",
+                MAX_SCRIPT_CHUNKS, len(full_output),
+            )
+
+    return full_output
 
 
 async def _generate_one_variant(

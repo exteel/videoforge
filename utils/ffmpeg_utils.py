@@ -596,12 +596,17 @@ def concat_audio(
         encoding="utf-8",
     )
 
+    # Always re-encode to libmp3lame for .mp3 output.
+    # Normalize sample rate/channels to handle mixed sources
+    # (VoiceAPI 24kHz mono + VoidAI TTS 24kHz mono → uniform 44100 Hz stereo).
     cmd = [
         FFMPEG, "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(list_file),
-        "-c:a", DEFAULT_AUDIO_CODEC,
-        "-b:a", DEFAULT_AUDIO_BITRATE,
+        "-ar", "44100",
+        "-ac", "1",
+        "-c:a", "libmp3lame",
+        "-b:a", "128k",
         str(out),
     ]
     _run(cmd)
@@ -639,10 +644,10 @@ def add_subtitles(
 
     ext = subs.suffix.lower()
     if ext == ".ass":
-        vf = f"ass={subs_escaped}"
+        vf = f"ass='{subs_escaped}'"
     else:
         # SRT — use subtitles filter (converts to ASS internally)
-        vf = f"subtitles={subs_escaped}"
+        vf = f"subtitles='{subs_escaped}'"
 
     cmd = [
         FFMPEG, "-y",

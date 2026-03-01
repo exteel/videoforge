@@ -331,6 +331,26 @@ async def run_pipeline(
     # STEP 1 — SCRIPT
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_SCRIPT:
+        # Auto-skip: if script.json already exists and has valid blocks, don't re-generate.
+        # This prevents burning expensive Opus credits on repeated runs.
+        if s_path.exists() and not dry_run:
+            try:
+                _existing = json.loads(s_path.read_text(encoding="utf-8"))
+                if _existing.get("blocks"):
+                    log.warning(
+                        "script.json already exists with %d blocks — SKIPPING Step 1 to save credits. "
+                        "Delete %s to force regeneration.",
+                        len(_existing["blocks"]),
+                        s_path,
+                    )
+                    _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT])
+                    _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=0.0)
+                    from_step = STEP_MEDIA  # continue from step 2
+                    # Jump to step 2 — fall through to media step below
+            except Exception:
+                pass  # corrupt JSON → regenerate normally
+
+    if from_step <= STEP_SCRIPT:
         _step_header(STEP_SCRIPT, STEP_NAMES[STEP_SCRIPT])
         _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT])
         t0 = time.monotonic()
@@ -521,6 +541,7 @@ async def run_pipeline(
                     channel_config_path,
                     draft=draft,
                     dry_run=dry_run,
+                    no_subs=True,   # subtitles disabled until format is settled
                 ),
             )
 
