@@ -14,6 +14,17 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №14 Test fixtures + pipeline test
+
+- **Зроблено:** tests/test_pipeline.py (330+ рядків) + tests/test_data/ fixtures
+- **Fixtures:** sample_transcriber_output/ (6 файлів), script_full.json (8 блоків, 196с total)
+- **Тест:** 15/15 пройшло — imports, --help, FFmpeg, timestamps unit test, subtitle_generator real run, dry-run для всіх 8 модулів
+- **Реальний subtitle_generator:** генерує SRT + ASS без API; перевіряє монотонність timestamps
+- **Fake files:** valid PNG (_make_png), valid ID3 MP3 header (_make_mp3) для size checks
+- **Що потрібно для реального прогону:** .env з API keys + Transcriber output dir
+- **Git:** feat: №14 Test fixtures + pipeline integration test (15/15 pass); dev.py next -md → №15
+- **Далі:** №15 Фікс багів
+
 ## 2026-03-01 — №13 YouTube Uploader
 
 - **Зроблено:** modules/08_youtube_uploader.py (595 рядків) + requirements.txt (google libs)
