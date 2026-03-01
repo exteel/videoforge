@@ -51,9 +51,22 @@ C. Audience Psychology
 - What transformation is promised?
 
 OUTPUT STRUCTURE
-Generate a complete script with these components:
+Generate a complete script with these components.
+
+⚠️ CRITICAL PARSING REQUIREMENT:
+Every section of the script MUST begin with a [SECTION N: Title] marker on its own line.
+This is mandatory — the output is automatically parsed by a pipeline that relies on these markers.
+Examples of correct markers:
+[SECTION 1: Hook]
+[SECTION 2: The Hidden Trap]
+[SECTION 3: What Jung Discovered]
+[SECTION 4: The Pattern That Changed Everything]
+[SECTION 5: The Shift]
+[SECTION 6: Closing Reflection]
+Without these markers, the script cannot be processed. Every section needs one, starting from the Hook.
 
 1. HOOK (First 30-45 seconds)
+[SECTION 1: Hook]
 Purpose: Stop the scroll, create instant identification, open curiosity loop
 
 Requirements:
@@ -71,6 +84,7 @@ Pattern options:
 [IMAGE_PROMPT: {description for opening visual}]
 
 2. CONTEXT/FRAMEWORK SETUP (1-2 minutes)
+[SECTION 2: Context]
 Purpose: Establish credibility, set up the intellectual framework
 
 Requirements:
@@ -246,12 +260,12 @@ Before outputting, verify:
 
 OUTPUT FORMAT
 Deliver ONLY the final script. No preamble, no analysis, no explanations.
-Begin directly with the hook. End with the final CTA.
+Start with [SECTION 1: Hook] marker, then the hook text. End with the final CTA.
 
 Format for easy reading:
-- Clear section breaks
+- EVERY section starts with [SECTION N: Title] on its own line (REQUIRED)
 - IMAGE_PROMPTs on separate lines in brackets
-- CTA blocks clearly marked
+- CTA blocks clearly marked with [CTA_SUBSCRIBE_MID] or [CTA_SUBSCRIBE_FINAL]
 - Natural paragraph spacing for narration pacing
 
 ---
