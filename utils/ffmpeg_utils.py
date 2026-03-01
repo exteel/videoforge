@@ -34,10 +34,13 @@ log = setup_logging("ffmpeg")
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 
+# Suppress console windows for FFmpeg subprocesses on Windows
+_NO_WIN: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 # Default video encoding settings
 DEFAULT_VIDEO_CODEC = "libx264"
-DEFAULT_CRF = 18          # High quality (lower = better, 0 = lossless)
-DEFAULT_PRESET = "slow"   # Encoding speed/quality tradeoff
+DEFAULT_CRF = 22          # Good quality for YouTube (they re-encode anyway; 18 was overkill)
+DEFAULT_PRESET = "medium" # Good speed/quality balance ("slow" was 3-4x slower, no visible benefit)
 DEFAULT_AUDIO_CODEC = "aac"
 DEFAULT_AUDIO_BITRATE = "192k"
 DEFAULT_FPS = 30
@@ -60,12 +63,16 @@ CROSSFADE_DURATION = 0.5
 def _run(cmd: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     """Run an FFmpeg/FFprobe command synchronously."""
     log.debug("Running: %s", " ".join(cmd))
+    # capture=True → stdout+stderr both captured (for ffprobe JSON parsing)
+    # capture=False → stdout suppressed, stderr captured for error reporting
     result = subprocess.run(
         cmd,
-        capture_output=capture,
+        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=_NO_WIN,
     )
     if check and result.returncode != 0:
         stderr = (result.stderr or "")[:500]
@@ -245,6 +252,7 @@ def ken_burns(
             "-vf", vf,
             "-c:v", DEFAULT_VIDEO_CODEC, "-crf", str(crf),
             "-preset", preset,
+            "-threads", "0",
             "-t", str(duration),
             "-pix_fmt", "yuv420p",
             "-r", str(fps),
@@ -308,6 +316,7 @@ def ken_burns(
             "-vf", vf,
             "-c:v", DEFAULT_VIDEO_CODEC, "-crf", str(crf),
             "-preset", preset,
+            "-threads", "0",
             "-t", str(duration),
             "-pix_fmt", "yuv420p",
             str(out),
