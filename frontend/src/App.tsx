@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { JobList } from './components/JobList'
+import { ScriptEditor } from './components/ScriptEditor'
 import { VideoList } from './components/VideoList'
 import { StatsPanel } from './components/StatsPanel'
 
-type Tab = 'jobs' | 'history' | 'stats'
+type Tab = 'jobs' | 'script' | 'history' | 'stats'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'jobs',    label: 'Jobs' },
+  { id: 'script',  label: 'Script' },
   { id: 'history', label: 'History' },
   { id: 'stats',   label: 'Stats' },
 ]
@@ -46,6 +48,7 @@ export default function App() {
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-6">
         {tab === 'jobs'    && <JobList />}
+        {tab === 'script'  && <ScriptEditor />}
         {tab === 'history' && <VideoList />}
         {tab === 'stats'   && <StatsPanel />}
       </main>

@@ -50,9 +50,10 @@ class ModelPrice:
 
 
 MODEL_PRICING: dict[str, ModelPrice] = {
-    # Claude models (Anthropic/VoidAI rates, approximate)
-    "claude-opus-4-6":           ModelPrice(15.000, 75.000),
-    "claude-opus-4-5":           ModelPrice(15.000, 75.000),
+    # Claude Opus — included in VoidAI $30/month subscription (4M credits/day)
+    # Effective marginal cost ≈ $0; set to near-zero for cost reporting
+    "claude-opus-4-6":           ModelPrice(0.000,  0.000),
+    "claude-opus-4-5":           ModelPrice(0.000,  0.000),
     "claude-sonnet-4-6":         ModelPrice(3.000,  15.000),
     "claude-sonnet-4-5":         ModelPrice(3.000,  15.000),
     "claude-sonnet-4-5-20250929":ModelPrice(3.000,  15.000),
@@ -82,7 +83,7 @@ _DEFAULT_MODEL_PRICE = ModelPrice(0.400, 1.600)
 
 WAVESPEED_IMAGE_COST   = 0.005   # $ per image (z-image/turbo)
 VOIDAI_IMAGE_COST      = 0.040   # $ per image (gpt-image-1.5 approximate)
-VOICEAPI_COST_PER_CHAR = 0.00030 # $ per character (ElevenLabs Creator tier)
+VOICEAPI_COST_PER_CHAR = 0.0000047  # $ per character (ElevenLabs: 3M chars = $14)
 VOIDAI_TTS_COST_PER_CHAR = 0.000015  # $ per character (tts-1-hd: ~$15/1M chars)
 
 # ─── Token estimates per pipeline step ────────────────────────────────────────

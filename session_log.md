@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-03-01 — Opus timeout fix
+- **Проблема:** claude-opus-4-6 тайм-аут при генерації скрипту — 21KB transcript + 34KB hooks_guide = ~43K токенів промпт
+- **Fix 1:** `MAX_TRANSCRIPT_CHARS = 14_000` у `modules/01_script_generator.py` → truncate `transcript.txt` перед вставкою в промпт
+- **Fix 2:** `MAX_HOOKS_GUIDE_CHARS = 6_000` → truncate `prompts/hooks_guide.md` при завантаженні (specific hook instruction вже є в user prompt через `HOOK_INSTRUCTIONS`)
+- **Fix 3 (попередня сесія):** `DEFAULT_TIMEOUT = 300.0` у `clients/voidai_client.py` (120s → 300s)
+- **Результат:** Total prompt ~30KB (~22K токенів) — Opus має впоратися в межах 300s
+- **Далі:** Тест пайплайну з реальним відео; задача №23
+
+---
+
 ## 2026-03-01 — №21 React Dashboard
 - **Зроблено:** `frontend/` — Vite + React + TypeScript + TailwindCSS v4
 - **Структура:** `api.ts` (HTTP клієнт), `hooks/useWebSocket.ts`, 4 компоненти + App.tsx

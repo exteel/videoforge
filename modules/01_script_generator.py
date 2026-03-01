@@ -47,6 +47,8 @@ log = setup_logging("script_gen")
 PROMPTS_DIR = ROOT / "prompts"
 VALIDATOR_MODEL = "gpt-4.1-nano"
 MAX_INTRO_REGEN = 2  # Default max intro regeneration attempts
+MAX_TRANSCRIPT_CHARS = 14_000  # ~10K tokens — keeps total prompt manageable for Opus
+MAX_HOOKS_GUIDE_CHARS = 6_000  # Hooks guide is 34KB — keep only the most essential part
 
 BlockType = Literal["intro", "section", "cta", "outro"]
 
@@ -381,11 +383,18 @@ def _load_master_prompt(channel_config: dict[str, Any]) -> str:
 
 
 def _load_hooks_guide() -> str:
-    """Load hooks guide for injection into system prompt."""
+    """Load hooks guide for injection into system prompt (truncated to avoid context overflow)."""
     p = PROMPTS_DIR / "hooks_guide.md"
-    if p.exists():
-        return p.read_text(encoding="utf-8").strip()
-    return ""
+    if not p.exists():
+        return ""
+    text = p.read_text(encoding="utf-8").strip()
+    if len(text) > MAX_HOOKS_GUIDE_CHARS:
+        log.debug(
+            "hooks_guide.md truncated from %d to %d chars to keep system prompt manageable",
+            len(text), MAX_HOOKS_GUIDE_CHARS,
+        )
+        text = text[:MAX_HOOKS_GUIDE_CHARS]
+    return text
 
 
 def _build_system_prompt(channel_config: dict[str, Any]) -> str:
@@ -406,6 +415,12 @@ def _build_user_prompt(
 ) -> str:
     """Build user message (transcript + topic + special requests)."""
     transcript = source_data.get("transcript") or ""
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        log.warning(
+            "Transcript too large (%d chars) — truncating to %d chars to keep Opus prompt manageable",
+            len(transcript), MAX_TRANSCRIPT_CHARS,
+        )
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS]
     title = source_data.get("title") or ""
     description = source_data.get("description") or ""
     thumbnail_prompt = source_data.get("thumbnail_prompt") or ""

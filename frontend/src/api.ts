@@ -62,6 +62,28 @@ export interface Stats {
   by_preset: { quality_preset: string; total: number; done: number }[]
 }
 
+export interface ScriptBlock {
+  id: string
+  order: number
+  type: 'intro' | 'section' | 'cta' | 'outro'
+  narration: string
+  image_prompt: string
+  animation: string
+  timestamp_label: string
+  audio_duration: number | null
+}
+
+export interface Script {
+  title: string
+  description: string
+  tags: string[]
+  language: string
+  niche: string
+  blocks: ScriptBlock[]
+  thumbnail_prompt: string
+  channel_config: { name: string; voice_id: string; image_style: string }
+}
+
 export interface PipelineRunRequest {
   source_dir: string
   channel?: string
@@ -133,5 +155,17 @@ export const api = {
 
   stats: {
     get: () => req<Stats>('/stats'),
+  },
+
+  script: {
+    exists: (source_dir: string) =>
+      req<{ exists: boolean; path: string }>(`/script/exists?source_dir=${encodeURIComponent(source_dir)}`),
+    get: (source_dir: string) =>
+      req<Script>(`/script?source_dir=${encodeURIComponent(source_dir)}`),
+    save: (source_dir: string, script: Script) =>
+      req<{ saved: boolean; path: string }>(`/script?source_dir=${encodeURIComponent(source_dir)}`, {
+        method: 'PUT',
+        body: JSON.stringify(script),
+      }),
   },
 }

@@ -31,7 +31,7 @@ log = setup_logging("voidai")
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 MAX_CONCURRENT = 10      # Semaphore: max parallel VoidAI requests
-DEFAULT_TIMEOUT = 120.0  # Seconds per request
+DEFAULT_TIMEOUT = 300.0  # Seconds per request (5 min — Opus needs time for long transcripts)
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0   # Doubles each attempt (2s, 4s, 8s)
 
