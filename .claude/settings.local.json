@@ -7,7 +7,11 @@
       "Bash(git config:*)",
       "Bash(python -m pip install:*)",
       "Bash(python:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(git branch:*)"
     ]
   }
 }
