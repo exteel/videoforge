@@ -1,0 +1,91 @@
+"""
+VideoForge Backend — FastAPI application entry point.
+
+Start with:
+    uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+
+Or via the project launcher:
+    python backend/main.py
+
+API docs at: http://localhost:8000/docs
+"""
+
+from __future__ import annotations
+
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
+# Force UTF-8 stdout on Windows
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from modules.common import load_env, setup_logging
+
+log = setup_logging("backend")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # type: ignore[type-arg]
+    """Load environment on startup."""
+    load_env()
+    log.info("VideoForge API starting  (http://localhost:8000/docs)")
+    yield
+    log.info("VideoForge API shutting down")
+
+
+app = FastAPI(
+    title="VideoForge API",
+    version="1.0.0",
+    description=(
+        "REST + WebSocket API for the VideoForge pipeline.\n\n"
+        "Start jobs via POST, poll status via GET /api/jobs/{id}, "
+        "or stream real-time progress via WebSocket /ws/{job_id}."
+    ),
+    lifespan=lifespan,
+)
+
+# Allow all origins for local dev — restrict in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers ───────────────────────────────────────────────────────────────────
+
+from backend.routes import pipeline as pipeline_router
+from backend.routes import videos as videos_router
+from backend.routes import ws as ws_router
+
+app.include_router(pipeline_router.router, prefix="/api")
+app.include_router(videos_router.router, prefix="/api")
+app.include_router(ws_router.router)
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/api/health", tags=["health"])
+async def health() -> dict:
+    """Liveness probe — returns 200 if the server is running."""
+    return {"status": "ok", "service": "VideoForge API", "version": "1.0.0"}
+
+
+# ── Dev launcher ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn  # type: ignore[import]
+    uvicorn.run(
+        "backend.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info",
+    )

@@ -136,6 +136,18 @@ class CostBudget:
         return "\n".join(lines)
 
 
+# ─── Progress callback helper ─────────────────────────────────────────────────
+
+def _emit(callback: Any, **event: Any) -> None:
+    """Safely invoke a progress callback without disrupting the pipeline."""
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:
+        pass
+
+
 # ─── Validation helpers ────────────────────────────────────────────────────────
 
 def _require_files(paths: list[Path], *, min_bytes: int = 0, step: str = "") -> None:
@@ -222,6 +234,7 @@ async def run_pipeline(
     script_path_override: Path | None = None,
     db_tracker: Any | None = None,   # VideoTracker instance (optional)
     db_video_id: int | None = None,  # Pre-created video row id (passed by batch_runner)
+    progress_callback: Any | None = None,  # Callable({type, step, ...}) for real-time updates
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -319,6 +332,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_SCRIPT:
         _step_header(STEP_SCRIPT, STEP_NAMES[STEP_SCRIPT])
+        _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT])
         t0 = time.monotonic()
 
         if source_dir is None:
@@ -348,6 +362,7 @@ async def run_pipeline(
                 sys.exit(1)
         else:
             log.info("[DRY RUN] Script step complete (no file written)")
+        _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0)
 
     # Review pause (only when not dry-run and not skipping step 1)
     if review and not dry_run and from_step <= STEP_SCRIPT:
@@ -358,6 +373,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_MEDIA:
         _step_header(STEP_MEDIA, STEP_NAMES[STEP_MEDIA])
+        _emit(progress_callback, type="step_start", step=STEP_MEDIA, name=STEP_NAMES[STEP_MEDIA])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -436,12 +452,14 @@ async def run_pipeline(
             if cost.over_budget():
                 log.error("Budget exceeded after Media! %s", cost.summary())
                 sys.exit(1)
+        _emit(progress_callback, type="step_done", step=STEP_MEDIA, elapsed=time.monotonic() - t0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3 — SUBTITLES
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_SUBTITLES:
         _step_header(STEP_SUBTITLES, STEP_NAMES[STEP_SUBTITLES])
+        _emit(progress_callback, type="step_start", step=STEP_SUBTITLES, name=STEP_NAMES[STEP_SUBTITLES])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -476,12 +494,14 @@ async def run_pipeline(
                     "Subtitles: %s, %s  (%.1fs)",
                     srt_path.name, ass_path.name, time.monotonic() - t0,
                 )
+        _emit(progress_callback, type="step_done", step=STEP_SUBTITLES, elapsed=time.monotonic() - t0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 4 — VIDEO
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_VIDEO:
         _step_header(STEP_VIDEO, STEP_NAMES[STEP_VIDEO])
+        _emit(progress_callback, type="step_start", step=STEP_VIDEO, name=STEP_NAMES[STEP_VIDEO])
         t0 = time.monotonic()
 
         # compile_video needs full_narration.mp3 even in dry_run
@@ -512,12 +532,14 @@ async def run_pipeline(
                     "Video: %s  (%.1f MB, %.1fs)",
                     video_path.name, size_mb, time.monotonic() - t0,
                 )
+        _emit(progress_callback, type="step_done", step=STEP_VIDEO, elapsed=time.monotonic() - t0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 5 — THUMBNAIL
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_THUMBNAIL:
         _step_header(STEP_THUMBNAIL, STEP_NAMES[STEP_THUMBNAIL])
+        _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -555,12 +577,14 @@ async def run_pipeline(
                     if cost.over_budget():
                         log.error("Budget exceeded after Thumbnail! %s", cost.summary())
                         sys.exit(1)
+        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 6 — METADATA
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_METADATA:
         _step_header(STEP_METADATA, STEP_NAMES[STEP_METADATA])
+        _emit(progress_callback, type="step_start", step=STEP_METADATA, name=STEP_NAMES[STEP_METADATA])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -583,6 +607,7 @@ async def run_pipeline(
                 if cost.over_budget():
                     log.error("Budget exceeded after Metadata! %s", cost.summary())
                     sys.exit(1)
+        _emit(progress_callback, type="step_done", step=STEP_METADATA, elapsed=time.monotonic() - t0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # DONE
@@ -603,6 +628,8 @@ async def run_pipeline(
                 _vid_id, step=label, model="pipeline", cost_usd=amount,
             )
         log.info("DB tracking : done (video_id=%d, elapsed=%.1fs)", _vid_id, elapsed_total)
+
+    _emit(progress_callback, type="done", elapsed=elapsed_total, dry_run=dry_run)
 
     print()
     print("=" * 60)

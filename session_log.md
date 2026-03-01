@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-03-01 — №19 SQLite Tracker (продовження після context compaction)
+- **Зроблено:** Інтеграція `utils/db.py` у `pipeline.py` та `batch_runner.py`
+- **Що зроблено в utils/db.py:** VideoTracker (create_video, set_running, set_done, set_failed, set_skipped, set_youtube_url, record_cost, record_costs_from_tracker, list_videos, get_costs, session_stats) — було готово в попередній сесії
+- **Інтеграція pipeline.py:** `db_tracker` + `db_video_id` параметри; set_running після setup; _video_path/_thumb_path захоплюються в steps 4-5; set_done + record_costs в DONE section; `--track` / `--db` CLI flags; main() з try/except для set_failed
+- **Інтеграція batch_runner.py:** `db_tracker` в `_process_one`; create_video перед run_pipeline; set_failed в обох exception handlers; `db_path` в run_batch; `--track` / `--db` CLI flags
+- **Тест:** lifecycle test (create→running→done + costs) ✓
+- **Далі:** №20 FastAPI бекенд
+
+---
+
 ## 2026-03-01 — №16 Pipeline Runner (продовження попередньої сесії)
 - **Зроблено:** `pipeline.py` (630 рядків) — повний pipeline runner
 - **Кроки:** 1=Script → 2=Images+Voices (parallel) → 3=Subs → 4=Video → 5=Thumb → 6=Meta

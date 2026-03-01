@@ -1,11 +1,11 @@
 # Поточна задача
 
-## Задача №19 — SQLite трекінг
-- Статуси, вартість per model, YouTube URLs, зв'язок з Transcriber source
-- Залежить від: 16
+## Задача №20 — FastAPI бекенд
+- REST API обгортка, WebSocket прогрес
+- Залежить від: 19
 
 ## Наступна задача
-№20 — FastAPI бекенд
+№21 — React Dashboard
 
 ---
 Після виконання: `python dev.py next -md` → git commit
