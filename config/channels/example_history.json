@@ -1,0 +1,58 @@
+{
+  "channel_name": "History Explained",
+  "niche": "history",
+  "language": "en",
+  "voice_id": "your_voice_id_here",
+  "image_style": "cinematic, photorealistic, dramatic lighting, 8k, high detail",
+  "thumbnail_style": "bold text overlay, dramatic imagery, high contrast, vibrant colors",
+  "subtitle_style": {
+    "font": "Arial Bold",
+    "size": 48,
+    "color": "#FFFFFF",
+    "outline_color": "#000000",
+    "outline_width": 3,
+    "position": "bottom",
+    "margin_v": 60
+  },
+  "default_animation": "zoom_in",
+  "master_prompt_path": "prompts/master_script_v1.txt",
+  "llm": {
+    "default_preset": "max",
+    "presets": {
+      "max": {
+        "script": "claude-opus-4-6",
+        "metadata": "gpt-4.1-mini",
+        "thumbnail": "gpt-4.1"
+      },
+      "high": {
+        "script": "claude-sonnet-4-5-20250929",
+        "metadata": "gpt-4.1-mini",
+        "thumbnail": "gpt-4.1"
+      },
+      "balanced": {
+        "script": "gpt-5.2",
+        "metadata": "gpt-4.1-nano",
+        "thumbnail": "gemini-2.5-flash"
+      },
+      "bulk": {
+        "script": "deepseek-v3.1",
+        "metadata": "gpt-4.1-nano",
+        "thumbnail": "gemini-2.5-flash"
+      },
+      "test": {
+        "script": "mistral-small-latest",
+        "metadata": "gemma-3n-e4b-it",
+        "thumbnail": "gemini-2.5-flash"
+      }
+    }
+  },
+  "tts": {
+    "provider": "voiceapi",
+    "fallback": "tts-1-hd"
+  },
+  "images": {
+    "provider": "wavespeed",
+    "fallback": "gpt-image-1.5"
+  },
+  "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}"
+}

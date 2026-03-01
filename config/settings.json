@@ -1,0 +1,34 @@
+{
+  "voidai": {
+    "base_url": "${VOIDAI_BASE_URL}",
+    "default_timeout": 120,
+    "max_retries": 3,
+    "retry_delay": 2.0
+  },
+  "fallback_models": {
+    "image": "gpt-image-1.5",
+    "tts": "tts-1-hd",
+    "vision": "gpt-4.1"
+  },
+  "wavespeed": {
+    "model": "z-image/turbo",
+    "cost_per_image": 0.005,
+    "max_retries": 3
+  },
+  "voiceapi": {
+    "base_url": "https://voiceapi.csv666.ru",
+    "max_retries": 3
+  },
+  "video": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "codec": "libx264",
+    "crf": 18,
+    "preset": "slow"
+  },
+  "defaults": {
+    "language": "en",
+    "quality_preset": "max",
+    "animation": "zoom_in"
+  }
+}
