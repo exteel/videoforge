@@ -30,7 +30,7 @@
 - [ ] №18 Batch Runner
 
 ## Поточний стан
-Всі клієнти і базові утиліти готові. Script Generator (№6) завершено. Наступний: Image Generator (№7).
+Image Generator (№7) завершено. Наступний: Voice Generator (№8).
 
 ## Відомі баги
 (немає)

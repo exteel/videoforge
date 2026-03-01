@@ -14,6 +14,16 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №7 Image Generator
+
+- **Зроблено:** modules/02_image_generator.py (523 рядки)
+- **Логіка:** script.json → блоки з image_prompt → WaveSpeed паралельно (asyncio.gather) → images/block_NNN.png
+- **Validation:** gpt-4.1-mini vision → 3 критерії (MATCH, CLEAN, QUALITY) → auto-regenerate при fail, max 2 retries
+- **Fallback:** WaveSpeed exception → VoidAI gpt-image-1.5; step caching (>5KB → skip)
+- **Dry-run тест:** пройшов — 2 блоки з промптами, CTA пропущено, $0.010 оцінка
+- **Git:** feat: №7 Image Generator; dev.py next -md → №8
+- **Далі:** №8 Voice Generator
+
 ## 2026-03-01 — №5 FFmpeg utils + №6 Script Generator
 
 - **Зроблено:** utils/ffmpeg_utils.py (808 рядків), modules/01_script_generator.py (847 рядків)
