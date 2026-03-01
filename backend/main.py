@@ -25,6 +25,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from modules.common import load_env, setup_logging
 
@@ -80,6 +82,20 @@ app.include_router(ws_router.router)
 async def health() -> dict:
     """Liveness probe — returns 200 if the server is running."""
     return {"status": "ok", "service": "VideoForge API", "version": "1.0.0"}
+
+
+# ── Static frontend (production / Docker) ─────────────────────────────────────
+# Serve React build from frontend/dist when it exists.
+# In local dev, Vite dev server (port 5173) handles the frontend.
+
+_DIST = ROOT / "frontend" / "dist"
+if _DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        """Serve index.html for all non-API routes (SPA fallback)."""
+        return FileResponse(str(_DIST / "index.html"))
 
 
 # ── Dev launcher ─────────────────────────────────────────────────────────────

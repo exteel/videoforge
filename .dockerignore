@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+venv
+
+# Frontend
+frontend/node_modules
+frontend/.vite
+
+# Project outputs (mount as volumes instead)
+projects/
+data/
+
+# Dev files
+*.md
+session_log.md
+.env
+.env.*
+
+# IDE
+.vscode
+.idea
+*.log
