@@ -1,0 +1,17 @@
+projects/
+node_modules/
+__pycache__/
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.log
+.pytest_cache/
+htmlcov/
+.git/
