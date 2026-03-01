@@ -6,7 +6,8 @@
       "Bash(git commit:*)",
       "Bash(git config:*)",
       "Bash(python -m pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)"
     ]
   }
 }

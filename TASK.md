@@ -8,6 +8,8 @@
 - config/channels/example_history.json: повний конфіг з llm.presets (max/high/balanced/bulk/test, default=max), tts/images providers+fallbacks, стилі
 - config/settings.json: глобальні defaults (VoidAI base_url, fallback models)
 - prompts/master_script_v1.txt: заглушка
+- prompts/hooks_guide.md: скопіювати з кореня (ГАЙД_ПО_ХУКАХ_YOUTUBE.md → prompts/hooks_guide.md)
+- prompts/hook_validator.txt: промпт для валідації intro — 4 критерії (clarity, curiosity, relevance, interest) + чеклист з гайду
 - tests/test_data/: порожня папка + sample_config.json
 - Результат: `pip install -r requirements.txt` + `python modules/common.py` працює, виводить конфіг
 
