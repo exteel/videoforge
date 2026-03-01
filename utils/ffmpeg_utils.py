@@ -51,6 +51,11 @@ DRAFT_RESOLUTION = "854x480"
 DRAFT_CRF = 28
 DRAFT_PRESET = "ultrafast"
 
+# Ken Burns internal computation FPS.
+# zoompan computes motion at this FPS, then fps= filter duplicates to output FPS.
+# At 6fps the zoom moves ~1px/frame on 1920px — imperceptible. 5× faster than 30fps.
+ZOOMPAN_FPS = 6
+
 # Ken Burns animation types
 AnimationType = Literal["zoom_in", "zoom_out", "pan_left", "pan_right", "static"]
 
@@ -234,7 +239,10 @@ def ken_burns(
     _ensure_parent(out)
 
     w, h = (int(x) for x in resolution.split("x"))
-    total_frames = int(duration * fps)
+    # Compute zoompan at reduced internal FPS, then duplicate frames to output FPS.
+    # Ken Burns moves ~1px/frame at 6fps — indistinguishable from 30fps at this zoom speed.
+    zoom_fps = ZOOMPAN_FPS if not draft else fps
+    total_frames = int(duration * zoom_fps)
     crf = DRAFT_CRF if draft else DEFAULT_CRF
     preset = DRAFT_PRESET if draft else DEFAULT_PRESET
     res = DRAFT_RESOLUTION if draft else resolution
@@ -271,8 +279,9 @@ def ken_burns(
                 f"zoompan=z='1+{(overscan-1)/total_frames:.6f}*on':"
                 f"x='iw/2-(iw/zoom/2)':"
                 f"y='ih/2-(ih/zoom/2)':"
-                f"d={total_frames}:s={w}x{h}:fps={fps},"
-                f"scale={w}:{h}"
+                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
+                f"scale={w}:{h},"
+                f"fps={fps}"
             )
         elif animation == "zoom_out":
             # Zoom from 1.15× to 1.0×
@@ -282,8 +291,9 @@ def ken_burns(
                 f"zoompan=z='{overscan:.4f}-{(overscan-1)/total_frames:.6f}*on':"
                 f"x='iw/2-(iw/zoom/2)':"
                 f"y='ih/2-(ih/zoom/2)':"
-                f"d={total_frames}:s={w}x{h}:fps={fps},"
-                f"scale={w}:{h}"
+                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
+                f"scale={w}:{h},"
+                f"fps={fps}"
             )
         elif animation == "pan_left":
             # Pan from right to left
@@ -293,8 +303,9 @@ def ken_burns(
                 f"zoompan=z='{overscan:.4f}':"
                 f"x='iw/zoom*(on/{total_frames})':"
                 f"y='ih/2-(ih/zoom/2)':"
-                f"d={total_frames}:s={w}x{h}:fps={fps},"
-                f"scale={w}:{h}"
+                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
+                f"scale={w}:{h},"
+                f"fps={fps}"
             )
         elif animation == "pan_right":
             # Pan from left to right
@@ -304,8 +315,9 @@ def ken_burns(
                 f"zoompan=z='{overscan:.4f}':"
                 f"x='iw/zoom*(1-on/{total_frames})':"
                 f"y='ih/2-(ih/zoom/2)':"
-                f"d={total_frames}:s={w}x{h}:fps={fps},"
-                f"scale={w}:{h}"
+                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
+                f"scale={w}:{h},"
+                f"fps={fps}"
             )
         else:
             raise ValueError(f"Unknown animation type: {animation!r}")
