@@ -21,16 +21,17 @@ function fmtSec(sec: number): string {
   return m > 0 ? `${m}м ${s}с` : `${s}с`
 }
 
-/** Simple ETA: average time per completed step × remaining steps */
-function calcETA(step: number, elapsedSec: number): string | null {
-  if (step < 1 || elapsedSec <= 0) return null
-  const avgPerStep = elapsedSec / step
-  const remaining = avgPerStep * (6 - step)
-  if (remaining <= 0) return 'завершення…'
+/** ETA from real pct + elapsed time */
+function calcETAfromPct(pct: number, elapsedSec: number): string | null {
+  if (pct <= 0 || elapsedSec <= 0) return null
+  if (pct >= 99) return 'завершення…'
+  const totalEst = elapsedSec / (pct / 100)
+  const remaining = totalEst - elapsedSec
+  if (remaining <= 5) return 'завершення…'
   return `ETA ~${fmtSec(remaining)}`
 }
 
-/** Estimate % progress within the current step using historical step durations */
+/** Fallback estimate % when no real pct is available */
 function calcPct(step: number, elapsedSec: number): number {
   if (step > 6) return 100
   if (step < 1) return 0
@@ -90,8 +91,32 @@ export function JobCard({ job, onRefresh }: Props) {
   })()
 
   const elapsedSec = liveSec ?? job.elapsed ?? 0
-  const pct = liveStatus === 'done' ? 100 : calcPct(liveStep, elapsedSec)
-  const eta = liveStatus === 'running' ? calcETA(liveStep, elapsedSec) : null
+
+  // Real pct + message: scan WS events newest-first for sub_progress / step events with pct field
+  const { livePctFromWS, liveSubMsg } = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]
+      if (
+        typeof e.pct === 'number' &&
+        (e.type === 'sub_progress' || e.type === 'step_start' || e.type === 'step_done')
+      ) {
+        return {
+          livePctFromWS: e.pct as number,
+          liveSubMsg: e.type === 'sub_progress' && e.message ? String(e.message) : null,
+        }
+      }
+    }
+    return { livePctFromWS: null, liveSubMsg: null }
+  })()
+
+  // Priority: WS real pct > snapshot job.pct > time-based estimate
+  const pct =
+    liveStatus === 'done' ? 100
+    : livePctFromWS !== null ? livePctFromWS
+    : (job.pct > 0) ? job.pct
+    : calcPct(liveStep, elapsedSec)
+
+  const eta = liveStatus === 'running' ? calcETAfromPct(pct, elapsedSec) : null
 
   async function handleCancel() {
     setCancelling(true)
@@ -155,6 +180,10 @@ export function JobCard({ job, onRefresh }: Props) {
               style={{ width: `${pct}%` }}
             />
           </div>
+          {/* Sub-step message (e.g. "Block 3/10", "Concat done") */}
+          {liveSubMsg && liveStatus === 'running' && (
+            <div className="text-[10px] text-gray-500 italic">{liveSubMsg}</div>
+          )}
           {/* Step indicator dots */}
           <div className="flex justify-between mt-1">
             {STEPS.slice(1).map((name, i) => {

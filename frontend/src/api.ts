@@ -15,6 +15,7 @@ export interface Job {
   elapsed: number | null
   step: number
   step_name: string
+  pct: number       // 0–100 real progress from backend
   error: string
   logs: string[]
   db_video_id: number | null

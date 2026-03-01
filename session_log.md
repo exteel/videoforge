@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-03-01 — ETA + Smooth Progress Bar (наскрізний від транскрибації до відео)
+
+### backend/job_manager.py
+- `pct: float = 0.0` — нове поле в `Job` dataclass
+- `to_response()` тепер повертає `pct`
+- `progress_callback`: оновлює `job.pct` з `step_start`, `step_done`, `sub_progress` подій
+
+### pipeline.py
+- `STEP_WEIGHTS` dict — вагові частки кожного кроку: Script 0-15%, Media 15-55%, Subs 55-60%, Video 60-80%, Thumb 80-93%, Meta 93-100%
+- Кожен `_emit(step_start/step_done)` тепер включає `pct=STEP_WEIGHTS[step][0/1]`
+- Крок 4 (Video): `_video_sub_cb` — wrapper що транслює локальний pct `compile_video` у глобальний діапазон 60-80%
+- Thread-safe: `_loop.call_soon_threadsafe(lambda e=ev: _emit(...))` для sub_progress з executor thread
+
+### modules/05_video_compiler.py
+- `progress_callback: Any | None = None` — новий параметр
+- `_emit_progress(pct, message)` — внутрішній helper
+- Після кожного блоку (Ken Burns): `i/n_blocks * 75%` → рух бару всередині кроку
+- Після concat: 76% → 82%, music mix: 84%, add_audio: 88% → 94%
+
+### frontend/src/api.ts
+- `Job.pct: number` — нове поле (0-100)
+
+### frontend/src/components/JobCard.tsx
+- `calcETAfromPct(pct, elapsedSec)` — замість старого step-based ETA; точніший розрахунок на базі реального %
+- `livePctFromWS` + `liveSubMsg` — з WS подій новішого типу `sub_progress/step_start/step_done`
+- Priority: WS pct > snapshot `job.pct` > fallback `calcPct()`
+- Sub-message рядок під прогресбаром: показує "Block 3/10", "Concat done" тощо
+
+**Далі:** git commit
+
+---
+
 ## 2026-03-01 — UI покращення (продовження сесії)
 
 ### api.ts

@@ -74,6 +74,17 @@ STEP_NAMES = {
     STEP_METADATA:  "Metadata",
 }
 
+# Global progress % range (start, end) for each step.
+# Calibrated to reflect typical step duration ratios.
+STEP_WEIGHTS: dict[int, tuple[float, float]] = {
+    STEP_SCRIPT:    (0.0,  15.0),
+    STEP_MEDIA:     (15.0, 55.0),
+    STEP_SUBTITLES: (55.0, 60.0),
+    STEP_VIDEO:     (60.0, 80.0),
+    STEP_THUMBNAIL: (80.0, 93.0),
+    STEP_METADATA:  (93.0, 100.0),
+}
+
 # ─── Module loading ────────────────────────────────────────────────────────────
 
 _module_cache: dict[str, Any] = {}
@@ -347,8 +358,8 @@ async def run_pipeline(
                         len(_existing["blocks"]),
                         s_path,
                     )
-                    _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT])
-                    _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=0.0)
+                    _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
+                    _emit(progress_callback, type="step_done",  step=STEP_SCRIPT, elapsed=0.0,                        pct=STEP_WEIGHTS[STEP_SCRIPT][1])
                     from_step = STEP_MEDIA  # continue from step 2
                     # Jump to step 2 — fall through to media step below
             except Exception:
@@ -356,7 +367,7 @@ async def run_pipeline(
 
     if from_step <= STEP_SCRIPT:
         _step_header(STEP_SCRIPT, STEP_NAMES[STEP_SCRIPT])
-        _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT])
+        _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
         t0 = time.monotonic()
 
         if source_dir is None:
@@ -387,7 +398,7 @@ async def run_pipeline(
                 sys.exit(1)
         else:
             log.info("[DRY RUN] Script step complete (no file written)")
-        _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SCRIPT][1])
 
     # Review pause (only when not dry-run and not skipping step 1)
     if review and not dry_run and from_step <= STEP_SCRIPT:
@@ -398,7 +409,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_MEDIA:
         _step_header(STEP_MEDIA, STEP_NAMES[STEP_MEDIA])
-        _emit(progress_callback, type="step_start", step=STEP_MEDIA, name=STEP_NAMES[STEP_MEDIA])
+        _emit(progress_callback, type="step_start", step=STEP_MEDIA, name=STEP_NAMES[STEP_MEDIA], pct=STEP_WEIGHTS[STEP_MEDIA][0])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -479,14 +490,14 @@ async def run_pipeline(
             if cost.over_budget():
                 log.error("Budget exceeded after Media! %s", cost.summary())
                 sys.exit(1)
-        _emit(progress_callback, type="step_done", step=STEP_MEDIA, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_MEDIA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_MEDIA][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3 — SUBTITLES
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_SUBTITLES:
         _step_header(STEP_SUBTITLES, STEP_NAMES[STEP_SUBTITLES])
-        _emit(progress_callback, type="step_start", step=STEP_SUBTITLES, name=STEP_NAMES[STEP_SUBTITLES])
+        _emit(progress_callback, type="step_start", step=STEP_SUBTITLES, name=STEP_NAMES[STEP_SUBTITLES], pct=STEP_WEIGHTS[STEP_SUBTITLES][0])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -521,14 +532,14 @@ async def run_pipeline(
                     "Subtitles: %s, %s  (%.1fs)",
                     srt_path.name, ass_path.name, time.monotonic() - t0,
                 )
-        _emit(progress_callback, type="step_done", step=STEP_SUBTITLES, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_SUBTITLES, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SUBTITLES][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 4 — VIDEO
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_VIDEO:
         _step_header(STEP_VIDEO, STEP_NAMES[STEP_VIDEO])
-        _emit(progress_callback, type="step_start", step=STEP_VIDEO, name=STEP_NAMES[STEP_VIDEO])
+        _emit(progress_callback, type="step_start", step=STEP_VIDEO, name=STEP_NAMES[STEP_VIDEO], pct=STEP_WEIGHTS[STEP_VIDEO][0])
         t0 = time.monotonic()
 
         # compile_video needs full_narration.mp3 even in dry_run
@@ -539,9 +550,25 @@ async def run_pipeline(
         else:
             compile_video = _fn("modules/05_video_compiler.py", "compile_video")
 
+            # Sub-progress: map local 0–100 from compile_video → global pct range for step 4
+            _vid_start, _vid_end = STEP_WEIGHTS[STEP_VIDEO]
+            _loop = asyncio.get_event_loop()
+
+            def _video_sub_cb(event: dict) -> None:
+                if event.get("type") == "sub_progress" and "pct" in event:
+                    local_pct = float(event["pct"])
+                    global_pct = _vid_start + (local_pct / 100.0) * (_vid_end - _vid_start)
+                    new_ev = {
+                        "type":    "sub_progress",
+                        "pct":     round(global_pct, 1),
+                        "step":    STEP_VIDEO,
+                        "message": event.get("message", ""),
+                    }
+                    # Thread-safe: schedule emit back on the event loop
+                    _loop.call_soon_threadsafe(lambda e=new_ev: _emit(progress_callback, **e))
+
             # compile_video is synchronous — run in executor to avoid blocking the loop
-            loop = asyncio.get_event_loop()
-            video_path: Path = await loop.run_in_executor(
+            video_path: Path = await _loop.run_in_executor(
                 None,
                 lambda: compile_video(
                     s_path,
@@ -550,6 +577,7 @@ async def run_pipeline(
                     dry_run=dry_run,
                     no_subs=True,   # subtitles disabled until format is settled
                     no_music=not background_music,
+                    progress_callback=_video_sub_cb,
                 ),
             )
 
@@ -561,14 +589,14 @@ async def run_pipeline(
                     "Video: %s  (%.1f MB, %.1fs)",
                     video_path.name, size_mb, time.monotonic() - t0,
                 )
-        _emit(progress_callback, type="step_done", step=STEP_VIDEO, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_VIDEO, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_VIDEO][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 5 — THUMBNAIL
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_THUMBNAIL:
         _step_header(STEP_THUMBNAIL, STEP_NAMES[STEP_THUMBNAIL])
-        _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL])
+        _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL], pct=STEP_WEIGHTS[STEP_THUMBNAIL][0])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -611,14 +639,14 @@ async def run_pipeline(
                     if cost.over_budget():
                         log.error("Budget exceeded after Thumbnail! %s", cost.summary())
                         sys.exit(1)
-        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 6 — METADATA
     # ══════════════════════════════════════════════════════════════════════════
     if from_step <= STEP_METADATA:
         _step_header(STEP_METADATA, STEP_NAMES[STEP_METADATA])
-        _emit(progress_callback, type="step_start", step=STEP_METADATA, name=STEP_NAMES[STEP_METADATA])
+        _emit(progress_callback, type="step_start", step=STEP_METADATA, name=STEP_NAMES[STEP_METADATA], pct=STEP_WEIGHTS[STEP_METADATA][0])
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
@@ -642,7 +670,7 @@ async def run_pipeline(
                 if cost.over_budget():
                     log.error("Budget exceeded after Metadata! %s", cost.summary())
                     sys.exit(1)
-        _emit(progress_callback, type="step_done", step=STEP_METADATA, elapsed=time.monotonic() - t0)
+        _emit(progress_callback, type="step_done", step=STEP_METADATA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_METADATA][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # DONE

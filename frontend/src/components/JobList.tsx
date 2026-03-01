@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { type Job, type PipelineRunRequest, type BatchRunRequest, api } from '../api'
+import { type Job, type PipelineRunRequest, type BatchRunRequest, type PromptMeta, api } from '../api'
 import { JobCard } from './JobCard'
 import { TranscriberPanel } from './TranscriberPanel'
 
@@ -95,7 +95,7 @@ export function JobList() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab]         = useState<'pipeline' | 'batch'>('pipeline')
   const [voices, setVoices]   = useState<{ id: string; name: string }[]>([])
-  const [prompts, setPrompts] = useState<{ name: string; filename: string }[]>([])
+  const [prompts, setPrompts] = useState<PromptMeta[]>([])
 
   const [pForm, setPForm] = useState<PFormState>({
     source_dir:       localStorage.getItem(LS_SOURCE_DIR) ?? '',
@@ -160,7 +160,7 @@ export function JobList() {
       const payload: Record<string, unknown> = { ...pForm }
       if (!payload.image_style) delete payload.image_style
       if (!payload.voice_id)    delete payload.voice_id
-      await api.pipeline.run(payload as PipelineRunRequest)
+      await api.pipeline.run(payload as unknown as PipelineRunRequest)
       await loadJobs()
     } catch (err) {
       setFormError(String(err))
@@ -249,7 +249,7 @@ export function JobList() {
                   Quality
                   <Tip text="Яку LLM модель використовувати для сценарію. Max = найкраща якість. Test = дешевий режим для налагодження." />
                 </span>
-                <DescSelect value={pForm.quality}
+                <DescSelect value={pForm.quality ?? 'max'}
                   onChange={(v) => setPForm({ ...pForm, quality: v })}
                   options={QUALITY_OPTS}
                 />

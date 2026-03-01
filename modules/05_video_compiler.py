@@ -124,6 +124,7 @@ def compile_video(
     no_intro_outro: bool = False,
     crossfade: bool = True,
     dry_run: bool = False,
+    progress_callback: Any | None = None,
 ) -> Path:
     """
     Compile final video from script.json resources.
@@ -138,6 +139,8 @@ def compile_video(
         no_intro_outro: Skip intro/outro templates.
         crossfade: Enable 0.5s crossfade between blocks (ignored in draft mode).
         dry_run: Validate inputs and log plan without running FFmpeg.
+        progress_callback: Optional callable({type, pct, message}) for real-time
+            sub-step progress (pct in 0–100 within this step).
 
     Returns:
         Path to final.mp4.
@@ -262,6 +265,14 @@ def compile_video(
 
     t0 = time.monotonic()
 
+    def _emit_progress(pct: float, message: str = "") -> None:
+        """Emit a sub_progress event via progress_callback (if set)."""
+        if progress_callback:
+            try:
+                progress_callback({"type": "sub_progress", "pct": round(pct, 1), "message": message})
+            except Exception:
+                pass
+
     with tempfile.TemporaryDirectory(prefix="vf_compile_") as tmp_str:
         tmp = Path(tmp_str)
 
@@ -269,6 +280,7 @@ def compile_video(
         block_clips: list[Path] = []
         prev_image: Path | None = None
 
+        n_blocks = len(voiced_blocks)
         log.info("Step 1/%d: Generating block video clips...", 4 + bool(subs_file) + bool(music_track) + bool(intro_video) + bool(outro_video))
 
         for i, block in enumerate(voiced_blocks, 1):
@@ -316,7 +328,9 @@ def compile_video(
                 prev_image = image_path
 
             block_clips.append(clip_path)
-            log.info("  [%d/%d] %s → %s (%.1fs, %s)", i, len(voiced_blocks), block["id"], clip_path.name, duration, animation)
+            log.info("  [%d/%d] %s → %s (%.1fs, %s)", i, n_blocks, block["id"], clip_path.name, duration, animation)
+            # Sub-progress: blocks = 0–75% of the step; each block moves the bar forward
+            _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
 
         if not block_clips:
             raise RuntimeError("No video clips generated")
@@ -325,12 +339,14 @@ def compile_video(
         step = 2
         log.info("Step %d: Concatenating %d clips (crossfade=%s)...", step, len(block_clips), use_crossfade)
         video_raw = tmp / "video_raw.mp4"
+        _emit_progress(76.0, "Concatenating clips…")
         concat_videos(
             block_clips,
             video_raw,
             crossfade=use_crossfade,
             crossfade_duration=crossfade_dur,
         )
+        _emit_progress(82.0, "Concat done")
 
         # ── Step 3: Mix audio (narration + background music) ──
         step += 1
@@ -341,6 +357,7 @@ def compile_video(
                 channel_config.get("background_music", {}).get("volume_db", -20)
             )
             mixed_audio = tmp / "audio_mixed.mp3"
+            _emit_progress(84.0, "Mixing music…")
             mix_audio(narration_audio, music_track, mixed_audio, music_volume=music_volume)
             final_audio = mixed_audio
             step += 1
@@ -348,8 +365,10 @@ def compile_video(
         # ── Step 4: Add audio track ──
         log.info("Step %d: Adding audio track (%s)...", step, final_audio.name)
         video_with_audio = tmp / "video_with_audio.mp4"
+        _emit_progress(88.0, "Adding audio…")
         add_audio(video_raw, final_audio, video_with_audio, shortest=True)
         current_video = video_with_audio
+        _emit_progress(94.0, "Audio done")
 
         # ── Step 5: Burn subtitles ──
         step += 1

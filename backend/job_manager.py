@@ -38,6 +38,7 @@ class Job:
     elapsed: float | None = None
     step: int = 0
     step_name: str = ""
+    pct: float = 0.0
     error: str = ""
     logs: list[str] = field(default_factory=list)
     db_video_id: int | None = None
@@ -74,6 +75,7 @@ class Job:
             "elapsed": self.elapsed,
             "step": self.step,
             "step_name": self.step_name,
+            "pct": self.pct,
             "error": self.error,
             "logs": self.logs,
             "db_video_id": self.db_video_id,
@@ -178,10 +180,18 @@ class JobManager:
             if evt_type == "step_start":
                 job.step = event.get("step", job.step)
                 job.step_name = event.get("name", "")
+                if "pct" in event:
+                    job.pct = float(event["pct"])
                 job.log(f"[Step {job.step}] {job.step_name}")
             elif evt_type == "step_done":
                 elapsed_s = event.get("elapsed", 0.0)
+                if "pct" in event:
+                    job.pct = float(event["pct"])
                 job.log(f"[Step {event.get('step', job.step)} done] {elapsed_s:.1f}s")
+            elif evt_type == "sub_progress":
+                # Fine-grained within-step progress (e.g. FFmpeg block-by-block)
+                if "pct" in event:
+                    job.pct = float(event["pct"])
             job.emit(**event)
 
         try:
