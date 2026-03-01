@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 17:29
+Останнє оновлення: 2026-03-01 17:35
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -23,7 +23,7 @@
 - [x] №11 Thumbnail Generator
 - [x] №12 Metadata Generator
 - [x] №13 YouTube Uploader
-- [ ] №14 E2E тест
+- [x] №14 E2E тест
 - [ ] №15 Фікс багів
 - [ ] №16 Pipeline Runner
 - [ ] №17 Cost Tracker

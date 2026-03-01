@@ -14,6 +14,18 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №13 YouTube Uploader
+
+- **Зроблено:** modules/08_youtube_uploader.py (595 рядків) + requirements.txt (google libs)
+- **Логіка:** output/{final.mp4, thumbnail.png, metadata.json} → YouTube Data API v3 → video_id + url
+- **OAuth2:** YOUTUBE_CLIENT_ID/SECRET з env → token.json кеш → browser auth першого разу → refresh automatic
+- **Resumable upload:** 8MB chunks, MAX_RETRIES=5 для network errors
+- **Schedule:** --schedule "2026-03-05 18:00" → UTC ISO8601 + privacy=private
+- **Auto-schedule:** channel config {interval_days:7, time:"18:00"} → next slot; state зберігається в config/oauth2/{channel}_schedule.json
+- **Dry-run тест:** schedule→2026-12-31T16:00:00Z OK; auto-schedule→+7d від сьогодні OK
+- **Git:** feat: №13 YouTube Uploader; dev.py next -md → №14
+- **Далі:** №14 Тестові дані і повний прогон
+
 ## 2026-03-01 — №12 Metadata Generator
 
 - **Зроблено:** modules/07_metadata_generator.py (397 рядків)
