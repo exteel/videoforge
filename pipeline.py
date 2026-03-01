@@ -575,34 +575,39 @@ async def run_pipeline(
             log.info("[DRY RUN] Thumbnail estimate: ~$0.010 (2 WaveSpeed attempts avg)")
             cost.add("Thumbnail estimate (WaveSpeed)", 2 * 0.005)
         else:
-            generate_thumbnail = _fn("modules/06_thumbnail_generator.py", "generate_thumbnail")
+            generate_thumbnail_variants = _fn(
+                "modules/06_thumbnail_generator.py", "generate_thumbnail_variants"
+            )
 
             # Use Transcriber thumbnail_prompt.txt if available
             transcriber_dir: Path | None = None
             if source_dir and (source_dir / "thumbnail_prompt.txt").exists():
                 transcriber_dir = source_dir
 
-            thumb_result = await generate_thumbnail(
+            # Generate 3 thumbnail variants for A/B testing
+            thumb_results = await generate_thumbnail_variants(
                 s_path,
                 channel_config_path,
+                count=3,
                 transcriber_dir=transcriber_dir,
                 dry_run=dry_run,
                 preset=quality,
             )
 
-            if not dry_run:
-                thumb_path = getattr(thumb_result, "output_path", None)
+            if not dry_run and thumb_results:
+                # Best is already copied to thumbnail.png by generate_thumbnail_variants
+                best = max(thumb_results, key=lambda r: getattr(r, "score", -1))
+                thumb_path = getattr(best, "output_path", None)
                 if thumb_path:
                     _require_files([Path(thumb_path)], min_bytes=1_000, step="Thumbnail")
                     _thumb_path = Path(thumb_path)
-                    attempts = getattr(thumb_result, "attempts", 1)
-                    score = getattr(thumb_result, "score", -1)
+                    total_attempts = sum(getattr(r, "attempts", 1) for r in thumb_results)
+                    best_score = getattr(best, "score", -1)
                     log.info(
-                        "Thumbnail: %s  (score=%d, attempts=%d, %.1fs)",
-                        Path(thumb_path).name, score, attempts, time.monotonic() - t0,
+                        "Thumbnails: %d variants | best score=%d | total_attempts=%d | %.1fs",
+                        len(thumb_results), best_score, total_attempts, time.monotonic() - t0,
                     )
-                    # ~$0.005/image × avg attempts
-                    cost.add("Thumbnail (WaveSpeed)", attempts * 0.005)
+                    cost.add("Thumbnails (WaveSpeed ×3)", len(thumb_results) * 0.005)
                     if cost.over_budget():
                         log.error("Budget exceeded after Thumbnail! %s", cost.summary())
                         sys.exit(1)
@@ -626,6 +631,7 @@ async def run_pipeline(
                 s_path,
                 channel_config_path,
                 preset=quality,
+                title_count=3,   # Generate 3 title variants for A/B testing
                 dry_run=dry_run,
             )
 

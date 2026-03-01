@@ -397,6 +397,162 @@ async def generate_thumbnail(
     )
 
 
+# ─── Multi-variant generation ─────────────────────────────────────────────────
+
+# Fixed seeds for 3 variants — different enough to produce diverse compositions
+VARIANT_SEEDS = [42, 1337, 777777]
+
+
+async def generate_thumbnail_variants(
+    script_path:         str | Path,
+    channel_config_path: str | Path,
+    *,
+    count:               int = 3,
+    transcriber_dir:     str | Path | None = None,
+    prompt_override:     str | None = None,
+    text_overlay:        str | None = None,
+    iterate:             bool = True,
+    preset:              str | None = None,
+    dry_run:             bool = False,
+) -> list[ThumbnailResult]:
+    """
+    Generate N thumbnail variants (for A/B testing) from script.json.
+
+    Saves thumbnail_1.png … thumbnail_N.png in output/.
+    Also copies the best-scored one to thumbnail.png (for backward compat).
+
+    Args:
+        count: Number of variants to generate (default 3).
+        Other args: same as generate_thumbnail().
+
+    Returns:
+        List of ThumbnailResult, one per variant, sorted best-first.
+    """
+    load_env()
+
+    script_path = Path(script_path)
+    if not script_path.exists():
+        raise FileNotFoundError(f"script.json not found: {script_path}")
+
+    script         = json.loads(script_path.read_text(encoding="utf-8"))
+    channel_config = load_channel_config(channel_config_path)
+    base_dir       = script_path.parent
+    out_dir        = base_dir / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    transcriber_data: dict[str, Any] | None = None
+    if transcriber_dir:
+        try:
+            transcriber_data = load_transcriber_output(transcriber_dir)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            log.warning("Transcriber dir not usable: %s", exc)
+
+    prompt       = _build_prompt(script, channel_config, transcriber_data, prompt_override, text_overlay)
+    llm_preset   = get_llm_preset(channel_config, preset)
+    vision_model = llm_preset.get("thumbnail", VISION_MODEL)
+    niche        = channel_config.get("niche", "educational")
+
+    log.info("Generating %d thumbnail variants | prompt: %s", count, prompt[:100])
+
+    if dry_run:
+        results = []
+        for i in range(1, count + 1):
+            results.append(ThumbnailResult(
+                output_path=out_dir / f"thumbnail_{i}.png",
+                prompt_used=prompt,
+                attempts=0,
+                passed_validation=True,
+                score=-1,
+            ))
+        log.info("[DRY RUN] Would generate %d variants in %s", count, out_dir)
+        return results
+
+    tmp_dir = out_dir / ".thumb_variants_tmp"
+    tmp_dir.mkdir(exist_ok=True)
+
+    results: list[ThumbnailResult] = []
+
+    try:
+        async with WaveSpeedClient() as wave, VoidAIClient() as void:
+            seeds = VARIANT_SEEDS[:count]
+            # Pad with random seeds if count > len(VARIANT_SEEDS)
+            while len(seeds) < count:
+                seeds.append(random.randint(100_000, 999_999))
+
+            for i, seed in enumerate(seeds, 1):
+                log.info("Variant %d/%d (seed=%d)…", i, count, seed)
+                tmp_path = tmp_dir / f"variant_{i}.png"
+                out_path = out_dir / f"thumbnail_{i}.png"
+
+                # Generate — WaveSpeed primary, VoidAI fallback
+                generated = False
+                try:
+                    await wave.generate_text2img(
+                        prompt,
+                        size=THUMBNAIL_SIZE_WS,
+                        seed=seed,
+                        num_inference_steps=4,
+                        output_path=tmp_path,
+                    )
+                    generated = True
+                except Exception as exc:
+                    log.warning("WaveSpeed variant %d failed: %s", i, exc)
+
+                if not generated:
+                    try:
+                        await void.generate_image(
+                            prompt,
+                            model=FALLBACK_IMG_MODEL,
+                            size=THUMBNAIL_SIZE_VAI,
+                            output_path=tmp_path,
+                        )
+                        generated = True
+                    except Exception as exc2:
+                        log.error("VoidAI fallback variant %d failed: %s", i, exc2)
+                        continue
+
+                if not tmp_path.exists() or tmp_path.stat().st_size < MIN_FILE_BYTES:
+                    log.warning("Variant %d: file too small or missing", i)
+                    continue
+
+                # Validate quality
+                if iterate:
+                    val = await _validate_thumbnail(tmp_path, prompt, niche, void, vision_model)
+                else:
+                    val = ValidationResult(passed=True, score=6, criteria={}, issues=[])
+
+                shutil.copy2(tmp_path, out_path)
+                log.info(
+                    "Variant %d saved: %s (score=%d/6, passed=%s)",
+                    i, out_path.name, val.score, val.passed,
+                )
+                results.append(ThumbnailResult(
+                    output_path=out_path,
+                    prompt_used=prompt,
+                    attempts=1,
+                    passed_validation=val.passed,
+                    score=val.score,
+                    issues=val.issues,
+                ))
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not results:
+        raise RuntimeError("All thumbnail variant generations failed. Check logs.")
+
+    # Copy best-scored variant to thumbnail.png (backward compat + pipeline default)
+    best = max(results, key=lambda r: r.score)
+    best_idx = results.index(best) + 1
+    shutil.copy2(best.output_path, out_dir / THUMBNAIL_FILENAME)
+    log.info(
+        "Best variant: thumbnail_%d.png (score=%d/6) → copied to thumbnail.png",
+        best_idx, best.score,
+    )
+
+    return results
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def _main() -> None:

@@ -70,8 +70,10 @@ Script outline:
 {outline}
 
 Requirements:
-1. title — max {max_title_len} characters, high CTR, include a power word or \
-number where natural, do NOT just copy the script title
+1. title_variants — exactly {title_count} DIFFERENT title options, each max \
+{max_title_len} characters, high CTR, include a power word or number where \
+natural, do NOT just copy the script title. Make each variant meaningfully \
+different (different angle/hook/framing).
 2. description — 180-300 words structured as:
    • Hook sentence (do NOT repeat the title literally)
    • 2-3 sentence content summary
@@ -85,7 +87,8 @@ Timestamps to embed verbatim in the description:
 {timestamps_block}
 
 Reply with JSON only (no markdown fences):
-{{"title": "...", "description": "...", "tags": ["tag1", "tag2", ...]}}"""
+{{"title_variants": ["Title 1", "Title 2", "Title 3"], \
+"description": "...", "tags": ["tag1", "tag2", ...]}}"""
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -171,6 +174,7 @@ async def _generate_seo(
     channel_config:  dict[str, Any],
     timestamps:      list[dict[str, Any]],
     meta_model:      str,
+    title_count:     int = 3,
 ) -> dict[str, str | list[str]]:
     """
     Call VoidAI to generate SEO title, description, and tags.
@@ -196,6 +200,7 @@ async def _generate_seo(
         tags_hint=tags_hint,
         outline=outline,
         max_title_len=MAX_TITLE_LEN,
+        title_count=title_count,
         timestamps_block=timestamps_text or "(no timestamps — audio_duration not set)",
     )
 
@@ -214,30 +219,43 @@ async def _generate_seo(
         data = _parse_llm_response(raw)
     except (json.JSONDecodeError, ValueError) as exc:
         log.warning("JSON parse failed: %s | raw=%s", exc, raw[:300])
-        # Fallback: return raw as description, keep original title/tags
         data = {
-            "title":       orig_title,
-            "description": raw.strip(),
-            "tags":        existing_tags,
+            "title_variants": [orig_title],
+            "description":    raw.strip(),
+            "tags":           existing_tags,
         }
 
-    # Enforce title length limit
-    title = str(data.get("title", orig_title))
-    if len(title) > MAX_TITLE_LEN:
-        title = title[:MAX_TITLE_LEN - 1].rstrip() + "…"
-        log.warning("Title truncated to %d chars", MAX_TITLE_LEN)
+    # Parse title_variants (new format) or fall back to single "title" (legacy)
+    raw_variants = data.get("title_variants") or []
+    if not raw_variants and data.get("title"):
+        raw_variants = [data["title"]]
+    if not raw_variants:
+        raw_variants = [orig_title]
+
+    # Enforce title length on each variant
+    title_variants: list[str] = []
+    for t in raw_variants[:title_count]:
+        t = str(t).strip()
+        if len(t) > MAX_TITLE_LEN:
+            t = t[:MAX_TITLE_LEN - 1].rstrip() + "…"
+        title_variants.append(t)
+
+    # Ensure we always have exactly title_count entries (pad with variants of first)
+    while len(title_variants) < title_count:
+        title_variants.append(title_variants[0])
 
     # Enforce tags cap
     tags: list[str] = data.get("tags", existing_tags)  # type: ignore[assignment]
     if isinstance(tags, list):
-        tags = [str(t).lower().strip() for t in tags[:MAX_TAGS]]
+        tags = [str(t).lower().strip().replace("\n", "").replace("\r", "") for t in tags[:MAX_TAGS]]
     else:
         tags = existing_tags
 
     return {
-        "title":       title,
-        "description": str(data.get("description", "")),
-        "tags":        tags,
+        "title":          title_variants[0],   # best/first title (backward compat)
+        "title_variants": title_variants,
+        "description":    str(data.get("description", "")),
+        "tags":           tags,
     }
 
 
@@ -250,6 +268,7 @@ async def generate_metadata(
     output_path:         str | Path | None = None,
     preset:              str | None = None,
     category_id:         str = DEFAULT_CATEGORY_ID,
+    title_count:         int = 3,
     dry_run:             bool = False,
 ) -> Path:
     """
@@ -306,26 +325,28 @@ async def generate_metadata(
         return out_path
 
     t0 = time.monotonic()
-    seo = await _generate_seo(script, channel_config, timestamps, meta_model)
+    seo = await _generate_seo(script, channel_config, timestamps, meta_model, title_count=title_count)
     elapsed = time.monotonic() - t0
 
     metadata: dict[str, Any] = {
-        "title":        seo["title"],
-        "description":  seo["description"],
-        "tags":         seo["tags"],
-        "category_id":  category_id,
-        "language":     script.get("language", channel_config.get("language", "en")),
-        "timestamps":   timestamps,
+        "title":          seo["title"],
+        "title_variants": seo.get("title_variants", [seo["title"]]),
+        "description":    seo["description"],
+        "tags":           seo["tags"],
+        "category_id":    category_id,
+        "language":       script.get("language", channel_config.get("language", "en")),
+        "timestamps":     timestamps,
         "total_duration_seconds": round(total_dur, 2),
-        "script_title": script.get("title", ""),
-        "generated_by": "VideoForge",
+        "script_title":   script.get("title", ""),
+        "generated_by":   "VideoForge",
     }
 
     out_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    variants_str = " | ".join(f'"{t[:40]}"' for t in seo.get("title_variants", [seo["title"]]))
     log.info(
-        "Done: %s | title=%d chars | tags=%d | %.1fs",
-        out_path.name, len(seo["title"]), len(seo["tags"]), elapsed,
+        "Done: %s | titles=%d | tags=%d | %.1fs\n  Variants: %s",
+        out_path.name, len(seo.get("title_variants", [])), len(seo["tags"]), elapsed, variants_str,
     )
     log.info("Title: %s", seo["title"])
     return out_path

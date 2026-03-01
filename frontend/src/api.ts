@@ -261,14 +261,26 @@ export const api = {
 
 // ── YouTube interfaces ─────────────────────────────────────────────────────────
 
+export interface ThumbnailVariant {
+  index: number
+  filename: string
+  url: string
+  size_kb: number
+}
+
 export interface YoutubeReadyVideo {
   dir: string
   name: string
   title: string
+  title_variants: string[]
+  description: string
+  tags: string[]
+  category_id: string
+  language: string
   video_size_mb: number
   has_thumbnail: boolean
   tags_count: number
-  language: string
+  thumbnail_variants: ThumbnailVariant[]
   uploaded: YoutubeUploadResult | null
 }
 
@@ -289,6 +301,8 @@ export interface YoutubeUploadRequest {
   schedule?: string | null
   auto_schedule?: boolean
   dry_run?: boolean
+  selected_thumbnail?: string | null
+  selected_title?: string | null
 }
 
 export interface YoutubeUploadJob {

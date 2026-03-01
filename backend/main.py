@@ -92,7 +92,13 @@ async def health() -> dict:
 # Serve React build from frontend/dist when it exists.
 # In local dev, Vite dev server (port 5173) handles the frontend.
 
-_DIST = ROOT / "frontend" / "dist"
+_DIST     = ROOT / "frontend" / "dist"
+_PROJECTS = ROOT / "projects"
+_PROJECTS.mkdir(exist_ok=True)
+
+# Serve project files (thumbnails, final.mp4, etc.) at /projects/<name>/...
+app.mount("/projects", StaticFiles(directory=str(_PROJECTS)), name="projects")
+
 if _DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
 
