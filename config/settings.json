@@ -11,9 +11,16 @@
     "vision": "gpt-4.1"
   },
   "wavespeed": {
+    "base_url": "https://api.wavespeed.ai/api/v3",
+    "text2img_endpoint": "/wavespeed-ai/z-image/turbo",
+    "img2img_endpoint": "/wavespeed-ai/z-image-turbo/image-to-image",
+    "upload_endpoint": "/media/upload/binary",
+    "poll_endpoint": "/predictions/{task_id}/result",
     "model": "z-image/turbo",
     "cost_per_image": 0.005,
-    "max_retries": 3
+    "max_retries": 3,
+    "poll_interval": 2,
+    "max_polls": 90
   },
   "voiceapi": {
     "base_url": "https://voiceapi.csv666.ru",
