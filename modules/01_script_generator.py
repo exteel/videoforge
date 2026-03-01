@@ -556,6 +556,15 @@ async def _generate_one_variant(
     raw = await _call_llm(system_prompt, user_prompt, model, voidai_client, temperature)
     log.info("LLM response: %d chars", len(raw))
 
+    # Debug: save raw LLM output for inspection
+    _debug_path = ROOT / "projects" / Path(source_data.get("source_dir", "debug")).name / "llm_raw_output.txt"
+    try:
+        _debug_path.parent.mkdir(parents=True, exist_ok=True)
+        _debug_path.write_text(raw, encoding="utf-8")
+        log.debug("Raw LLM output saved: %s", _debug_path)
+    except Exception:
+        pass
+
     script = _parse_llm_output(raw, channel_config, source_data, hook_type)
     log.info("Parsed %d blocks from LLM output", len(script.blocks))
 

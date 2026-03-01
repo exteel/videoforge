@@ -634,15 +634,15 @@ def add_subtitles(
     vid, subs, out = Path(video_path), Path(subtitle_path), Path(output_path)
     _ensure_parent(out)
 
+    # Escape path for FFmpeg filter string: \ → /, then : → \: (colon is option separator)
+    subs_escaped = str(subs).replace("\\", "/").replace(":", "\\:")
+
     ext = subs.suffix.lower()
     if ext == ".ass":
-        vf = f"ass='{str(subs)}'"
+        vf = f"ass={subs_escaped}"
     else:
         # SRT — use subtitles filter (converts to ASS internally)
-        vf = f"subtitles='{str(subs)}'"
-
-    # Escape Windows backslashes in path for ffmpeg filter
-    vf = vf.replace("\\", "/")
+        vf = f"subtitles={subs_escaped}"
 
     cmd = [
         FFMPEG, "-y",
