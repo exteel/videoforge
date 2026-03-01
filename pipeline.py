@@ -250,6 +250,7 @@ async def run_pipeline(
     image_style: str | None = None,  # Override image style from channel config
     voice_id: str | None = None,     # Override voice ID from channel config
     master_prompt: str | None = None,  # Override master prompt path
+    no_ken_burns: bool = False,      # Skip Ken Burns — static slideshow (1 FFmpeg call, much faster)
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -606,6 +607,7 @@ async def run_pipeline(
                     dry_run=dry_run,
                     no_subs=True,   # subtitles disabled until format is settled
                     no_music=not background_music,
+                    no_ken_burns=no_ken_burns,
                     progress_callback=_video_sub_cb,
                 ),
             )

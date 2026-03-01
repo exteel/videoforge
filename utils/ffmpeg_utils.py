@@ -339,6 +339,76 @@ def ken_burns(
     return out
 
 
+# ─── Static slideshow (no Ken Burns) ─────────────────────────────────────────
+
+def static_slideshow(
+    frames: list[tuple[Path, float]],
+    output_path: str | Path,
+    resolution: str = DEFAULT_RESOLUTION,
+) -> Path:
+    """
+    Compile a list of (image, duration_seconds) pairs into a video in ONE FFmpeg call.
+
+    Uses FFmpeg's concat demuxer — dramatically faster than per-block ken_burns()
+    because there is no per-frame zoompan computation.
+
+    No Ken Burns, no crossfade — clean hard cuts between images.
+    Ideal for draft-quality previews or channels that prefer static shots.
+
+    Args:
+        frames: List of (image_path, duration_seconds) pairs, in order.
+        output_path: Output .mp4 path.
+        resolution: Target resolution "WxH".
+
+    Returns:
+        Path to output video.
+    """
+    out = Path(output_path)
+    _ensure_parent(out)
+
+    w, h = resolution.split("x")
+
+    # Build concat input file — FFmpeg concat demuxer format
+    concat_lines: list[str] = []
+    for img, dur in frames:
+        # Use forward slashes; escape single quotes in paths
+        safe_path = str(img.as_posix()).replace("'", "\\'")
+        concat_lines.append(f"file '{safe_path}'")
+        concat_lines.append(f"duration {dur:.6f}")
+    # Repeat last entry without duration — required by concat demuxer
+    if frames:
+        safe_path = str(frames[-1][0].as_posix()).replace("'", "\\'")
+        concat_lines.append(f"file '{safe_path}'")
+
+    concat_txt = out.parent / f"{out.stem}_concat.txt"
+    concat_txt.write_text("\n".join(concat_lines), encoding="utf-8")
+
+    vf = (
+        f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+        f"format=yuv420p"
+    )
+
+    try:
+        _run([
+            FFMPEG, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(concat_txt),
+            "-vf", vf,
+            "-c:v", DEFAULT_VIDEO_CODEC,
+            "-crf", str(DEFAULT_CRF),
+            "-preset", DEFAULT_PRESET,
+            "-threads", "0",
+            "-r", str(DEFAULT_FPS),
+            str(out),
+        ])
+    finally:
+        concat_txt.unlink(missing_ok=True)
+
+    log.info("Static slideshow: %d frames → %s", len(frames), out.name)
+    return out
+
+
 # ─── Concat ───────────────────────────────────────────────────────────────────
 
 def concat_videos(

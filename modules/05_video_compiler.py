@@ -50,6 +50,7 @@ from utils.ffmpeg_utils import (
     mix_audio,
     prepend_outro_video,
     resize,
+    static_slideshow,
 )
 
 log = setup_logging("video_compiler")
@@ -123,6 +124,7 @@ def compile_video(
     no_music: bool = False,
     no_intro_outro: bool = False,
     crossfade: bool = True,
+    no_ken_burns: bool = False,
     dry_run: bool = False,
     progress_callback: Any | None = None,
 ) -> Path:
@@ -276,80 +278,87 @@ def compile_video(
     with tempfile.TemporaryDirectory(prefix="vf_compile_") as tmp_str:
         tmp = Path(tmp_str)
 
-        # ── Step 1: Ken Burns per block ──
-        block_clips: list[Path] = []
-        prev_image: Path | None = None
-
+        # ── Step 1: Video from images ──
         n_blocks = len(voiced_blocks)
-        log.info("Step 1/%d: Generating block video clips...", 4 + bool(subs_file) + bool(music_track) + bool(intro_video) + bool(outro_video))
+        use_static = no_ken_burns or draft
+        log.info(
+            "Step 1: Building video from %d blocks (mode=%s)...",
+            n_blocks, "static" if use_static else "ken_burns",
+        )
 
-        for i, block in enumerate(voiced_blocks, 1):
-            duration  = float(block["audio_duration"])
-            animation = _animation_for_block(block, channel_config)
-            image_path = _get_block_image(block, images_dir, prev_image)
+        video_raw = tmp / "video_raw.mp4"
 
-            clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
-
-            if image_path is None:
-                log.warning("Block %s: no image available — creating black frame", block["id"])
-                # Create a black frame video using FFmpeg directly
-                from utils.ffmpeg_utils import _run  # noqa: PLC0415
-                _run([
-                    "ffmpeg", "-y",
-                    "-f", "lavfi", "-i", f"color=c=black:size={'854x480' if draft else '1920x1080'}:rate=30",
-                    "-t", str(duration),
-                    "-c:v", "libx264", "-crf", "28" if draft else "18",
-                    str(clip_path),
-                ])
-            elif draft:
-                # Draft: just resize image (no Ken Burns)
-                resize(image_path, clip_path, "854x480")
-                # Wrap as video with correct duration
-                still_mp4 = tmp / f"still_{block['id']}.mp4"
-                from utils.ffmpeg_utils import _run  # noqa: PLC0415
-                _run([
-                    "ffmpeg", "-y",
-                    "-loop", "1", "-i", str(clip_path),
-                    "-t", str(duration),
-                    "-vf", "format=yuv420p",
-                    "-c:v", "libx264", "-crf", "28", "-preset", "ultrafast",
-                    str(still_mp4),
-                ])
-                clip_path = still_mp4
-            else:
-                ken_burns(
-                    image_path, clip_path,
-                    duration=duration,
-                    animation=animation,
-                    resolution=resolution,
-                )
-
-            if image_path:
+        if use_static:
+            # ── Fast path: ONE FFmpeg call via concat demuxer ──
+            # No per-block processes, no temp .mp4 files — images go directly to video.
+            _emit_progress(5.0, "Building slideshow…")
+            prev_image: Path | None = None
+            frames: list[tuple[Path, float]] = []
+            for block in voiced_blocks:
+                duration = float(block["audio_duration"])
+                image_path = _get_block_image(block, images_dir, prev_image)
+                if image_path is None:
+                    log.warning("Block %s: no image — using black", block["id"])
+                    # Reuse previous or skip; ffmpeg concat requires a file
+                    if prev_image:
+                        image_path = prev_image
+                    else:
+                        continue
+                frames.append((image_path, duration))
                 prev_image = image_path
 
-            block_clips.append(clip_path)
-            log.info("  [%d/%d] %s → %s (%.1fs, %s)", i, n_blocks, block["id"], clip_path.name, duration, animation)
-            # Sub-progress: blocks = 0–75% of the step; each block moves the bar forward
-            _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
+            static_res = DRAFT_RESOLUTION if draft else resolution
+            static_slideshow(frames, video_raw, resolution=static_res)
+            _emit_progress(75.0, "Slideshow done")
 
-        if not block_clips:
-            raise RuntimeError("No video clips generated")
+        else:
+            # ── Normal path: Ken Burns per block ──
+            block_clips: list[Path] = []
+            prev_image = None
 
-        # ── Step 2: Concat clips ──
+            for i, block in enumerate(voiced_blocks, 1):
+                duration  = float(block["audio_duration"])
+                animation = _animation_for_block(block, channel_config)
+                image_path = _get_block_image(block, images_dir, prev_image)
+                clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
+
+                if image_path is None:
+                    log.warning("Block %s: no image — creating black frame", block["id"])
+                    from utils.ffmpeg_utils import _run  # noqa: PLC0415
+                    _run([
+                        "ffmpeg", "-y",
+                        "-f", "lavfi", "-i", f"color=c=black:size={resolution}:rate=30",
+                        "-t", str(duration),
+                        "-c:v", "libx264", "-crf", "22", str(clip_path),
+                    ])
+                else:
+                    ken_burns(
+                        image_path, clip_path,
+                        duration=duration,
+                        animation=animation,
+                        resolution=resolution,
+                    )
+
+                if image_path:
+                    prev_image = image_path
+                block_clips.append(clip_path)
+                log.info("  [%d/%d] %s (%.1fs, %s)", i, n_blocks, block["id"], duration, animation)
+                _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
+
+            if not block_clips:
+                raise RuntimeError("No video clips generated")
+
+            # Concat with crossfade
+            _emit_progress(76.0, "Concatenating clips…")
+            concat_videos(
+                block_clips, video_raw,
+                crossfade=use_crossfade,
+                crossfade_duration=crossfade_dur,
+            )
+            _emit_progress(82.0, "Concat done")
+
+        # ── Step 2: Mix audio (narration + background music) ──
         step = 2
-        log.info("Step %d: Concatenating %d clips (crossfade=%s)...", step, len(block_clips), use_crossfade)
-        video_raw = tmp / "video_raw.mp4"
-        _emit_progress(76.0, "Concatenating clips…")
-        concat_videos(
-            block_clips,
-            video_raw,
-            crossfade=use_crossfade,
-            crossfade_duration=crossfade_dur,
-        )
-        _emit_progress(82.0, "Concat done")
-
-        # ── Step 3: Mix audio (narration + background music) ──
-        step += 1
         final_audio = narration_audio
         if music_track:
             log.info("Step %d: Mixing background music at -20dB...", step)
