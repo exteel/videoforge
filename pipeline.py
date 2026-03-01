@@ -51,6 +51,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 from modules.common import load_env, setup_logging
+from utils.cost_tracker import estimate_cost
 
 log = setup_logging("pipeline")
 
@@ -269,6 +270,26 @@ async def run_pipeline(
         log.info("Mode        : DRY RUN (no API calls)")
     elif draft:
         log.info("Mode        : DRAFT (480p, no effects)")
+
+    # ── Upfront cost estimate (dry-run only) ───────────────────────────────────
+    if dry_run:
+        try:
+            script_for_estimate = s_path if s_path.exists() else (script_path_override or None)
+            tracker = estimate_cost(
+                script_path=script_for_estimate,
+                channel_config_path=channel_config_path,
+                quality_preset=quality,
+                n_langs=len(langs) if langs else 1,
+            )
+            print()
+            print("=" * 60)
+            print("  COST ESTIMATE (DRY RUN)")
+            print("=" * 60)
+            print(tracker.summary_table())
+            print()
+            sys.stdout.flush()
+        except Exception as exc:
+            log.debug("Cost estimate failed: %s", exc)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 1 — SCRIPT

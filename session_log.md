@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-03-01 — №16 Pipeline Runner (продовження попередньої сесії)
+- **Зроблено:** `pipeline.py` (630 рядків) — повний pipeline runner
+- **Кроки:** 1=Script → 2=Images+Voices (parallel) → 3=Subs → 4=Video → 5=Thumb → 6=Meta
+- **Фічі:** --dry-run, --from-step N, --lang en,de,es, --budget, --review, --draft, --quality, --template
+- **Рішення:** dry-run guard для steps 2-6 коли script.json ще не існує (step 1 також dry-run); compile_video потребує full_narration.mp3 навіть у dry-run → guard через glob
+- **Ключове:** importlib.util для завантаження модулів з числовими префіксами; sys.stdout.reconfigure(utf-8) для argparse --help на Windows; `loop.run_in_executor` для sync compile_video
+- **Тести:** --help ✓, --dry-run ✓, --from-step 2 --dry-run ✓, --from-step 3 --lang en,de --dry-run ✓
+- **Далі:** №17 Cost Tracker
+
+---
+
 ## 2026-03-01 — Планування
 - **Зроблено:** Архітектура, всі стартові файли, аналіз існуючих інструментів
 - **Рішення:** VoidAI єдиний AI провайдер, claude-opus-4-6 як дефолт для сценаріїв (якість критична), fallback pattern для WaveSpeed і VoiceAPI, 5 quality presets (max→test)

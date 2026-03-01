@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 17:55
+Останнє оновлення: 2026-03-01 18:01
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -26,7 +26,7 @@
 - [x] №14 E2E тест
 - [x] №15 Фікс багів
 - [x] №16 Pipeline Runner
-- [ ] №17 Cost Tracker
+- [x] №17 Cost Tracker
 - [ ] №18 Batch Runner
 
 ## Поточний стан
