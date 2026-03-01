@@ -185,3 +185,61 @@ async def save_prompt(name: str, body: dict[str, Any]) -> dict[str, Any]:
         return {"saved": True, "name": name, "path": str(p), "size_bytes": len(content.encode())}
     except Exception as exc:
         raise HTTPException(500, f"Failed to save prompt: {exc}") from exc
+
+
+# ─── Voices ───────────────────────────────────────────────────────────────────
+
+@router.get("/voices")
+async def list_voices() -> list[dict[str, Any]]:
+    """
+    List available TTS voices/templates from VoiceAPI.
+    Falls back to returning voices from all channel configs if API unavailable.
+    """
+    # Try fetching live templates from VoiceAPI
+    try:
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from modules.common import load_env
+        load_env()
+        from clients.voiceapi_client import VoiceAPIClient
+        async with VoiceAPIClient(voidai_fallback=False) as client:
+            templates = await client.list_voices()
+        if templates:
+            return [
+                {
+                    "id":   t.get("uuid") or t.get("id") or t.get("template_uuid", ""),
+                    "name": t.get("name") or t.get("title") or t.get("id", "Unknown"),
+                    "voice_id": t.get("voice_id", ""),
+                    "source": "voiceapi",
+                }
+                for t in templates
+            ]
+    except Exception:
+        pass
+
+    # Fallback: collect unique voice_ids from channel configs
+    voices: dict[str, dict] = {}
+    for p in CHANNELS_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            vid = data.get("voice_id", "")
+            if vid and vid not in voices:
+                voices[vid] = {
+                    "id":      vid,
+                    "name":    f"{data.get('channel_name', p.stem)} voice",
+                    "voice_id": vid,
+                    "source":  "channel_config",
+                }
+            # Also check multilang dict
+            for lang_vid in data.get("voice_ids_multilang", {}).values():
+                if lang_vid and lang_vid not in voices:
+                    voices[lang_vid] = {
+                        "id":      lang_vid,
+                        "name":    lang_vid[:20],
+                        "voice_id": lang_vid,
+                        "source":  "channel_config",
+                    }
+        except Exception:
+            continue
+
+    return list(voices.values())

@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-03-01 — UI покращення (продовження сесії)
+
+### api.ts
+- Додано `VoiceMeta` interface
+- Оновлено `PipelineRunRequest`: `background_music`, `image_style`, `voice_id`, `master_prompt`
+- Додано `api.voices.list()` — `GET /api/voices`
+- Додано `api.youtube.*` — status, auth, revoke, ready, upload, uploads
+
+### JobCard.tsx (ETA + live timer)
+- `useEffect` + `setInterval` — liveSec таймер поки job активний
+- `calcPct()` — % прогресу з урахуванням оцінки часу per step
+- `calcETA()` — ETA на основі avg seconds/step × remaining steps
+- 7 крапок-індикаторів кроків (з `animate-pulse` на активному)
+- Batch jobs: просто `animate-pulse` bar (немає step info)
+
+### App.tsx
+- `TAB_DESC` — описи для кожної вкладки під навбаром
+- Нова вкладка `▲ YouTube`
+
+### backend/models.py
+- `PipelineRunRequest` + `master_prompt: str | None`
+
+### backend/routes/pipeline.py
+- Передає `background_music`, `image_style`, `voice_id`, `master_prompt` в `manager.start_pipeline()`
+
+### backend/routes/youtube.py (новий)
+- `GET /api/youtube/status` — перевірка OAuth2 токену
+- `POST /api/youtube/auth` — запуск browser OAuth2 flow (thread)
+- `POST /api/youtube/auth/revoke` — видалення токену
+- `GET /api/youtube/ready` — список projects/ з final.mp4
+- `POST /api/youtube/upload` — запуск завантаження (async task)
+- `GET /api/youtube/uploads` — список upload jobs
+
+### frontend/src/components/YoutubePanel.tsx (новий)
+- Auth card: статус підключення, кнопка connect/disconnect, tips безпеки
+- Список відео готових до завантаження (projects/ scan)
+- VideoRow: вибір каналу, privacy (private/unlisted/public), datetime picker, auto-schedule, dry run
+- Polling upload job status кожні 2с
+
+### backend/main.py
+- Зареєстровано `youtube_router`
+
+**Далі:** git commit; Transcriber integration (YouTube URL → Transcriber → pipeline)
+
+---
+
 ## 2026-03-01 — Opus timeout fix
 - **Проблема:** claude-opus-4-6 тайм-аут при генерації скрипту — 21KB transcript + 34KB hooks_guide = ~43K токенів промпт
 - **Fix 1:** `MAX_TRANSCRIPT_CHARS = 14_000` у `modules/01_script_generator.py` → truncate `transcript.txt` перед вставкою в промпт

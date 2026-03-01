@@ -41,6 +41,10 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         budget=req.budget,
         langs=req.langs,
         dry_run=req.dry_run,
+        background_music=req.background_music,
+        image_style=req.image_style,
+        voice_id=req.voice_id,
+        master_prompt=req.master_prompt,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 

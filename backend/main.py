@@ -66,13 +66,17 @@ app.add_middleware(
 from backend.routes import channels as channels_router
 from backend.routes import pipeline as pipeline_router
 from backend.routes import script as script_router
+from backend.routes import transcriber as transcriber_router
 from backend.routes import videos as videos_router
 from backend.routes import ws as ws_router
+from backend.routes import youtube as youtube_router
 
 app.include_router(pipeline_router.router, prefix="/api")
 app.include_router(script_router.router, prefix="/api")
 app.include_router(videos_router.router, prefix="/api")
 app.include_router(channels_router.router, prefix="/api")
+app.include_router(youtube_router.router, prefix="/api")
+app.include_router(transcriber_router.router, prefix="/api")
 app.include_router(ws_router.router)
 
 

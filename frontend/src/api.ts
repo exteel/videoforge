@@ -94,6 +94,10 @@ export interface PipelineRunRequest {
   budget?: number | null
   langs?: string[] | null
   dry_run?: boolean
+  background_music?: boolean
+  image_style?: string | null
+  voice_id?: string | null
+  master_prompt?: string | null
 }
 
 export interface BatchRunRequest {
@@ -120,6 +124,13 @@ export interface PromptMeta {
   name: string
   filename: string
   size_bytes: number
+}
+
+export interface VoiceMeta {
+  id: string
+  name: string
+  voice_id: string
+  source: string
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -204,4 +215,95 @@ export const api = {
         body: JSON.stringify({ content, filename }),
       }),
   },
+
+  voices: {
+    list: () => req<VoiceMeta[]>('/voices'),
+  },
+
+  transcriber: {
+    status: () =>
+      req<TranscriberStatus>('/transcriber/status'),
+    launch: () =>
+      req<{ status: string; message: string; path: string }>('/transcriber/launch', { method: 'POST' }),
+    outputs: (since = 0) =>
+      req<TranscriberOutput[]>(`/transcriber/outputs?since=${since}`),
+  },
+
+  youtube: {
+    status: () =>
+      req<{ connected: boolean; token_file?: string; expiry?: string; reason?: string }>('/youtube/status'),
+    auth: () =>
+      req<{ status: string; message?: string }>('/youtube/auth', { method: 'POST' }),
+    revoke: () =>
+      req<{ status: string }>('/youtube/auth/revoke', { method: 'POST' }),
+    ready: () =>
+      req<YoutubeReadyVideo[]>('/youtube/ready'),
+    upload: (body: YoutubeUploadRequest) =>
+      req<YoutubeUploadJob>('/youtube/upload', { method: 'POST', body: JSON.stringify(body) }),
+    uploads: () =>
+      req<YoutubeUploadJob[]>('/youtube/uploads'),
+    uploadJob: (id: string) =>
+      req<YoutubeUploadJob>(`/youtube/uploads/${id}`),
+  },
+}
+
+// ── YouTube interfaces ─────────────────────────────────────────────────────────
+
+export interface YoutubeReadyVideo {
+  dir: string
+  name: string
+  title: string
+  video_size_mb: number
+  has_thumbnail: boolean
+  tags_count: number
+  language: string
+  uploaded: YoutubeUploadResult | null
+}
+
+export interface YoutubeUploadResult {
+  video_id: string
+  url: string
+  title: string
+  privacy: string
+  publish_at: string | null
+  thumbnail_ok: boolean
+  uploaded_at: string
+}
+
+export interface YoutubeUploadRequest {
+  project_dir: string
+  channel?: string
+  privacy?: string
+  schedule?: string | null
+  auto_schedule?: boolean
+  dry_run?: boolean
+}
+
+export interface YoutubeUploadJob {
+  job_id: string
+  status: string
+  project: string
+  error: string
+  result: YoutubeUploadResult | null
+}
+
+// ── Transcriber interfaces ─────────────────────────────────────────────────────
+
+export interface TranscriberStatus {
+  transcriber_found: boolean
+  transcriber_path: string
+  output_dir: string
+  output_dir_exists: boolean
+  outputs_count: number
+}
+
+export interface TranscriberOutput {
+  dir: string
+  name: string
+  title: string
+  language: string
+  modified_at: number
+  has_srt: boolean
+  has_description: boolean
+  has_thumbnail: boolean
 }
