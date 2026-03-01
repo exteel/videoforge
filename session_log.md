@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-03-01 — №20 FastAPI бекенд
+- **Зроблено:** `backend/` пакет — REST API + WebSocket прогрес
+- **pipeline.py:** `progress_callback` параметр + `_emit()` helper; виклики на початку/кінці кожного з 6 кроків
+- **backend/models.py:** Pydantic схеми (PipelineRunRequest, BatchRunRequest, JobResponse, VideoDetail, StatsResponse)
+- **backend/job_manager.py:** JobManager singleton; Job dataclass з asyncio.Queue subscribers; start_pipeline/start_batch → asyncio.Task; progress_callback → fan-out до WS; set_failed при помилці
+- **backend/routes/pipeline.py:** POST /api/pipeline/run, POST /api/batch/run, GET /api/jobs, GET /api/jobs/{id}, DELETE /api/jobs/{id}
+- **backend/routes/videos.py:** GET /api/videos, GET /api/videos/{id}, GET /api/videos/{id}/costs, PUT /api/videos/{id}/youtube, GET /api/stats
+- **backend/routes/ws.py:** WebSocket /ws/{job_id} — поточний стан + логи при підключенні, потім live stream; heartbeat 25s
+- **backend/main.py:** FastAPI app + CORS + lifespan; старт: `uvicorn backend.main:app --reload`
+- **Тест:** 15 routes ✓, import OK ✓
+- **Далі:** №21 React Dashboard
+
+---
+
 ## 2026-03-01 — №19 SQLite Tracker (продовження після context compaction)
 - **Зроблено:** Інтеграція `utils/db.py` у `pipeline.py` та `batch_runner.py`
 - **Що зроблено в utils/db.py:** VideoTracker (create_video, set_running, set_done, set_failed, set_skipped, set_youtube_url, record_cost, record_costs_from_tracker, list_videos, get_costs, session_stats) — було готово в попередній сесії
