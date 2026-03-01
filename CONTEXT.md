@@ -14,7 +14,7 @@
 - [x] №2 VoidAI клієнт
 - [x] №3 WaveSpeed клієнт
 - [x] №4 VoiceAPI клієнт
-- [ ] №5 FFmpeg утиліти
+- [x] №5 FFmpeg утиліти
 - [ ] №6 Script Generator
 - [ ] №7 Image Generator
 - [ ] №8 Voice Generator
