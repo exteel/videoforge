@@ -224,9 +224,21 @@ export const api = {
     status: () =>
       req<TranscriberStatus>('/transcriber/status'),
     launch: () =>
-      req<{ status: string; message: string; path: string }>('/transcriber/launch', { method: 'POST' }),
+      req<{ status: string; path: string }>('/transcriber/launch', { method: 'POST' }),
     outputs: (since = 0) =>
       req<TranscriberOutput[]>(`/transcriber/outputs?since=${since}`),
+  },
+
+  transcribe: {
+    start: (body: TranscribeRequest) =>
+      req<{ job_id: string; status: string; url: string }>(
+        '/transcribe',
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    get: (jobId: string) =>
+      req<TranscribeJob>(`/transcribe/${jobId}`),
+    list: () =>
+      req<TranscribeJob[]>('/transcribe'),
   },
 
   youtube: {
@@ -306,4 +318,28 @@ export interface TranscriberOutput {
   has_srt: boolean
   has_description: boolean
   has_thumbnail: boolean
+}
+
+export interface TranscribeRequest {
+  url: string
+  language?: string | null
+  auto_pipeline?: boolean
+  channel?: string
+  quality?: string
+  template?: string
+  draft?: boolean
+  dry_run?: boolean
+  background_music?: boolean
+  image_style?: string | null
+  voice_id?: string | null
+  master_prompt?: string | null
+}
+
+export interface TranscribeJob {
+  job_id: string
+  url: string
+  status: string   // queued | running | done | failed
+  logs: string[]
+  error: string
+  out_dir: string
 }

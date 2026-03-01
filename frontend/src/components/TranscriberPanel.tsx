@@ -1,167 +1,368 @@
 /**
- * TranscriberPanel — Інтеграція з Transcriber.
+ * TranscriberPanel — YouTube URL → Download → Transcribe → Pipeline.
  *
- * Потік:
- *  1. Відкрити Transcriber GUI (кнопка Launch)
- *  2. У Transcriber вставити YouTube URL і запустити
- *  3. Тут — натиснути Scan і обрати готову директорію
- *  4. Клік "▶ Run Pipeline" → підставляє шлях і запускає пайплайн
+ * Основний flow:
+ *   1. Вставити YouTube URL (або кілька)
+ *   2. Вибрати опції (мова, якість, auto-pipeline)
+ *   3. Натиснути Start — VideoForge сам качає, транскрибує, запускає пайплайн
+ *
+ * Альтернативний flow (зовнішній Transcriber):
+ *   - Кнопка "Open Transcriber" → відкриває окреме вікно Transcriber GUI
+ *   - Scan → знаходить вже готові виходи → клік ▶ Pipeline
  */
 
-import { useEffect, useState } from 'react'
-import { api, type TranscriberOutput, type TranscriberStatus } from '../api'
+import { useRef, useState } from 'react'
+import {
+  api,
+  type TranscribeJob,
+  type TranscriberOutput,
+} from '../api'
 
-interface Props {
-  /** Викликається коли користувач обирає output dir → підставити в форму Jobs */
-  onSelectDir: (dir: string) => void
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const QUALITY_OPTS = [
+  { value: 'max',      label: 'Max',      desc: 'claude-opus-4-6' },
+  { value: 'high',     label: 'High',     desc: 'claude-sonnet-4-5' },
+  { value: 'balanced', label: 'Balanced', desc: 'gpt-5.2' },
+  { value: 'bulk',     label: 'Bulk',     desc: 'deepseek-v3.1' },
+  { value: 'test',     label: 'Test',     desc: 'mistral-small' },
+]
+
+const STATUS_COLOR: Record<string, string> = {
+  queued:  'bg-yellow-900 text-yellow-300',
+  running: 'bg-blue-900 text-blue-300',
+  done:    'bg-green-900 text-green-300',
+  failed:  'bg-red-900 text-red-300',
 }
 
-function fmtDate(ts: number): string {
-  try { return new Date(ts * 1000).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' }) }
-  catch { return '—' }
-}
+// ── Job card ──────────────────────────────────────────────────────────────────
 
-export function TranscriberPanel({ onSelectDir }: Props) {
-  const [status, setStatus]     = useState<TranscriberStatus | null>(null)
-  const [outputs, setOutputs]   = useState<TranscriberOutput[]>([])
-  const [scanning, setScanning] = useState(false)
-  const [launching, setLaunching] = useState(false)
-  const [launchMsg, setLaunchMsg] = useState('')
-  const [scanTime, setScanTime]   = useState(0)   // timestamp of last scan
+import { useEffect } from 'react'
 
-  async function loadStatus() {
-    try { setStatus(await api.transcriber.status()) } catch { /* ignore */ }
-  }
-
-  async function scan() {
-    setScanning(true)
-    try {
-      const res = await api.transcriber.outputs()
-      setOutputs(res)
-      setScanTime(Date.now() / 1000)
-    } finally {
-      setScanning(false)
-    }
-  }
-
-  async function handleLaunch() {
-    setLaunching(true)
-    setLaunchMsg('')
-    try {
-      const res = await api.transcriber.launch()
-      setLaunchMsg(res.message)
-    } catch (e) {
-      setLaunchMsg(String(e))
-    } finally {
-      setLaunching(false)
-    }
-  }
+function JobCard({
+  initialJob,
+  onDone,
+}: {
+  initialJob: TranscribeJob
+  onDone: (dir: string) => void
+}) {
+  const [job, setJob] = useState(initialJob)
+  const doneRef = useRef(false)
 
   useEffect(() => {
-    loadStatus()
-    scan()
-  }, [])
+    if (job.status === 'done' || job.status === 'failed') return
+    const id = setInterval(async () => {
+      try {
+        const updated = await api.transcribe.get(job.job_id)
+        setJob(updated)
+        if ((updated.status === 'done' || updated.status === 'failed') && !doneRef.current) {
+          doneRef.current = true
+          if (updated.status === 'done' && updated.out_dir) {
+            onDone(updated.out_dir)
+          }
+        }
+      } catch { /* ignore */ }
+    }, 1500)
+    return () => clearInterval(id)
+  }, [job.job_id, job.status])
 
-  const notFound = status && !status.transcriber_found
+  const isActive = job.status === 'running' || job.status === 'queued'
 
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <div className="text-sm font-semibold text-white">Transcriber</div>
-          <div className="text-xs text-gray-400 mt-0.5">
-            {status === null
-              ? 'Перевірка…'
-              : status.transcriber_found
-              ? `✅ Знайдено · ${status.outputs_count} готових виходів`
-              : `❌ Не знайдено: ${status.transcriber_path}`}
-          </div>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={handleLaunch}
-            disabled={launching || notFound === true}
-            className="text-xs px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white font-medium"
-          >
-            {launching ? '…' : '🚀 Відкрити Transcriber'}
-          </button>
-          <button
-            onClick={scan}
-            disabled={scanning}
-            className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300"
-          >
-            {scanning ? '⏳ Сканування…' : '↻ Scan'}
-          </button>
-        </div>
+    <div className="bg-gray-900 rounded border border-gray-700 p-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[job.status] ?? 'bg-gray-700 text-gray-300'}`}>
+          {job.status}
+        </span>
+        <span className="text-xs text-gray-400 truncate max-w-sm">{job.url}</span>
       </div>
 
-      {/* Launch message */}
-      {launchMsg && (
-        <div className={`text-xs rounded p-2 ${launchMsg.includes('Error') || launchMsg.includes('Failed') ? 'bg-red-950 text-red-300' : 'bg-indigo-950 text-indigo-300'}`}>
-          {launchMsg}
-        </div>
-      )}
-
-      {/* Not found warning */}
-      {notFound && (
-        <div className="text-xs bg-yellow-950 text-yellow-300 rounded p-3 space-y-1">
-          <div className="font-semibold">Transcriber не знайдено</div>
-          <div>Додай в <code>.env</code>:</div>
-          <code className="block">TRANSCRIBER_PY=D:/transscript batch/Transcriber/transcriber.py</code>
-          <code className="block">TRANSCRIBER_OUTPUT=D:/transscript batch/output/output</code>
-        </div>
-      )}
-
-      {/* Instructions */}
-      <div className="text-xs text-gray-500 space-y-1">
-        <div className="font-medium text-gray-400">Як використовувати:</div>
-        <ol className="list-decimal list-inside space-y-0.5 ml-1">
-          <li>Натисни <strong>Відкрити Transcriber</strong> → вставити YouTube URL → запустити</li>
-          <li>Дочекатись завершення транскрипції (кілька хвилин)</li>
-          <li>Натисни <strong>Scan</strong> → обери готовий вихід нижче</li>
-          <li>Клік <strong>▶ Pipeline</strong> → підставить шлях у форму і запустить</li>
-        </ol>
-      </div>
-
-      {/* Output list */}
-      {outputs.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">
-            Готові виходи ({outputs.length})
-          </div>
-          {outputs.map((o) => (
+      {/* Live logs */}
+      {job.logs.length > 0 && (
+        <div className="font-mono text-xs space-y-0.5">
+          {job.logs.slice(-4).map((l, i) => (
             <div
-              key={o.dir}
-              className="flex items-center justify-between gap-2 bg-gray-900 rounded p-3 border border-gray-700 hover:border-indigo-600 transition-colors"
+              key={i}
+              className={
+                isActive && i === Math.min(job.logs.length, 4) - 1
+                  ? 'text-blue-300'
+                  : 'text-gray-400'
+              }
             >
-              <div className="min-w-0">
-                <div className="text-sm text-white truncate">{o.title || o.name}</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  {o.language && <span className="mr-2">{o.language}</span>}
-                  {o.has_srt && <span className="mr-2">📄 SRT</span>}
-                  {o.has_description && <span className="mr-2">📝 desc</span>}
-                  {o.has_thumbnail && <span className="mr-2">🖼 thumb</span>}
-                  <span className="text-gray-600">{fmtDate(o.modified_at)}</span>
-                </div>
-                <div className="text-xs text-gray-600 truncate mt-0.5">{o.dir}</div>
-              </div>
-              <button
-                onClick={() => onSelectDir(o.dir)}
-                className="shrink-0 text-xs px-3 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-white font-medium"
-              >
-                ▶ Pipeline
-              </button>
+              {l}
             </div>
           ))}
         </div>
       )}
 
-      {outputs.length === 0 && !scanning && (
-        <div className="text-xs text-gray-500 text-center py-2">
-          {status?.output_dir_exists
-            ? 'Готових виходів не знайдено. Запусти Transcriber і натисни Scan.'
-            : `Вихідна папка не існує: ${status?.output_dir ?? '…'}`}
+      {job.status === 'done' && job.out_dir && (
+        <div className="text-xs text-green-400 truncate">✓ {job.out_dir}</div>
+      )}
+
+      {job.error && (
+        <div className="text-xs text-red-300 bg-red-950 rounded p-1.5">✗ {job.error}</div>
+      )}
+
+      {isActive && (
+        <div className="w-full bg-gray-700 rounded-full h-1">
+          <div className="bg-blue-500 h-1 rounded-full animate-pulse w-full" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main panel ────────────────────────────────────────────────────────────────
+
+interface Props {
+  onSelectDir: (dir: string) => void
+}
+
+export function TranscriberPanel({ onSelectDir }: Props) {
+  // Form
+  const [urls, setUrls]             = useState('')
+  const [language, setLanguage]     = useState('')
+  const [quality, setQuality]       = useState('max')
+  const [channel, setChannel]       = useState('config/channels/history.json')
+  const [autoPipeline, setAutoPipeline] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError]   = useState('')
+
+  // Jobs list
+  const [jobs, setJobs] = useState<TranscribeJob[]>([])
+
+  // External transcriber section
+  const [outputs, setOutputs]     = useState<TranscriberOutput[]>([])
+  const [scanning, setScanning]   = useState(false)
+  const [showExternal, setShowExternal] = useState(false)
+
+  // Collapsed
+  const [open, setOpen] = useState(true)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setFormError('')
+    const lines = urls.split('\n').map(s => s.trim()).filter(Boolean)
+    if (!lines.length) { setFormError('Вставте хоча б одне посилання'); return }
+
+    setSubmitting(true)
+    const newJobs: TranscribeJob[] = []
+    try {
+      for (const url of lines) {
+        const res = await api.transcribe.start({
+          url,
+          language:      language || undefined,
+          auto_pipeline: autoPipeline,
+          channel,
+          quality,
+        })
+        newJobs.push({
+          job_id: res.job_id,
+          url,
+          status: res.status,
+          logs: [],
+          error: '',
+          out_dir: '',
+        })
+      }
+      setJobs(prev => [...newJobs, ...prev])
+      setUrls('')
+    } catch (err) {
+      setFormError(String(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleScan() {
+    setScanning(true)
+    try { setOutputs(await api.transcriber.outputs()) }
+    finally { setScanning(false) }
+  }
+
+  function handleJobDone(dir: string) {
+    // If auto_pipeline is off — fill Jobs form source_dir
+    if (!autoPipeline) onSelectDir(dir)
+  }
+
+  return (
+    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+      {/* Toggle header */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-700/50 transition-colors"
+      >
+        <span className="text-sm font-semibold text-white">
+          📥 Download &amp; Transcribe
+        </span>
+        <span className="text-gray-500 text-xs">{open ? '▲ hide' : '▼ show'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-4 border-t border-gray-700 pt-4">
+
+          {/* ── URL form ─────────────────────────────────────────────────── */}
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <label className="block space-y-1">
+              <span className="text-xs text-gray-400">
+                YouTube URL(s) — по одному на рядок, або Ctrl+V щоб вставити
+              </span>
+              <textarea
+                value={urls}
+                onChange={e => setUrls(e.target.value)}
+                onPaste={e => {
+                  e.preventDefault()
+                  const pasted = e.clipboardData.getData('text').trim()
+                  setUrls(prev => prev ? `${prev}\n${pasted}` : pasted)
+                }}
+                placeholder={"https://www.youtube.com/watch?v=dQw4w9WgXcQ\nhttps://youtu.be/..."}
+                rows={3}
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-none font-mono"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {/* Language */}
+              <label className="space-y-1">
+                <span className="text-xs text-gray-400">Мова (auto якщо порожньо)</span>
+                <input
+                  value={language}
+                  onChange={e => setLanguage(e.target.value)}
+                  placeholder="uk / en / de…"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+              </label>
+
+              {/* Quality */}
+              <label className="space-y-1">
+                <span className="text-xs text-gray-400">Якість LLM</span>
+                <select
+                  value={quality}
+                  onChange={e => setQuality(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                >
+                  {QUALITY_OPTS.map(o => (
+                    <option key={o.value} value={o.value}>
+                      {o.label} — {o.desc}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {/* Channel */}
+              <label className="space-y-1">
+                <span className="text-xs text-gray-400">Channel config</span>
+                <input
+                  value={channel}
+                  onChange={e => setChannel(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+              </label>
+
+              {/* Auto-pipeline toggle */}
+              <div className="flex flex-col justify-end gap-1 pb-0.5">
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoPipeline}
+                    onChange={e => setAutoPipeline(e.target.checked)}
+                    className="accent-blue-500"
+                  />
+                  Auto-pipeline
+                </label>
+                <span className="text-xs text-gray-500 leading-tight">
+                  {autoPipeline
+                    ? 'Запускає пайплайн одразу після транскрипції'
+                    : 'Підставляє шлях у форму Jobs вручну'}
+                </span>
+              </div>
+            </div>
+
+            {formError && (
+              <div className="text-xs text-red-300 bg-red-950 rounded p-2">{formError}</div>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting || !urls.trim()}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded transition-colors"
+            >
+              {submitting ? '⏳ Запускаємо…' : '⬇ Download & Transcribe'}
+            </button>
+          </form>
+
+          {/* ── Jobs ─────────────────────────────────────────────────────── */}
+          {jobs.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                Transcription jobs ({jobs.length})
+              </div>
+              {jobs.map(j => (
+                <JobCard key={j.job_id} initialJob={j} onDone={handleJobDone} />
+              ))}
+            </div>
+          )}
+
+          {/* ── External Transcriber (collapsible) ───────────────────────── */}
+          <div className="border-t border-gray-700 pt-3">
+            <button
+              onClick={() => {
+                setShowExternal(v => !v)
+                if (!showExternal) handleScan()
+              }}
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              {showExternal ? '▲' : '▼'} Є готові виходи від Transcriber GUI?
+            </button>
+
+            {showExternal && (
+              <div className="mt-3 space-y-2">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => api.transcriber.launch().catch(() => {})}
+                    className="text-xs px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 text-white"
+                  >
+                    🚀 Open Transcriber
+                  </button>
+                  <button
+                    onClick={handleScan}
+                    disabled={scanning}
+                    className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300"
+                  >
+                    {scanning ? '⏳' : '↻'} Scan outputs
+                  </button>
+                </div>
+
+                {outputs.map(o => (
+                  <div
+                    key={o.dir}
+                    className="flex items-center justify-between gap-2 bg-gray-900 rounded p-2 border border-gray-700 hover:border-blue-600 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs text-white truncate">{o.title || o.name}</div>
+                      <div className="text-xs text-gray-500 space-x-1">
+                        {o.language && <span>{o.language}</span>}
+                        {o.has_srt && <span>· SRT</span>}
+                        {o.has_thumbnail && <span>· 🖼</span>}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onSelectDir(o.dir)}
+                      className="shrink-0 text-xs px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white"
+                    >
+                      ▶ Pipeline
+                    </button>
+                  </div>
+                ))}
+
+                {outputs.length === 0 && !scanning && (
+                  <div className="text-xs text-gray-500">
+                    Виходів не знайдено. Запусти Transcriber і натисни Scan.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
