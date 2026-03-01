@@ -220,6 +220,8 @@ async def run_pipeline(
     budget: float | None = None,
     project_dir: Path | None = None,
     script_path_override: Path | None = None,
+    db_tracker: Any | None = None,   # VideoTracker instance (optional)
+    db_video_id: int | None = None,  # Pre-created video row id (passed by batch_runner)
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -251,6 +253,11 @@ async def run_pipeline(
 
     proj.mkdir(parents=True, exist_ok=True)
 
+    # ── DB tracking variables ──────────────────────────────────────────────────
+    _vid_id: int | None = None
+    _video_path: Path | None = None
+    _thumb_path: Path | None = None
+
     # ── Resolve script path ────────────────────────────────────────────────────
     if script_path_override:
         s_path = script_path_override
@@ -270,6 +277,22 @@ async def run_pipeline(
         log.info("Mode        : DRY RUN (no API calls)")
     elif draft:
         log.info("Mode        : DRAFT (480p, no effects)")
+
+    # ── DB: create/activate video record ──────────────────────────────────────
+    if db_tracker is not None and not dry_run:
+        if db_video_id is not None:
+            _vid_id = db_video_id
+        else:
+            _vid_id = db_tracker.create_video(
+                source_dir=source_dir or proj,
+                channel=channel_config_path.stem,
+                quality_preset=quality,
+                template=template,
+                from_step=from_step,
+                project_dir=proj,
+            )
+        db_tracker.set_running(_vid_id)
+        log.info("DB tracking : video_id=%d", _vid_id)
 
     # ── Upfront cost estimate (dry-run only) ───────────────────────────────────
     if dry_run:
@@ -483,6 +506,7 @@ async def run_pipeline(
 
             if not dry_run:
                 _require_files([video_path], min_bytes=50_000, step="Video")
+                _video_path = video_path
                 size_mb = video_path.stat().st_size / 1_048_576
                 log.info(
                     "Video: %s  (%.1f MB, %.1fs)",
@@ -519,6 +543,7 @@ async def run_pipeline(
                 thumb_path = getattr(thumb_result, "output_path", None)
                 if thumb_path:
                     _require_files([Path(thumb_path)], min_bytes=1_000, step="Thumbnail")
+                    _thumb_path = Path(thumb_path)
                     attempts = getattr(thumb_result, "attempts", 1)
                     score = getattr(thumb_result, "score", -1)
                     log.info(
@@ -563,6 +588,21 @@ async def run_pipeline(
     # DONE
     # ══════════════════════════════════════════════════════════════════════════
     elapsed_total = time.monotonic() - t_pipeline
+
+    # ── DB: mark done ─────────────────────────────────────────────────────────
+    if db_tracker and _vid_id and not dry_run:
+        db_tracker.set_done(
+            _vid_id,
+            video_path=_video_path,
+            thumbnail_path=_thumb_path,
+            script_path=s_path if s_path.exists() else None,
+            elapsed_seconds=elapsed_total,
+        )
+        for label, amount in cost.breakdown:
+            db_tracker.record_cost(
+                _vid_id, step=label, model="pipeline", cost_usd=amount,
+            )
+        log.info("DB tracking : done (video_id=%d, elapsed=%.1fs)", _vid_id, elapsed_total)
 
     print()
     print("=" * 60)
@@ -666,6 +706,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum spend per video in USD (pipeline halts if exceeded)",
     )
 
+    # Tracking
+    track_group = parser.add_argument_group("Tracking")
+    track_group.add_argument(
+        "--track", action="store_true",
+        help="Record this run in the SQLite tracker (data/videoforge.db)",
+    )
+    track_group.add_argument(
+        "--db", metavar="PATH",
+        help="Custom DB path for tracking (default: data/videoforge.db)",
+    )
+
     return parser
 
 
@@ -708,22 +759,50 @@ def main() -> None:
 
     load_env()
 
-    asyncio.run(
-        run_pipeline(
-            source_dir=source_dir,
-            channel_config_path=channel_path,
-            quality=args.quality,
+    # ── Optional SQLite tracking ───────────────────────────────────────────────
+    db_tracker: Any = None
+    db_video_id: int | None = None
+    if args.track and not args.dry_run:
+        from utils.db import VideoTracker  # lazy import
+        db_tracker = VideoTracker(db_path=args.db)
+        db_video_id = db_tracker.create_video(
+            source_dir=source_dir or Path(args.project_dir or "."),
+            channel=channel_path.stem,
+            quality_preset=args.quality,
             template=args.template,
-            review=args.review,
-            dry_run=args.dry_run,
-            draft=args.draft,
             from_step=args.from_step,
-            langs=langs,
-            budget=args.budget,
             project_dir=project_dir,
-            script_path_override=script_path_override,
         )
-    )
+        log.info("DB tracking enabled: video_id=%d  db=%s", db_video_id, db_tracker.db_path)
+
+    import time as _time
+    _t0 = _time.monotonic()
+    try:
+        asyncio.run(
+            run_pipeline(
+                source_dir=source_dir,
+                channel_config_path=channel_path,
+                quality=args.quality,
+                template=args.template,
+                review=args.review,
+                dry_run=args.dry_run,
+                draft=args.draft,
+                from_step=args.from_step,
+                langs=langs,
+                budget=args.budget,
+                project_dir=project_dir,
+                script_path_override=script_path_override,
+                db_tracker=db_tracker,
+                db_video_id=db_video_id,
+            )
+        )
+    except Exception as exc:
+        if db_tracker and db_video_id is not None:
+            db_tracker.set_failed(
+                db_video_id, str(exc),
+                elapsed_seconds=_time.monotonic() - _t0,
+            )
+        raise
 
 
 if __name__ == "__main__":

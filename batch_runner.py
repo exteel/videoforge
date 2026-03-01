@@ -35,7 +35,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from utils.db import VideoTracker
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
@@ -114,12 +117,26 @@ async def _process_one(
     template: str,
     budget_per_video: float | None,
     sem: asyncio.Semaphore,
+    db_tracker: Any | None = None,
 ) -> VideoResult:
     """Run pipeline for one video, respecting the concurrency semaphore."""
     name = source_dir.name
     async with sem:
         log.info("[BATCH] Starting: %s", name)
         t0 = time.monotonic()
+
+        # Create DB record before pipeline starts so we can mark failures
+        vid_id: int | None = None
+        if db_tracker is not None and not dry_run:
+            vid_id = db_tracker.create_video(
+                source_dir=source_dir,
+                channel=channel_config_path.stem,
+                quality_preset=quality,
+                template=template,
+                from_step=from_step,
+                project_dir=ROOT / "projects" / name,
+            )
+
         try:
             await run_pipeline(
                 source_dir=source_dir,
@@ -130,6 +147,8 @@ async def _process_one(
                 draft=draft,
                 from_step=from_step,
                 budget=budget_per_video,
+                db_tracker=db_tracker,
+                db_video_id=vid_id,
             )
             elapsed = time.monotonic() - t0
             log.info("[BATCH] Done: %s  (%.1fs)", name, elapsed)
@@ -137,6 +156,8 @@ async def _process_one(
         except SystemExit:
             # Pipeline called sys.exit(1) on budget exceeded
             elapsed = time.monotonic() - t0
+            if db_tracker and vid_id is not None:
+                db_tracker.set_failed(vid_id, "budget_exceeded", elapsed_seconds=elapsed)
             return VideoResult(
                 name=name, status="failed", elapsed=elapsed,
                 error="budget_exceeded",
@@ -144,6 +165,8 @@ async def _process_one(
         except Exception as exc:
             elapsed = time.monotonic() - t0
             log.error("[BATCH] Failed: %s — %s", name, exc)
+            if db_tracker and vid_id is not None:
+                db_tracker.set_failed(vid_id, str(exc), elapsed_seconds=elapsed)
             return VideoResult(name=name, status="failed", elapsed=elapsed, error=str(exc))
 
 
@@ -162,6 +185,7 @@ async def run_batch(
     template: str = "auto",
     budget_per_video: float | None = None,
     budget_total: float | None = None,
+    db_path: str | None = None,
 ) -> BatchSummary:
     """
     Run VideoForge pipeline for all Transcriber output directories.
@@ -184,6 +208,13 @@ async def run_batch(
     """
     t_batch = time.monotonic()
     summary = BatchSummary()
+
+    # ── SQLite tracker (optional) ──────────────────────────────────────────────
+    db_tracker: Any = None
+    if db_path is not None and not dry_run:
+        from utils.db import VideoTracker  # lazy import
+        db_tracker = VideoTracker(db_path=db_path)
+        log.info("DB tracking enabled: %s", db_tracker.db_path)
 
     source_dirs = _scan_input_dir(input_dir)
     if not source_dirs:
@@ -252,6 +283,7 @@ async def run_batch(
             template=template,
             budget_per_video=budget_per_video,
             sem=sem,
+            db_tracker=db_tracker,
         )
         for d in pending
     ]
@@ -374,6 +406,16 @@ def main() -> None:
         help="Max total batch spend in USD",
     )
 
+    track_grp = parser.add_argument_group("Tracking")
+    track_grp.add_argument(
+        "--track", action="store_true",
+        help="Record all runs in the SQLite tracker (data/videoforge.db)",
+    )
+    track_grp.add_argument(
+        "--db", metavar="PATH",
+        help="Custom DB path for tracking (default: data/videoforge.db)",
+    )
+
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -400,6 +442,11 @@ def main() -> None:
     if args.budget_total:
         log.info("Budget tot : $%.2f", args.budget_total)
 
+    db_path: str | None = None
+    if args.track:
+        from utils.db import DEFAULT_DB_PATH  # lazy import
+        db_path = args.db or str(DEFAULT_DB_PATH)
+
     summary = asyncio.run(
         run_batch(
             input_dir=input_dir,
@@ -413,6 +460,7 @@ def main() -> None:
             template=args.template,
             budget_per_video=args.budget_per_video,
             budget_total=args.budget_total,
+            db_path=db_path,
         )
     )
 
