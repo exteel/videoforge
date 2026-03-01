@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 18:01
+Останнє оновлення: 2026-03-01 18:03
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -27,7 +27,7 @@
 - [x] №15 Фікс багів
 - [x] №16 Pipeline Runner
 - [x] №17 Cost Tracker
-- [ ] №18 Batch Runner
+- [x] №18 Batch Runner
 
 ## Поточний стан
 Image Generator (№7) завершено. Наступний: Voice Generator (№8).
