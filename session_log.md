@@ -14,6 +14,15 @@
 - **Покращення v5:** Hook system — гайд 540 рядків вбудований в pipeline (3-крокова формула, 6 типів хуків, SSSQ, 10 шаблонів, 4 смертельні помилки, auto-validation intro)
 - **Далі:** №1 — ініціалізація
 
+## 2026-03-01 — №5 FFmpeg utils + №6 Script Generator
+
+- **Зроблено:** utils/ffmpeg_utils.py (808 рядків), modules/01_script_generator.py (847 рядків)
+- **FFmpeg utils:** get_duration, resize, ken_burns (zoompan, 4 анімації + static), concat_videos (xfade crossfade), add_audio, normalize_audio (EBU R128 two-pass), mix_audio (-20dB music), concat_audio, add_subtitles (ASS/SRT burn-in), extract_audio, check_ffmpeg
+- **Script Generator:** Pydantic моделі (Script, ScriptBlock, HookInfo, HookValidationResult), parser LLM output ([SECTION X:] + [IMAGE_PROMPT:] + [CTA_*]), prompt versioning, 4 templates, 5 hook types, hook validation (gpt-4.1-nano + hook_validator.txt), auto-regenerate intro, --compare N, --dry-run, dry-run OK
+- **Рішення:** Fallback якщо немає [SECTION] маркерів → один блок; parser state machine (flush по секціям); suggested_rewrite від валідатора = заміна intro без extra LLM call
+- **Git:** feat: №5 FFmpeg utilities + feat: №6 Script Generator
+- **Далі:** №7 Image Generator
+
 ## 2026-03-01 — №1 + №2 + GitHub setup
 - **Зроблено:** prompts/hooks_guide.md, prompts/hook_validator.txt (4 критерії: clarity/curiosity/relevance/interest, pass≥3/4), clients/voidai_client.py
 - **VoidAI client:** async httpx, chat/vision/tts/image, smart fallback Opus→Sonnet→GPT, semaphore(10), exponential backoff, cost tracking (MODEL_COSTS table)

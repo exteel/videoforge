@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 16:44
+Останнє оновлення: 2026-03-01 17:00
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -15,7 +15,7 @@
 - [x] №3 WaveSpeed клієнт
 - [x] №4 VoiceAPI клієнт
 - [x] №5 FFmpeg утиліти
-- [ ] №6 Script Generator
+- [x] №6 Script Generator
 - [ ] №7 Image Generator
 - [ ] №8 Voice Generator
 - [ ] №9 Subtitle Generator
@@ -30,7 +30,7 @@
 - [ ] №18 Batch Runner
 
 ## Поточний стан
-Початок розробки VideoForge. Існуючі інструменти працюють окремо.
+Всі клієнти і базові утиліти готові. Script Generator (№6) завершено. Наступний: Image Generator (№7).
 
 ## Відомі баги
 (немає)
