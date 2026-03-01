@@ -1,16 +1,14 @@
 # Поточна задача
 
-## Задача №5 — FFmpeg утиліти
-- get_duration(), resize(), ken_burns(zoom_in/out/pan_left/right), concat(), add_subs(), add_audio()
-- **loudnorm()** — нормалізація гучності після конкатенації (EBU R128, target -16 LUFS)
-- **mix_background_music(voice, music, music_db=-20)** — мікшує фонову музику під озвучку
-- **crossfade(clip1, clip2, duration=0.5)** — плавний перехід між блоками замість hard cut
-- **prepend_intro() / append_outro()** — клеїть intro/outro відео-шаблони з конфігу каналу
-- Результат: демонструє ефекти на тестових файлах
-- Залежить від: 1
+## Задача №7 — Image Generator
+- script.json → WaveSpeed паралельно (asyncio.gather з semaphore) → images/
+- **Image validation:** після генерації VoidAI vision (дешева модель) перевіряє "чи відповідає промпту, немає артефактів/тексту?" → auto-regenerate поганих (max 2 retry per image)
+- Fallback: VoidAI image gen (gpt-image-1.5) якщо WaveSpeed fail
+- Прогрес-бар (tqdm)
+- Залежить від: 2, 3, 6
 
 ## Наступна задача
-№6 — Script Generator
+№8 — Voice Generator
 
 ---
 Після виконання: `python dev.py next -md` → git commit
