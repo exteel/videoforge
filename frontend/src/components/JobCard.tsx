@@ -320,40 +320,36 @@ export function JobCard({ job, onRefresh }: Props) {
         const info = REVIEW_LABEL[liveReviewStage] ?? { icon: '⏸', title: 'Review Required', hint: 'Waiting for approval' }
         const d = liveReviewData ?? {}
 
-        // Script-specific data
-        const scriptBlocks = d.blocks as { id: string; type: string; narration: string }[] | undefined
-        const blockCount   = (d.block_count as number) ?? scriptBlocks?.length ?? 0
-        const durationMin  = d.duration_min as number | undefined
+        // ── Script data ───────────────────────────────────────────────────
+        type BlockSummary = { id: string; type: string; title: string; word_count: number; image_count: number; narration: string }
+        const scriptBlocks  = d.blocks as BlockSummary[] | undefined
+        const blockCount    = (d.block_count as number) ?? scriptBlocks?.length ?? 0
+        const wordCount     = d.word_count as number | undefined
+        const durMin        = d.duration_min as number | undefined
+        const durMax        = d.duration_max as number | undefined
+        const typeCounts    = (d.type_counts ?? {}) as Record<string, number>
+        const imgCount      = d.image_prompt_count as number | undefined
+        const hasHook       = d.has_hook as boolean | undefined
+        const scriptTitle   = d.title as string | undefined
 
-        // Image-specific data
-        const validation   = d.validation as { ok: number; total: number; regenerated: number; failed: number; scores: { block_id: string; score: number; ok: boolean; regenerated: boolean; image_url: string }[] } | undefined
+        // ── Image data ────────────────────────────────────────────────────
+        type ImgScore = { block_id: string; score: number; ok: boolean; regenerated: boolean; attempts: number; reason: string; skipped: boolean; image_url: string }
+        const validation  = d.validation as { ok: number; total: number; regenerated: number; failed: number; skipped: number; scores: ImgScore[] } | undefined
+        const imgOk       = validation ? validation.ok : 0
+        const imgTotal    = validation ? validation.total : 0
+        const imgOkPct    = imgTotal > 0 ? Math.round((imgOk / imgTotal) * 100) : 0
+        const imgSufficient = imgTotal > 0 && imgOk >= Math.ceil(imgTotal * 0.8)
 
         return (
           <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-3">
 
-            {/* Header row */}
+            {/* ── Header row ──────────────────────────────────────────────── */}
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-amber-300">{info.icon} {info.title}</div>
-                <div className="text-xs text-amber-400/70 mt-0.5">{info.hint}</div>
-
-                {/* Script stats */}
-                {liveReviewStage === 'script' && blockCount > 0 && (
-                  <div className="text-xs text-amber-300/60 mt-1 tabular-nums">
-                    {blockCount} блоків{durationMin ? ` · ~${durationMin} хв` : ''}
-                  </div>
-                )}
-
-                {/* Image stats */}
-                {liveReviewStage === 'images' && validation && (
-                  <div className="text-xs mt-1 flex gap-2 tabular-nums">
-                    <span className="text-green-400">✓ {validation.ok}/{validation.total} OK</span>
-                    {validation.regenerated > 0 && <span className="text-blue-400">↻ {validation.regenerated} regen</span>}
-                    {validation.failed > 0      && <span className="text-red-400">✗ {validation.failed} failed</span>}
-                  </div>
-                )}
+                {scriptTitle && <div className="text-xs text-white mt-0.5 truncate">«{scriptTitle}»</div>}
+                {!scriptTitle && <div className="text-xs text-amber-400/70 mt-0.5">{info.hint}</div>}
               </div>
-
               <button
                 onClick={handleApprove}
                 disabled={approving}
@@ -363,46 +359,159 @@ export function JobCard({ job, onRefresh }: Props) {
               </button>
             </div>
 
-            {/* Script block preview */}
-            {liveReviewStage === 'script' && scriptBlocks && scriptBlocks.length > 0 && (
-              <div className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
-                {scriptBlocks.map((b) => (
-                  <div key={b.id} className="flex items-start gap-2 text-xs leading-snug">
-                    <span className={`shrink-0 mt-0.5 px-1 py-px rounded text-[10px] font-medium ${BLOCK_TYPE_COLOR[b.type] ?? 'bg-gray-700 text-gray-300'}`}>
-                      {b.type}
-                    </span>
-                    <span className="text-gray-300 line-clamp-2">{b.narration}</span>
+            {/* ══════════════════════════════════════════════════════════════
+                SCRIPT REVIEW
+                ══════════════════════════════════════════════════════════ */}
+            {liveReviewStage === 'script' && (
+              <>
+                {/* ── Metrics row ───────────────────────────────────────── */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {/* Duration */}
+                  <div className="bg-gray-900 rounded p-2 text-center">
+                    <div className="text-base font-bold text-amber-300 tabular-nums">
+                      {durMin != null && durMax != null ? `${durMin}–${durMax}` : durMin ?? '?'} хв
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">тривалість</div>
                   </div>
-                ))}
-              </div>
+                  {/* Words */}
+                  <div className="bg-gray-900 rounded p-2 text-center">
+                    <div className="text-base font-bold text-white tabular-nums">{wordCount?.toLocaleString() ?? '?'}</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">слів</div>
+                  </div>
+                  {/* Image prompts */}
+                  <div className="bg-gray-900 rounded p-2 text-center">
+                    <div className="text-base font-bold text-blue-300 tabular-nums">{imgCount ?? '?'}</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">картинок</div>
+                  </div>
+                  {/* Hook */}
+                  <div className={`rounded p-2 text-center ${hasHook ? 'bg-green-950' : 'bg-red-950'}`}>
+                    <div className={`text-base font-bold ${hasHook ? 'text-green-400' : 'text-red-400'}`}>
+                      {hasHook ? '✓ Є' : '✗ Нема'}
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">hook</div>
+                  </div>
+                </div>
+
+                {/* ── Structure breakdown ───────────────────────────────── */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  <span className="text-gray-400">Структура:</span>
+                  {Object.entries(typeCounts).map(([type, cnt]) => (
+                    <span key={type} className="flex items-center gap-1">
+                      <span className={`px-1 py-px rounded text-[10px] font-medium ${BLOCK_TYPE_COLOR[type] ?? 'bg-gray-700 text-gray-300'}`}>{type}</span>
+                      <span className="text-gray-300 tabular-nums">×{cnt}</span>
+                    </span>
+                  ))}
+                  <span className="text-gray-500 ml-auto tabular-nums">{blockCount} блоків</span>
+                </div>
+
+                {/* ── Block list (compact, scrollable) ─────────────────── */}
+                {scriptBlocks && scriptBlocks.length > 0 && (
+                  <div className="max-h-52 overflow-y-auto space-y-0.5 pr-1">
+                    {scriptBlocks.map((b) => (
+                      <details key={b.id} className="group">
+                        <summary className="flex items-center gap-2 text-xs cursor-pointer select-none hover:bg-gray-700/40 rounded px-1 py-0.5 list-none">
+                          {/* Type badge */}
+                          <span className={`shrink-0 px-1 py-px rounded text-[10px] font-medium w-14 text-center ${BLOCK_TYPE_COLOR[b.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                            {b.type}
+                          </span>
+                          {/* Title or narration preview */}
+                          <span className="flex-1 text-gray-300 truncate">{b.title || b.narration.slice(0, 80)}</span>
+                          {/* Stats */}
+                          <span className="shrink-0 tabular-nums text-gray-500 text-[10px] flex gap-1.5">
+                            <span title="слів">{b.word_count}w</span>
+                            {b.image_count > 0 && <span title="зображень" className="text-blue-400">🖼{b.image_count}</span>}
+                          </span>
+                        </summary>
+                        {/* Expanded narration */}
+                        <div className="text-[11px] text-gray-400 pl-16 pr-2 pb-1 pt-0.5 leading-relaxed">
+                          {b.narration || <span className="italic text-gray-600">пусто</span>}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Image grid */}
-            {liveReviewStage === 'images' && validation?.scores && validation.scores.length > 0 && (
-              <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
-                {validation.scores.slice(0, 24).map((s) => (
-                  <div key={s.block_id} className="relative group">
-                    <img
-                      src={s.image_url}
-                      alt={s.block_id}
-                      className="w-full aspect-video object-cover rounded bg-gray-700"
-                      loading="lazy"
-                    />
-                    {/* Score badge */}
-                    <div className={`absolute top-0.5 right-0.5 text-[9px] font-bold px-0.5 rounded leading-tight ${
-                      s.score >= 8 ? 'bg-green-500 text-white' :
-                      s.score >= 7 ? 'bg-yellow-500 text-black' :
-                                     'bg-red-500 text-white'
-                    }`}>
-                      {s.score.toFixed(0)}
+            {/* ══════════════════════════════════════════════════════════════
+                IMAGE REVIEW
+                ══════════════════════════════════════════════════════════ */}
+            {liveReviewStage === 'images' && validation && (
+              <>
+                {/* ── Summary row ───────────────────────────────────────── */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {/* OK / total */}
+                  <div className={`rounded p-2 text-center ${imgSufficient ? 'bg-green-950' : 'bg-red-950'}`}>
+                    <div className={`text-base font-bold tabular-nums ${imgSufficient ? 'text-green-400' : 'text-red-400'}`}>
+                      {imgOk}/{imgTotal}
                     </div>
-                    {/* Regen indicator */}
-                    {s.regenerated && (
-                      <div className="absolute top-0.5 left-0.5 text-[9px] bg-blue-500 text-white px-0.5 rounded leading-tight">↻</div>
-                    )}
+                    <div className="text-[10px] text-gray-500 mt-0.5">{imgSufficient ? '✓ достатньо' : '✗ мало OK'}</div>
                   </div>
-                ))}
-              </div>
+                  {/* OK % */}
+                  <div className="bg-gray-900 rounded p-2 text-center">
+                    <div className="text-base font-bold tabular-nums text-white">{imgOkPct}%</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">якість</div>
+                  </div>
+                  {/* Regenerated */}
+                  <div className="bg-gray-900 rounded p-2 text-center">
+                    <div className={`text-base font-bold tabular-nums ${validation.regenerated > 0 ? 'text-blue-400' : 'text-gray-500'}`}>
+                      {validation.regenerated}
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">↻ перегенеровано</div>
+                  </div>
+                  {/* Failed */}
+                  <div className={`rounded p-2 text-center ${validation.failed > 0 ? 'bg-red-950' : 'bg-gray-900'}`}>
+                    <div className={`text-base font-bold tabular-nums ${validation.failed > 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                      {validation.failed}
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">✗ провалено</div>
+                  </div>
+                </div>
+
+                {/* ── Image grid with tooltips ───────────────────────────── */}
+                {validation.scores && validation.scores.length > 0 && (
+                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                    {validation.scores.slice(0, 30).map((s) => (
+                      <div key={s.block_id} className="relative group">
+                        <img
+                          src={s.image_url}
+                          alt={s.block_id}
+                          className={`w-full aspect-video object-cover rounded bg-gray-700 ${
+                            !s.ok ? 'ring-2 ring-red-500' : s.regenerated ? 'ring-2 ring-blue-500' : ''
+                          }`}
+                          loading="lazy"
+                        />
+                        {/* Score badge */}
+                        <div className={`absolute top-0.5 right-0.5 text-[9px] font-bold px-1 py-px rounded leading-tight ${
+                          s.score >= 8 ? 'bg-green-600 text-white' :
+                          s.score >= 7 ? 'bg-yellow-500 text-black' :
+                                         'bg-red-600 text-white'
+                        }`}>
+                          {Number(s.score).toFixed(0)}
+                        </div>
+                        {/* Regen indicator */}
+                        {s.regenerated && (
+                          <div className="absolute top-0.5 left-0.5 text-[9px] bg-blue-600 text-white px-0.5 rounded leading-tight">↻</div>
+                        )}
+                        {/* Attempts badge (show if > 1) */}
+                        {(s.attempts ?? 1) > 1 && (
+                          <div className="absolute bottom-0.5 left-0.5 text-[9px] bg-gray-800/80 text-gray-300 px-0.5 rounded leading-tight">
+                            ×{s.attempts}
+                          </div>
+                        )}
+                        {/* Reason tooltip on hover */}
+                        {s.reason && (
+                          <div className="absolute inset-x-0 bottom-full mb-1 hidden group-hover:flex z-10 justify-center px-1">
+                            <div className="bg-gray-900 border border-gray-600 text-[10px] text-gray-200 rounded px-2 py-1 shadow-lg max-w-[160px] text-center leading-snug">
+                              {s.reason}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
           </div>

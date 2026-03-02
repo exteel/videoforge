@@ -442,21 +442,57 @@ async def run_pipeline(
         elif review_callback is not None:
             _sd = _load_script(s_path)
             _blocks = _sd.get("blocks", [])
-            # Duration: word count / 140 wpm (audio_duration is null before TTS)
+
+            # ── Compute rich review stats ──────────────────────────────────
+            # Word count + duration (audio_duration is null before TTS)
             _word_count = sum(len((b.get("narration") or "").split()) for b in _blocks)
+            _dur_min = round(_word_count / 150, 1)   # ~150 wpm reading
+            _dur_max = round(_word_count / 130, 1)   # ~130 wpm slow reading
+
+            # Block type breakdown
+            _type_counts: dict[str, int] = {}
+            for _b in _blocks:
+                _t = _b.get("type", "section")
+                _type_counts[_t] = _type_counts.get(_t, 0) + 1
+
+            # Total image prompts (sum image_prompts lists, fallback image_prompt)
+            _total_imgs = sum(
+                len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0)
+                for _b in _blocks
+            )
+
+            # Hook detection: check if intro block starts with question or hook words
+            _intro_blocks = [_b for _b in _blocks if _b.get("type") == "intro"]
+            _has_hook = False
+            if _intro_blocks:
+                _intro_text = (_intro_blocks[0].get("narration") or "").strip()
+                _hook_signals = ["?", "Що якби", "Уявіть", "Як", "Чому", "Imagine", "What if", "Why"]
+                _has_hook = any(sig in _intro_text[:200] for sig in _hook_signals)
+
+            # Per-block summary (compact — title + type + word count + image count)
+            _block_summaries = [
+                {
+                    "id":          _b.get("id", ""),
+                    "type":        _b.get("type", "section"),
+                    "title":       _b.get("title", ""),
+                    "word_count":  len((_b.get("narration") or "").split()),
+                    "image_count": len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0),
+                    "narration":   (_b.get("narration") or "")[:120],
+                }
+                for _b in _blocks
+            ]
+
             await review_callback("script", {
-                "script_path": str(s_path),
-                "block_count": len(_blocks),
-                "duration_min": round(_word_count / 140, 1),
-                "word_count": _word_count,
-                "blocks": [
-                    {
-                        "id": b.get("id", ""),
-                        "type": b.get("type", "section"),
-                        "narration": (b.get("narration") or "")[:150],
-                    }
-                    for b in _blocks[:30]
-                ],
+                "script_path":   str(s_path),
+                "title":         _sd.get("title", ""),
+                "block_count":   len(_blocks),
+                "word_count":    _word_count,
+                "duration_min":  _dur_min,
+                "duration_max":  _dur_max,
+                "type_counts":   _type_counts,
+                "image_prompt_count": _total_imgs,
+                "has_hook":      _has_hook,
+                "blocks":        _block_summaries,
             })
 
     # ══════════════════════════════════════════════════════════════════════════
