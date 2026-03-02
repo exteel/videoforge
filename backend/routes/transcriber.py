@@ -55,10 +55,12 @@ class TranscribeRequest(BaseModel):
     template:       str = "auto"
     draft:          bool = False
     dry_run:        bool = False
-    background_music: bool = False
+    background_music: bool = True
     image_style:    str | None = None
     voice_id:       str | None = None
     master_prompt:  str | None = None
+    duration_min:   int | None = None      # min video duration in minutes
+    duration_max:   int | None = None      # max video duration in minutes
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -151,6 +153,8 @@ async def start_transcribe(req: TranscribeRequest) -> dict[str, Any]:
                 "draft":            req.draft,
                 "dry_run":          req.dry_run,
                 "background_music": req.background_music,
+                "duration_min":     req.duration_min if req.duration_min is not None else 8,
+                "duration_max":     req.duration_max if req.duration_max is not None else 12,
             }
             if req.image_style:
                 pipeline_kwargs["image_style"] = req.image_style

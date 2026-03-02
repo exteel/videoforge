@@ -4,6 +4,85 @@
 
 ---
 
+## 2026-03-02 — №35 CLI/Batch duration gaps fixed
+
+### Gap 5 — pipeline.py CLI missing --duration-min/max
+- Fix: `_build_parser()` додані `--duration-min/max/--duration`; `main()` передає до `run_pipeline()`
+
+### Gap 6 — batch_runner.py: duration через весь ланцюг відсутній
+- Fix: `_process_one(duration_min, duration_max)` → `run_pipeline()`; `run_batch(duration_min, duration_max)` → `_process_one()`; CLI args → `run_batch()`
+
+### Файли: `pipeline.py`, `batch_runner.py`
+
+---
+
+## 2026-03-02 — №34 Pipeline param passthrough audit (4 gaps fixed)
+
+### Gaps знайдені та виправлені:
+
+**Gap 1 🔴 voice_id not wired (pipeline.py → generate_voices)**
+- `generate_voices()` не мав `voice_id_override` — голос UI ігнорувався (був `# TODO`)
+- Fix: `modules/03_voice_generator.py` — `voice_id_override: str | None = None` + `voice_id = voice_id_override or _get_voice_id(...)`
+- Fix: `pipeline.py` — `voice_id_override=voice_id or None`
+
+**Gap 2 🔴 master_prompt not wired (pipeline.py → generate_scripts)**
+- `generate_scripts()` не мав `master_prompt_path` — prompt selector UI ігнорувався
+- Fix: `modules/01_script_generator.py` — `master_prompt_path: str | None = None` + inject into `channel_config`
+- Fix: `pipeline.py` — `master_prompt_path=master_prompt or None`
+- Chain: `generate_scripts → channel_config override → _generate_one_variant → _build_system_prompt → _load_master_prompt` ✅
+
+**Gap 3 🟡 background_music default mismatch**
+- `PipelineRunRequest.background_music = True` vs `TranscribeRequest.background_music = False`
+- Auto-pipeline без музики; Fix: `backend/routes/transcriber.py` → `True`
+
+**Gap 4 🟢 no_ken_burns missing from UI** — без fix (minor, дефолт False = Ken Burns ON = правильно)
+
+### Файли:
+- `modules/03_voice_generator.py`, `modules/01_script_generator.py`, `pipeline.py`, `backend/routes/transcriber.py`
+
+---
+
+## 2026-03-02 — №33 Auto-pipeline duration gap fix
+
+### Проблема
+TranscriberPanel з увімкненим auto-pipeline запускав pipeline без `duration_min`/`duration_max` → завжди дефолт 8–12 хв.
+
+### Зміни
+- **`backend/routes/transcriber.py`**: `TranscribeRequest` — додані `duration_min: int | None` і `duration_max: int | None`; передаються в `pipeline_kwargs` (з дефолтами 8/12)
+- **`frontend/src/api.ts`**: `TranscribeRequest` interface — додані `duration_min?`, `duration_max?`
+- **`frontend/src/components/TranscriberPanel.tsx`**: state `durationMin=8`, `durationMax=12`; передаються в `api.transcribe.start()`; UI блок "Тривалість (хв)" з'являється тільки коли `autoPipeline=true`
+
+### Поведінка по режимах
+- **Auto-pipeline OFF**: source_dir → main pipeline form → всі налаштування з форми ✅
+- **Auto-pipeline ON**: duration_min/max з TranscriberPanel → pipeline ✅
+
+---
+
+## 2026-03-02 — №32 Prompt v2: section/IMAGE_PROMPT separation + all 4 pipeline fixes
+
+### prompts/master_script_v2.txt (final state)
+- SECTIONS і IMAGE_PROMPTs оголошені як 2 НЕЗАЛЕЖНІ структури
+- [SECTION N: Title] = наративна одиниця, довжина content-driven (80-400 слів), НЕ прив'язана до tier
+- [IMAGE_PROMPT:] = inline візуальний тег, розміщується всередині narration по word-count triggers:
+  - Tier 1 (0–3 хв, ~0–450 слів): кожні ~25 слів (~10с)
+  - Tier 2 (3–6 хв, ~450–900 слів): кожні ~50 слів (~20с)
+  - Tier 3 (6–15 хв, ~900–2250 слів): кожні ~150 слів (~60с)
+  - Tier 4 (15+ хв, ~2250+ слів): кожні ~280 слів (~2 хв)
+- Додано приклад: одна секція містить кілька IMAGE_PROMPTs (Tier 1) або один (Tier 3)
+- Quality checklist: "IMAGE_PROMPTs placed inline at word-count intervals"
+- "NOTE: These intervals are WORD-COUNT triggers, not section triggers"
+- config/channels/history.json: master_script_v1.txt → master_script_v2.txt
+
+### Всі 4 баги виправлено (готово до full pipeline test):
+1. ✅ Неправильна кількість картинок → v2 промпт генерує 31-49 IMAGE_PROMPTs (не 8 блоків)
+2. ✅ Тривалість відео → calibration table в v2 + [TARGET WORDS] в user prompt
+3. ✅ Рвана анімація → zoompan d=1:fps=30, -r 30 на input, без dynamic crop w/h
+4. ✅ Музика відсутня → libmp3lame для .mp3 output в mix_audio()
+
+**Commits:** `87e1a30` freq tiers, `f6224c9` Ken Burns+music, `ba966d0` v2 config, `ae48526` prompt fix, `4143c6c` section/image separation
+
+---
+
 ## 2026-03-02 — №31 Fix Ken Burns (zoompan fps=30) + fix music mixing codec
 
 ### utils/ffmpeg_utils.py — ken_burns()

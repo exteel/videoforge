@@ -125,6 +125,8 @@ export function TranscriberPanel({ onSelectDir }: Props) {
   const [quality, setQuality]       = useState('max')
   const [channel, setChannel]       = useState('config/channels/history.json')
   const [autoPipeline, setAutoPipeline] = useState(false)
+  const [durationMin, setDurationMin] = useState(8)
+  const [durationMax, setDurationMax] = useState(12)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError]   = useState('')
 
@@ -155,6 +157,8 @@ export function TranscriberPanel({ onSelectDir }: Props) {
           auto_pipeline: autoPipeline,
           channel,
           quality,
+          duration_min:  durationMin,
+          duration_max:  durationMax,
         })
         newJobs.push({
           job_id: res.job_id,
@@ -277,6 +281,37 @@ export function TranscriberPanel({ onSelectDir }: Props) {
                 </span>
               </div>
             </div>
+
+            {/* Duration range — visible only when auto-pipeline is ON */}
+            {autoPipeline && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400 shrink-0">Тривалість (хв):</span>
+                <span className="text-xs text-gray-500 shrink-0">від</span>
+                <input
+                  type="number" min="1" max="240" step="1"
+                  value={durationMin}
+                  onChange={e => {
+                    const v = Math.max(1, parseInt(e.target.value) || 1)
+                    setDurationMin(v)
+                    setDurationMax(prev => Math.max(prev, v))
+                  }}
+                  className="w-16 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
+                />
+                <span className="text-xs text-gray-500 shrink-0">до</span>
+                <input
+                  type="number" min="1" max="240" step="1"
+                  value={durationMax}
+                  onChange={e => {
+                    const v = Math.max(durationMin, parseInt(e.target.value) || durationMin)
+                    setDurationMax(v)
+                  }}
+                  className="w-16 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
+                />
+                <span className="text-xs text-gray-500">
+                  ≈ {durationMin * 140}–{durationMax * 150} слів
+                </span>
+              </div>
+            )}
 
             {formError && (
               <div className="text-xs text-red-300 bg-red-950 rounded p-2">{formError}</div>

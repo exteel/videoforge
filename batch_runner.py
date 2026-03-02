@@ -118,6 +118,8 @@ async def _process_one(
     budget_per_video: float | None,
     sem: asyncio.Semaphore,
     db_tracker: Any | None = None,
+    duration_min: int = 8,
+    duration_max: int = 12,
 ) -> VideoResult:
     """Run pipeline for one video, respecting the concurrency semaphore."""
     name = source_dir.name
@@ -149,6 +151,8 @@ async def _process_one(
                 budget=budget_per_video,
                 db_tracker=db_tracker,
                 db_video_id=vid_id,
+                duration_min=duration_min,
+                duration_max=duration_max,
             )
             elapsed = time.monotonic() - t0
             log.info("[BATCH] Done: %s  (%.1fs)", name, elapsed)
@@ -186,6 +190,8 @@ async def run_batch(
     budget_per_video: float | None = None,
     budget_total: float | None = None,
     db_path: str | None = None,
+    duration_min: int = 8,
+    duration_max: int = 12,
 ) -> BatchSummary:
     """
     Run VideoForge pipeline for all Transcriber output directories.
@@ -284,6 +290,8 @@ async def run_batch(
             budget_per_video=budget_per_video,
             sem=sem,
             db_tracker=db_tracker,
+            duration_min=duration_min,
+            duration_max=duration_max,
         )
         for d in pending
     ]
@@ -395,6 +403,18 @@ def main() -> None:
         "--no-skip-done", action="store_true",
         help="Reprocess videos that already have output/final.mp4",
     )
+    run_grp.add_argument(
+        "--duration-min", type=int, metavar="MIN", default=None, dest="duration_min",
+        help="Minimum target video duration in minutes for all videos (default: 8)",
+    )
+    run_grp.add_argument(
+        "--duration-max", type=int, metavar="MAX", default=None, dest="duration_max",
+        help="Maximum target video duration in minutes for all videos (default: 12)",
+    )
+    run_grp.add_argument(
+        "--duration", type=int, metavar="MIN",
+        help="Legacy: set both --duration-min and --duration-max to the same value",
+    )
 
     budget_grp = parser.add_argument_group("Budget")
     budget_grp.add_argument(
@@ -429,6 +449,16 @@ def main() -> None:
     if args.parallel < 1:
         parser.error("--parallel must be >= 1")
 
+    # ── Resolve duration range ─────────────────────────────────────────────────
+    if args.duration is not None:
+        duration_min_cli = args.duration
+        duration_max_cli = args.duration
+    else:
+        duration_min_cli = args.duration_min if args.duration_min is not None else 8
+        duration_max_cli = args.duration_max if args.duration_max is not None else 12
+    if duration_min_cli > duration_max_cli:
+        parser.error(f"--duration-min ({duration_min_cli}) must be <= --duration-max ({duration_max_cli})")
+
     load_env()
 
     log.info("Batch Runner starting")
@@ -461,6 +491,8 @@ def main() -> None:
             budget_per_video=args.budget_per_video,
             budget_total=args.budget_total,
             db_path=db_path,
+            duration_min=duration_min_cli,
+            duration_max=duration_max_cli,
         )
     )
 

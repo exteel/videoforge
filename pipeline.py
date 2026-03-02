@@ -394,6 +394,7 @@ async def run_pipeline(
             output_dir=proj,
             duration_min=duration_min,
             duration_max=duration_max,
+            master_prompt_path=master_prompt or None,
         )
 
         if not dry_run:
@@ -519,10 +520,10 @@ async def run_pipeline(
                 s_path,
                 channel_config_path,
                 lang=primary_lang,
+                voice_id_override=voice_id or None,
                 dry_run=dry_run,
                 skip_existing=True,
                 progress_callback=_voice_sub_cb,
-                # TODO: voice_id override — module 03 reads voice_id from channel_config
             )
 
             img_summary, voice_summary = await asyncio.gather(img_task, voice_task)
@@ -885,6 +886,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--lang", metavar="CODES",
         help="Comma-separated language codes for multilingual output (e.g. en,de,es)",
     )
+    quality_group.add_argument(
+        "--duration-min", type=int, metavar="MIN", default=None, dest="duration_min",
+        help="Minimum target video duration in minutes (default: 8)",
+    )
+    quality_group.add_argument(
+        "--duration-max", type=int, metavar="MAX", default=None, dest="duration_max",
+        help="Maximum target video duration in minutes (default: 12)",
+    )
+    quality_group.add_argument(
+        "--duration", type=int, metavar="MIN",
+        help="Legacy: set both --duration-min and --duration-max to the same value",
+    )
 
     # Mode flags
     mode_group = parser.add_argument_group("Execution Mode")
@@ -968,6 +981,17 @@ def main() -> None:
         if not langs:
             parser.error("--lang produced an empty language list")
 
+    # ── Resolve duration range ─────────────────────────────────────────────────
+    if args.duration is not None:
+        # Legacy --duration sets both min and max to same value
+        duration_min_cli = args.duration
+        duration_max_cli = args.duration
+    else:
+        duration_min_cli = args.duration_min if args.duration_min is not None else 8
+        duration_max_cli = args.duration_max if args.duration_max is not None else 12
+    if duration_min_cli > duration_max_cli:
+        parser.error(f"--duration-min ({duration_min_cli}) must be <= --duration-max ({duration_max_cli})")
+
     load_env()
 
     # ── Optional SQLite tracking ───────────────────────────────────────────────
@@ -1005,6 +1029,8 @@ def main() -> None:
                 script_path_override=script_path_override,
                 db_tracker=db_tracker,
                 db_video_id=db_video_id,
+                duration_min=duration_min_cli,
+                duration_max=duration_max_cli,
             )
         )
     except Exception as exc:

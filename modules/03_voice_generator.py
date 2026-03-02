@@ -221,6 +221,7 @@ async def generate_voices(
     channel_config_path: str | Path,
     *,
     lang: str | None = None,
+    voice_id_override: str | None = None,
     output_dir: str | Path | None = None,
     skip_existing: bool = True,
     dry_run: bool = False,
@@ -234,6 +235,7 @@ async def generate_voices(
         script_path: Path to script.json.
         channel_config_path: Path to channel config JSON.
         lang: Language code override (e.g. "de"). Default: channel config language.
+        voice_id_override: Override voice ID (bypasses channel config lookup).
         output_dir: Base directory for audio output. Default: script_path.parent.
         skip_existing: Skip blocks where .mp3 already exists (step caching).
         dry_run: Log plan without making API calls.
@@ -253,7 +255,7 @@ async def generate_voices(
 
     primary_lang = channel_config.get("language", "en")
     language     = lang or primary_lang
-    voice_id     = _get_voice_id(channel_config, language)
+    voice_id     = voice_id_override or _get_voice_id(channel_config, language)
 
     base_dir  = Path(output_dir) if output_dir else script_path.parent
     audio_dir = _audio_dir(base_dir, language, primary_lang)

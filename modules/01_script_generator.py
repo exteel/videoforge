@@ -730,6 +730,7 @@ async def generate_scripts(
     duration_min: int = 8,
     duration_max: int = 12,
     no_validate: bool = False,
+    master_prompt_path: str | None = None,
 ) -> list[Path]:
     """
     Generate script(s) from Transcriber output.
@@ -746,6 +747,7 @@ async def generate_scripts(
         duration_min: Minimum target video duration in minutes.
         duration_max: Maximum target video duration in minutes.
         no_validate: Skip hook validation step.
+        master_prompt_path: Override master prompt path (bypasses channel config).
 
     Returns:
         List of saved script.json paths (empty for dry_run).
@@ -754,6 +756,11 @@ async def generate_scripts(
 
     channel_config = load_channel_config(channel_config_path)
     source_data = load_transcriber_output(source_dir)
+
+    # Apply master_prompt_path override (bypasses channel config lookup)
+    if master_prompt_path:
+        channel_config = {**channel_config, "master_prompt_path": master_prompt_path}
+        log.info("Master prompt overridden: %s", master_prompt_path)
 
     # Resolve template
     if template == "auto":
