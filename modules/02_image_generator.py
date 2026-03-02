@@ -143,6 +143,15 @@ async def _validate_image(
 
 # ─── Per-block generation ─────────────────────────────────────────────────────
 
+def _image_output_name(block_id: str, idx: int) -> str:
+    """Return output filename for a block image at given index.
+
+    idx=0 → {block_id}.png   (primary — backward compatible)
+    idx>0 → {block_id}_{idx}.png  (additional images from image_prompts list)
+    """
+    return f"{block_id}.png" if idx == 0 else f"{block_id}_{idx}.png"
+
+
 async def _generate_one(
     block: dict[str, Any],
     images_dir: Path,
@@ -154,9 +163,13 @@ async def _generate_one(
     validate: bool,
     skip_existing: bool,
     max_retries: int,
+    idx: int = 0,  # image index: 0=primary ({block_id}.png), 1+= additional ({block_id}_N.png)
 ) -> ImageResult:
     """
-    Generate image for a single script block.
+    Generate one image for a script block.
+
+    idx=0 uses block["image_prompt"] (or image_prompts[0]).
+    idx>0 uses block["image_prompts"][idx] — additional images for v2 multi-prompt sections.
 
     Retry logic:
     - Attempt 1:   WaveSpeed, seed=42  → validate
@@ -164,18 +177,24 @@ async def _generate_one(
     - Any WaveSpeed exception → switch to VoidAI fallback for all remaining attempts
     - After max_retries+1 attempts: accept image regardless of validation score
     """
-    block_id   = block["id"]
-    order      = block["order"]
-    raw_prompt = block.get("image_prompt", "").strip()
+    block_id = block["id"]
+    order    = block["order"]
 
-    # Blocks with no image_prompt (CTA etc.) — skip silently
+    # Get the right prompt for this index
+    image_prompts_list = block.get("image_prompts", [])
+    if idx > 0 and idx < len(image_prompts_list):
+        raw_prompt = image_prompts_list[idx].strip()
+    else:
+        raw_prompt = block.get("image_prompt", "").strip()
+
+    # Blocks with no prompt (CTA etc.) — skip silently
     if not raw_prompt:
-        log.debug("Block %s: no image_prompt — skip", block_id)
+        log.debug("Block %s[%d]: no image_prompt — skip", block_id, idx)
         return ImageResult(block_id=block_id, order=order, path=None, prompt="", skipped=True)
 
     # Full prompt = block prompt + channel style suffix
     full_prompt = f"{raw_prompt}, {image_style}".strip(", ") if image_style else raw_prompt
-    out_path = images_dir / f"{block_id}.png"
+    out_path = images_dir / _image_output_name(block_id, idx)
 
     # Cache hit
     if skip_existing and out_path.exists() and out_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
@@ -322,30 +341,41 @@ async def generate_images(
     images_dir = Path(output_dir) if output_dir else script_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Only blocks that have an image_prompt
-    blocks_with_prompts = [b for b in blocks if b.get("image_prompt", "").strip()]
-    n_skippable = len(blocks) - len(blocks_with_prompts)
+    # Build generation jobs: (block, idx) pairs.
+    # For v2 scripts with image_prompts list → one job per entry.
+    # For v1 scripts with only image_prompt → one job (idx=0).
+    all_jobs: list[tuple[dict, int]] = []
+    for b in blocks:
+        prompts_list = b.get("image_prompts", [])
+        if prompts_list:
+            for i in range(len(prompts_list)):
+                all_jobs.append((b, i))
+        elif b.get("image_prompt", "").strip():
+            all_jobs.append((b, 0))
+
+    n_blocks_with_images = len({b["id"] for b, _ in all_jobs})
+    n_total_images = len(all_jobs)
 
     log.info(
-        "Script: %d blocks total | %d with image_prompt | %d skipped (no prompt)",
-        len(blocks), len(blocks_with_prompts), n_skippable,
+        "Script: %d blocks | %d unique blocks with images | %d total images to generate",
+        len(blocks), n_blocks_with_images, n_total_images,
     )
     log.info("Style: %s", (image_style[:80] + "...") if len(image_style) > 80 else image_style or "(none)")
     log.info("Size: %s | Validate: %s | Skip existing: %s", image_size, validate, skip_existing)
 
     if dry_run:
         n_existing = sum(
-            1 for b in blocks_with_prompts
-            if (images_dir / f"{b['id']}.png").exists()
-            and (images_dir / f"{b['id']}.png").stat().st_size >= MIN_FILE_SIZE_BYTES
+            1 for b, idx in all_jobs
+            if (images_dir / _image_output_name(b["id"], idx)).exists()
+            and (images_dir / _image_output_name(b["id"], idx)).stat().st_size >= MIN_FILE_SIZE_BYTES
         )
-        n_to_gen = len(blocks_with_prompts) - n_existing
+        n_to_gen = n_total_images - n_existing
         log.info(
             "[DRY RUN] Would generate %d images, skip %d existing | Est. cost: $%.3f",
             n_to_gen, n_existing, n_to_gen * 0.005,
         )
         return GenerationSummary(
-            total=len(blocks_with_prompts),
+            total=n_total_images,
             generated=0, skipped=0, failed=0, fallback_count=0,
             wavespeed_cost=0.0, voidai_cost=0.0, elapsed=0.0,
         )
@@ -356,7 +386,7 @@ async def generate_images(
     from clients.wavespeed_client import WaveSpeedClient  # noqa: PLC0415
 
     # ── Progress helper (reports 0-100% of image generation) ──
-    n_img_total = len(blocks_with_prompts)
+    n_img_total = n_total_images
     _img_done = [0]
 
     def _emit_img_progress(done: int) -> None:
@@ -385,8 +415,9 @@ async def generate_images(
                 validate=validate,
                 skip_existing=skip_existing,
                 max_retries=max_retries,
+                idx=idx,
             )
-            for b in blocks_with_prompts
+            for b, idx in all_jobs
         ]
 
         # Progress bar via tqdm if available
@@ -439,7 +470,7 @@ async def generate_images(
         log.warning("Failed blocks: %s", failed_ids)
 
     return GenerationSummary(
-        total=len(blocks_with_prompts),
+        total=n_total_images,
         generated=generated,
         skipped=skipped,
         failed=failed,

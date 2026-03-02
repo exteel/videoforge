@@ -128,7 +128,8 @@ class ScriptBlock(BaseModel):
     order: int
     type: BlockType
     narration: str
-    image_prompt: str = ""
+    image_prompt: str = ""                          # primary image prompt (image_prompts[0])
+    image_prompts: list[str] = Field(default_factory=list)  # all image prompts for this block
     animation: str = "zoom_in"
     timestamp_label: str = ""
     audio_duration: float | None = None
@@ -229,11 +230,11 @@ def _parse_llm_output(
     section_title: str = "Hook"
     section_type: BlockType = "intro"
     is_cta_block = False
-    image_prompt: str = ""
+    all_image_prompts: list[str] = []   # accumulates ALL [IMAGE_PROMPT:] in current section
     narration_lines: list[str] = []
 
     def flush() -> None:
-        nonlocal order, image_prompt, narration_lines, section_title, is_cta_block
+        nonlocal order, all_image_prompts, narration_lines, section_title, is_cta_block
 
         # Strip inline IMAGE_PROMPTs from narration (closed: [IMAGE_PROMPT: ...])
         raw_narration = "\n".join(narration_lines)
@@ -243,7 +244,7 @@ def _parse_llm_output(
         narration = re.sub(r"\[IMAGE_PROMPT:.*?(?=\n\n|\Z)", "", narration, flags=re.IGNORECASE | re.DOTALL).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
 
-        if not narration and not image_prompt:
+        if not narration and not all_image_prompts:
             narration_lines = []
             return
 
@@ -255,6 +256,7 @@ def _parse_llm_output(
         )
 
         actual_type: BlockType = "cta" if is_cta_block else section_type
+        primary_prompt = all_image_prompts[0] if all_image_prompts else ""
 
         blocks.append(
             ScriptBlock(
@@ -262,14 +264,15 @@ def _parse_llm_output(
                 order=order + 1,
                 type=actual_type,
                 narration=narration,
-                image_prompt=image_prompt,
+                image_prompt=primary_prompt,
+                image_prompts=list(all_image_prompts),  # copy so reset below doesn't mutate
                 animation=default_animation,
                 timestamp_label=section_title,
                 hook=hook_info,
             )
         )
         order += 1
-        image_prompt = ""
+        all_image_prompts = []
         narration_lines = []
 
     lines = raw.splitlines()
@@ -278,9 +281,8 @@ def _parse_llm_output(
     has_sections = bool(_SECTION_RE.search(raw))
 
     if not has_sections:
-        # Fallback: treat entire output as one block, extract image prompts
-        all_images = _IMAGE_INLINE_RE.findall(raw)
-        first_image = all_images[0].strip() if all_images else ""
+        # Fallback: treat entire output as one block, extract all image prompts
+        found_images = [img.strip() for img in _IMAGE_INLINE_RE.findall(raw) if img.strip()]
         narration = _IMAGE_INLINE_RE.sub("", raw).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
         blocks.append(
@@ -289,7 +291,8 @@ def _parse_llm_output(
                 order=1,
                 type="intro",
                 narration=narration,
-                image_prompt=first_image,
+                image_prompt=found_images[0] if found_images else "",
+                image_prompts=found_images,
                 animation=default_animation,
                 timestamp_label="Hook",
                 hook=HookInfo(type=hook_type),
@@ -326,19 +329,19 @@ def _parse_llm_output(
                 continue
 
             # [IMAGE_PROMPT: ...] standalone line (closed — has ] on same line)
+            # Collect ALL prompts per section (not just the first — v2 prompt has multiple per section)
             img_m = _IMAGE_LINE_RE.match(stripped)
             if img_m:
-                if not image_prompt:
-                    image_prompt = img_m.group(1).strip()
+                all_image_prompts.append(img_m.group(1).strip())
                 # Skip adding to narration — it's a visual directive
                 continue
 
             # Unclosed [IMAGE_PROMPT: tag (line starts with tag but has no closing ])
             # LLM sometimes omits ] or the response is truncated mid-tag
             if re.match(r"^\[IMAGE_PROMPT:", stripped, re.IGNORECASE) and "]" not in stripped:
-                if not image_prompt:
-                    # Salvage whatever content is there
-                    image_prompt = re.sub(r"^\[IMAGE_PROMPT:\s*", "", stripped, flags=re.IGNORECASE).strip(" ,")
+                salvaged = re.sub(r"^\[IMAGE_PROMPT:\s*", "", stripped, flags=re.IGNORECASE).strip(" ,")
+                if salvaged:
+                    all_image_prompts.append(salvaged)
                 # Never add raw tag text to narration
                 continue
 

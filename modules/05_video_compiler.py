@@ -155,24 +155,46 @@ def _find_music_track(music_dir: str | Path, random_pick: bool = True) -> Path |
     return random.choice(tracks) if random_pick else tracks[0]
 
 
-def _get_block_image(
+def _get_block_images(
     block: dict[str, Any],
     images_dir: Path,
     prev_image: Path | None,
-) -> Path | None:
+) -> list[Path]:
     """
-    Return image path for a block.
+    Return list of image paths for a block.
 
-    Falls back to the previous block's image (e.g. for CTA blocks with no image_prompt).
+    Checks primary {block_id}.png, then additional {block_id}_1.png, {block_id}_2.png, etc.
+    (additional images are generated from image_prompts[1:] by module 02).
+
+    Falls back to [prev_image] if no images found (e.g. CTA blocks without image_prompt).
     """
-    img = images_dir / f"{block['id']}.png"
-    if img.exists() and img.stat().st_size >= MIN_IMAGE_BYTES:
-        return img
-    # Hold previous image for blocks without generated images
+    block_id = block["id"]
+    images: list[Path] = []
+
+    # Primary image (always {block_id}.png — backward compatible)
+    primary = images_dir / f"{block_id}.png"
+    if primary.exists() and primary.stat().st_size >= MIN_IMAGE_BYTES:
+        images.append(primary)
+
+    # Additional images from image_prompts[1:] ({block_id}_1.png, {block_id}_2.png, …)
+    idx = 1
+    while True:
+        extra = images_dir / f"{block_id}_{idx}.png"
+        if extra.exists() and extra.stat().st_size >= MIN_IMAGE_BYTES:
+            images.append(extra)
+            idx += 1
+        else:
+            break
+
+    if images:
+        return images
+
+    # Fallback: hold previous block's image
     if prev_image and prev_image.exists():
-        log.debug("Block %s: no image — holding previous: %s", block["id"], prev_image.name)
-        return prev_image
-    return None
+        log.debug("Block %s: no image — holding previous: %s", block_id, prev_image.name)
+        return [prev_image]
+
+    return []
 
 
 def _animation_for_block(
@@ -412,10 +434,10 @@ def compile_video(
             _kb_idx = 0                     # inter-block animation cycle counter
 
             for i, block in enumerate(voiced_blocks, 1):
-                duration   = float(block["audio_duration"])
-                image_path = _get_block_image(block, images_dir, prev_image)
+                duration    = float(block["audio_duration"])
+                image_list  = _get_block_images(block, images_dir, prev_image)
 
-                if image_path is None:
+                if not image_list:
                     log.warning("Block %s: no image — creating black frame", block["id"])
                     clip_path = tmp / f"clip_{block['id']}_black{BLOCK_VIDEO_EXT}"
                     from utils.ffmpeg_utils import _run  # noqa: PLC0415
@@ -440,29 +462,34 @@ def compile_video(
                         _kb_idx += 1
                         clip_path = tmp / f"clip_{block['id']}_00{BLOCK_VIDEO_EXT}"
                         ken_burns(
-                            image_path, clip_path,
+                            image_list[0], clip_path,
                             duration=segments[0],
                             animation=animation,
                             resolution=resolution,
                         )
                         block_videos.append(clip_path)
                         log.info(
-                            "  [%d/%d] %s (%.1fs, %s)",
-                            i, n_blocks, block["id"], duration, animation,
+                            "  [%d/%d] %s (%.1fs, %s, %d img)",
+                            i, n_blocks, block["id"], duration, animation, len(image_list),
                         )
 
                     else:
-                        # Long block — 10s zoom_in/zoom_out loop, seamlessly hard-cut:
+                        # Long block — 10s zoom_in/zoom_out loop, seamlessly hard-cut.
+                        # If the block has multiple images (from image_prompts[1:]),
+                        # they cycle across segments: seg 0→img0, seg 1→img1, seg 2→img2, …
+                        # giving the viewer a new image every 10s as intended by v2 prompt.
+                        #
+                        # Seamless zoom chain (identical zoompan z/x/y at hard-cut boundary):
                         #   zoom_in  last:  z≈1.15, x=iw/2-iw/1.15/2  (centered)
                         #   zoom_out first: z=1.15, x=iw/2-iw/1.15/2  ← identical ✓
-                        #   zoom_out last:  z≈1.0,  x=0                (full frame)
-                        #   zoom_in  first: z=1.0,  x=0                ← identical ✓
                         seg_clips: list[Path] = []
                         for seg_idx, seg_dur in enumerate(segments):
                             within_anim = _WITHIN_BLOCK_KB_CYCLE[seg_idx % len(_WITHIN_BLOCK_KB_CYCLE)]
+                            # Cycle through available images (wraps if fewer images than segments)
+                            seg_image = image_list[seg_idx % len(image_list)]
                             seg_path = tmp / f"clip_{block['id']}_{seg_idx:02d}{BLOCK_VIDEO_EXT}"
                             ken_burns(
-                                image_path, seg_path,
+                                seg_image, seg_path,
                                 duration=seg_dur,
                                 animation=within_anim,
                                 resolution=resolution,
@@ -475,12 +502,12 @@ def compile_video(
                         block_videos.append(block_clip)
                         _kb_idx += 1
                         log.info(
-                            "  [%d/%d] %s (%.1fs → %d segments, zoom_in↔zoom_out)",
-                            i, n_blocks, block["id"], duration, len(segments),
+                            "  [%d/%d] %s (%.1fs → %d segs, %d imgs, zoom_in↔zoom_out)",
+                            i, n_blocks, block["id"], duration, len(segments), len(image_list),
                         )
 
-                if image_path:
-                    prev_image = image_path
+                if image_list:
+                    prev_image = image_list[0]   # use primary for continuity fallback
                 elapsed_video_time += duration
                 _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
 
