@@ -33,7 +33,72 @@
 
 ### Build: ✓ 40 modules (було 39), TypeScript чистий
 
-**Далі:** тест script validator
+**Далі:** тест script validator → виявлено баґ → fix
+
+---
+
+## 2026-03-02 — Validator improvements (01b + 02b round 2)
+
+### modules/01b_script_validator.py — нові перевірки та покращений auto-fix
+
+**Нові структурні перевірки (no API cost):**
+- `empty_narration` CRITICAL — блок без тексту narration
+- `other_tag_in_narration` CRITICAL — `[SECTION`, `[CTA_SUBSCRIBE` теги в narration (parser artifact)
+- `short_block` WARNING — narration < 15 слів (placeholder або обрізано)
+- `too_long` WARNING — > 2500 слів (~18 хв) → Possible duplicate content
+- `too_short` CRITICAL — < 80 слів всього → generation failure
+- `duplicate_section` WARNING — однакові `timestamp_label` після нормалізації (the/a/an + пунктуація) → doubled LLM output
+
+**Покращено `cut_off` перевірку:** тепер також перевіряє передостанній блок якщо останній — CTA/outro.
+
+**Покращено `_fix_cut_off`:**
+- Передає `title + niche + language` (раніше не передавав)
+- Останні 5 блоків замість 3
+- Вимога завершувати narration пунктуацією
+- `max_tokens=3000` (було 2000)
+
+**Post-fix re-check:** після всіх авто-фіксів запускає `_structural_checks()` знову → логує які critical issues залишились → `result.ok` оновлюється відповідно.
+
+### modules/02b_image_validator.py — pre-flight + fallback + per-block threshold
+
+**Pre-flight перевірка (до scoring):**
+- `MIN_IMAGE_BYTES = 10_240` — зображення < 10KB → `skipped=True, skip_reason=...`
+- Missing image → `skipped=True, skip_reason="Image file not found"`
+- `ImageScore.skipped`, `ImageScore.skip_reason` — нові поля
+- `ImageValidationResult.skipped` — лічильник пропущених
+- CTA блоки без `image_prompt` — тихо пропускаються (не рахуються у skipped)
+
+**Per-block threshold:** `eff_threshold = threshold - 0.5` для `intro/outro` блоків (atmospheric → менш строга оцінка).
+
+**WaveSpeed → VoidAI fallback:** якщо WaveSpeed генерація провалилась, `_voidai_generate()` використовує `gpt-image-1.5` як fallback.
+
+**`improved_prompt` → script.json:** після всіх рескорингів vision model's improved_prompt зберігається назад у `image_prompt` в script.json.
+
+### Тест на реальному проекті "Why Confidence Is the Only Skill You Actually Need"
+- Script validator: 6 issues (3 critical, 3 warnings) — correctly found `too_long` (5356 слів, ~38 хв) і `duplicate_section` ("Fake It Until You Become It")
+- Image validator pre-flight dry-run: block_007 (CTA) правильно пропущено; block_001 (intro) threshold=6.5; missing+tiny image detection confirmed OK
+- git commit: в процесі
+
+---
+
+## 2026-03-02 — Fix: embedded [IMAGE_PROMPT:] tags у narration
+
+**Причина:** LLM іноді виводить `[IMAGE_PROMPT: content` без закриваючого `]` (обрізаний output або помилка форматування). Парсер мав два регекспи — обидва потребують `]` → незакриті теги потрапляли в narration і озвучувались TTS.
+
+### modules/01_script_generator.py
+- **flush()**: після `_IMAGE_INLINE_RE.sub()` додано `re.sub(r"\[IMAGE_PROMPT:.*?(?=\n\n|\Z)", "", narration, DOTALL)` — зупиняється перед `\n\n`, зберігає текст після параграфу
+- **Line loop**: нова гілка — якщо рядок стартує з `[IMAGE_PROMPT:` без `]` → salvage у `image_prompt` (якщо порожній), `continue` (не додавати в narration)
+
+### modules/01b_script_validator.py
+- 3 нові regex: `_IMAGE_TAG_IN_NARRATION_RE`, `_UNCLOSED_IMAGE_TAG_RE` (зупиняється на `\n\n`), `_CLOSED_IMAGE_INLINE_RE`
+- `_structural_checks()`: новий `bad_narration` → CRITICAL (блок містить `[IMAGE_PROMPT:` в narration)
+- **Fix 0** (без API): очищає narration, salvage image_prompt з тегу якщо відсутній; запускається до cut_off/bad_prompt fixes
+- Тест: block з тегом на початку → текст після `\n\n` збережено ✓; block з тегом в кінці → текст перед тегом збережено ✓
+
+### Результат на реальному проекті
+- До: `2 issues (1 critical)` — cut_off тільки
+- Після: `4 issues (3 critical)` — cut_off + block_011 + block_014 bad_narration + duplicate_prompt
+- git: `cd5da69`
 
 ---
 

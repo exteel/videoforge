@@ -49,8 +49,15 @@ WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3"
 WS_T2I_PATH    = "/wavespeed-ai/z-image/turbo"
 
 SCORE_MODEL    = "gpt-4.1"       # vision model
+VOIDAI_IMG_MODEL = "gpt-image-1.5"  # fallback image gen when WaveSpeed fails
 DEFAULT_THRESHOLD = 7.0
 DEFAULT_MAX_ATTEMPTS = 2
+
+# Minimum PNG file size — anything smaller is a placeholder or corrupted image
+MIN_IMAGE_BYTES = 10_240  # 10 KB
+
+# Block types that are more atmospheric — allow slightly lower threshold
+ATMOSPHERIC_TYPES = frozenset(["intro", "outro"])
 
 WS_POLL_INTERVAL = 2.0           # seconds between WaveSpeed polls
 WS_POLL_MAX      = 90            # max polls (3 minutes)
@@ -67,6 +74,8 @@ class ImageScore:
     improved_prompt: str = ""
     regenerated: bool = False
     attempts: int = 0
+    skipped: bool = False       # True if image was missing or too small (not scored)
+    skip_reason: str = ""       # reason for skip
 
 
 @dataclass
@@ -75,6 +84,7 @@ class ImageValidationResult:
     ok_count: int = 0
     regenerated: int = 0
     failed: int = 0
+    skipped: int = 0            # images that couldn't be scored (missing / corrupted)
     scores: list[ImageScore] = field(default_factory=list)
     elapsed: float = 0.0
 
@@ -84,6 +94,7 @@ class ImageValidationResult:
             "ok": self.ok_count,
             "regenerated": self.regenerated,
             "failed": self.failed,
+            "skipped": self.skipped,
             "elapsed": round(self.elapsed, 2),
             "scores": [
                 {
@@ -93,6 +104,8 @@ class ImageValidationResult:
                     "reason": s.reason,
                     "regenerated": s.regenerated,
                     "attempts": s.attempts,
+                    "skipped": s.skipped,
+                    "skip_reason": s.skip_reason,
                 }
                 for s in self.scores
             ],
@@ -228,6 +241,41 @@ async def _wavespeed_generate(
     return False  # timeout
 
 
+async def _voidai_generate(
+    prompt: str,
+    output_path: Path,
+    api_key: str,
+) -> bool:
+    """
+    VoidAI image gen fallback (gpt-image-1.5) when WaveSpeed fails.
+    Returns True on success.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{VOIDAI_BASE}/images/generations",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": VOIDAI_IMG_MODEL,
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": "1024x576",
+                    "response_format": "b64_json",
+                },
+            )
+            resp.raise_for_status()
+            b64 = resp.json()["data"][0]["b64_json"]
+            import base64 as _b64
+            output_path.write_bytes(_b64.b64decode(b64))
+            return True
+    except Exception as exc:
+        log.warning("VoidAI image fallback failed: %s", exc)
+        return False
+
+
 # ─── Main validator ───────────────────────────────────────────────────────────
 
 async def validate_and_fix_images(
@@ -275,21 +323,67 @@ async def validate_and_fix_images(
             except Exception:
                 pass
 
-    # ── Collect blocks that have generated images ──
+    # ── Load script ──
     script = json.loads(script_path.read_text(encoding="utf-8"))
-    blocks = [
-        b for b in script.get("blocks", [])
-        if (images_dir / f"{b['id']}.png").exists()
-    ]
+    all_blocks = script.get("blocks", [])
 
-    if not blocks:
+    # ── Pre-flight: detect missing / corrupted images ──
+    result_pre = ImageValidationResult()
+    pre_skipped: list[ImageScore] = []
+    blocks_to_score: list[dict] = []
+
+    for b in all_blocks:
+        bid       = b.get("id", "")
+        btype     = b.get("type", "section")
+        has_prompt = bool((b.get("image_prompt") or "").strip())
+        img_path  = images_dir / f"{bid}.png"
+
+        # CTA blocks with no image prompt are expected — skip silently
+        if btype == "cta" and not has_prompt:
+            continue
+
+        if not img_path.exists():
+            log.warning("Missing image: %s.png (block %s)", bid, btype)
+            pre_skipped.append(ImageScore(
+                block_id=bid, score=0.0, ok=False,
+                skipped=True, skip_reason="Image file not found — generation may have failed",
+            ))
+            continue
+
+        img_size = img_path.stat().st_size
+        if img_size < MIN_IMAGE_BYTES:
+            log.warning(
+                "Corrupted/tiny image: %s.png (%d bytes < %d KB minimum)",
+                bid, img_size, MIN_IMAGE_BYTES // 1024,
+            )
+            pre_skipped.append(ImageScore(
+                block_id=bid, score=0.0, ok=False,
+                skipped=True,
+                skip_reason=f"Image too small ({img_size} bytes) — likely placeholder or generation error",
+            ))
+            continue
+
+        blocks_to_score.append(b)
+
+    if pre_skipped:
+        log.warning(
+            "Pre-flight: %d image(s) missing or corrupted — these blocks will show as failed",
+            len(pre_skipped),
+        )
+
+    blocks = blocks_to_score
+
+    if not blocks and not pre_skipped:
         log.warning("No images found in %s — skipping image validation", images_dir)
         return ImageValidationResult(elapsed=time.monotonic() - t0)
 
-    result = ImageValidationResult(total=len(blocks))
+    result = ImageValidationResult(total=len(blocks) + len(pre_skipped))
+    result.skipped = len(pre_skipped)
+    result.scores  = pre_skipped  # pre-populate with skipped entries
+
     log.info(
-        "Image validation: scoring %d images (threshold=%.0f/10, model=%s)",
-        len(blocks), threshold, SCORE_MODEL,
+        "Image validation: scoring %d images (threshold=%.0f/10, model=%s, skipped=%d)",
+        len(blocks), threshold, SCORE_MODEL, len(pre_skipped),
     )
     _emit(f"Scoring {len(blocks)} images…", 5.0)
 
@@ -300,26 +394,30 @@ async def validate_and_fix_images(
     # ── Score all images concurrently ──
     async def _score_one(block: dict) -> ImageScore:
         bid       = block["id"]
+        btype     = block.get("type", "section")
         img_path  = images_dir / f"{bid}.png"
         narration = (block.get("narration") or "")[:400]
         prompt    = (block.get("image_prompt") or "")
+        # Intro/outro blocks are more atmospheric — allow slightly lower threshold
+        eff_threshold = threshold - 0.5 if btype in ATMOSPHERIC_TYPES else threshold
         try:
             score, reason, improved = await _score_image(
                 bid, img_path, narration, prompt, voidai_key, score_sem,
             )
         except Exception as exc:
             log.warning("Failed to score %s: %s", bid, exc)
-            # On scoring failure, keep the image
+            # On scoring failure, keep the image as-is
             return ImageScore(block_id=bid, score=10.0, ok=True, reason=f"Scoring failed: {exc}")
 
-        log.info("  %s: score=%.0f %s", bid, score, "✓" if score >= threshold else "✗ regen")
+        ok = score >= eff_threshold
+        log.info("  %s [%s]: score=%.0f (thresh=%.1f) %s", bid, btype, score, eff_threshold, "✓" if ok else "✗ regen")
         return ImageScore(
-            block_id=bid, score=score, ok=score >= threshold,
+            block_id=bid, score=score, ok=ok,
             reason=reason, improved_prompt=improved,
         )
 
     scored_list = await asyncio.gather(*[_score_one(b) for b in blocks])
-    result.scores = list(scored_list)
+    result.scores.extend(scored_list)  # pre_skipped already in result.scores
 
     ok_scores  = [s for s in scored_list if s.ok]
     bad_scores = [s for s in scored_list if not s.ok]
@@ -336,9 +434,9 @@ async def validate_and_fix_images(
         _emit("All images OK ✓", 100.0)
         return result
 
-    if not ws_key:
+    if not ws_key and not voidai_key:
         log.warning(
-            "WAVESPEED_API_KEY not set — cannot regenerate %d bad images", len(bad_scores)
+            "No image API keys set — cannot regenerate %d bad images", len(bad_scores)
         )
         result.failed = len(bad_scores)
         result.elapsed = time.monotonic() - t0
@@ -350,22 +448,34 @@ async def validate_and_fix_images(
     async def _regen_one(image_score: ImageScore, attempt: int = 1) -> None:
         bid      = image_score.block_id
         block    = blocks_by_id.get(bid, {})
+        btype    = block.get("type", "section")
         img_path = images_dir / f"{bid}.png"
         prompt   = image_score.improved_prompt or block.get("image_prompt", "")
         full_prompt = f"{prompt}, {image_style}"
+        eff_threshold = threshold - 0.5 if btype in ATMOSPHERIC_TYPES else threshold
 
         log.info(
             "  Regenerating %s (score=%.0f, attempt=%d): %s…",
             bid, image_score.score, attempt, prompt[:50],
         )
-        success = await _wavespeed_generate(full_prompt, img_path, ws_key, regen_sem)
 
-        if not success:
-            log.warning("  WaveSpeed failed for %s (attempt %d)", bid, attempt)
-            image_score.attempts = attempt
-            return
+        # Try WaveSpeed first; fall back to VoidAI if WaveSpeed fails or key missing
+        success = False
+        if ws_key:
+            success = await _wavespeed_generate(full_prompt, img_path, ws_key, regen_sem)
+            if not success:
+                log.warning("  WaveSpeed failed for %s (attempt %d) — trying VoidAI fallback", bid, attempt)
+
+        if not success and voidai_key:
+            success = await _voidai_generate(full_prompt, img_path, voidai_key)
+            if success:
+                log.info("  VoidAI fallback succeeded for %s", bid)
 
         image_score.attempts = attempt
+
+        if not success:
+            log.warning("  All image gen attempts failed for %s (attempt %d)", bid, attempt)
+            return
 
         # Re-score the new image
         narration = (block.get("narration") or "")[:400]
@@ -374,11 +484,11 @@ async def validate_and_fix_images(
                 bid, img_path, narration, prompt, voidai_key, score_sem,
             )
             log.info("  %s: rescore=%.0f (was %.0f)", bid, new_score, image_score.score)
-            image_score.score          = new_score
-            image_score.reason         = new_reason
+            image_score.score           = new_score
+            image_score.reason          = new_reason
             image_score.improved_prompt = new_improved
-            image_score.ok             = new_score >= threshold
-            image_score.regenerated    = True
+            image_score.ok              = new_score >= eff_threshold
+            image_score.regenerated     = True
 
             # Second attempt if still bad
             if not image_score.ok and attempt < max_attempts:
@@ -400,11 +510,29 @@ async def validate_and_fix_images(
         else:
             result.failed += 1
 
+    # ── Save improved_prompt back to script.json (helps future regenerations) ──
+    prompt_updates = 0
+    blocks_in_script = {b["id"]: b for b in script.get("blocks", [])}
+    for s in result.scores:
+        if s.skipped or not s.improved_prompt:
+            continue
+        block = blocks_in_script.get(s.block_id)
+        if block and s.improved_prompt != block.get("image_prompt", ""):
+            block["image_prompt"] = s.improved_prompt
+            prompt_updates += 1
+    if prompt_updates:
+        script["blocks"] = list(blocks_in_script.values())
+        script_path.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("Updated %d image_prompt(s) in script.json with improved versions", prompt_updates)
+
+    # Add pre_skipped as failed
+    result.failed += len(pre_skipped)
+
     result.elapsed = time.monotonic() - t0
     _emit("Image validation complete", 100.0)
     log.info(
-        "Image validation done (%.1fs): %d OK, %d regenerated, %d failed",
-        result.elapsed, result.ok_count, result.regenerated, result.failed,
+        "Image validation done (%.1fs): %d OK, %d regenerated, %d failed, %d skipped",
+        result.elapsed, result.ok_count, result.regenerated, result.failed, result.skipped,
     )
     return result
 

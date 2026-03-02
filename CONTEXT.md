@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-02 12:00
+Останнє оновлення: 2026-03-02 14:00
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -50,9 +50,11 @@
 - [x] Оптимізації: channel_config кешування, duration via wpm, validator costs, image_url в review data
 
 - [x] №27 Browser push notifications (Notification API — useNotifications hook, 🔔 navbar bell, review/done/error events)
+- [x] Fix: embedded [IMAGE_PROMPT:] tags у narration (parser + validator, no API cost cleanup)
+- [x] Validator improvements (01b + 02b round 2): empty_narration, other_tag_in_narration, duplicate_section, too_long/short, short_block, post-fix re-check, fix_cut_off з title+niche+5 blocks, per-block threshold (intro/outro -0.5), pre-flight missing/tiny image, WaveSpeed→VoidAI fallback, improved_prompt→script.json
 
 ## Поточний стан
-Browser push notifications готові. Всі заплановані фічі реалізовані.
+Всі фічі та баги реалізовані/виправлені. Останнє: запустити реальний pipeline end-to-end.
 
 ## Відомі баги
 (немає)

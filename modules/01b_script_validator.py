@@ -51,6 +51,18 @@ _IMAGE_TAG_IN_NARRATION_RE = re.compile(r"\[IMAGE_PROMPT:", re.IGNORECASE)
 _UNCLOSED_IMAGE_TAG_RE    = re.compile(r"\[IMAGE_PROMPT:\s*(.*?)(?=\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 _CLOSED_IMAGE_INLINE_RE   = re.compile(r"\[IMAGE_PROMPT:\s*(.+?)\]", re.IGNORECASE | re.DOTALL)
 
+# Other parser artifact tags that may bleed into narration
+_OTHER_TAG_IN_NARRATION_RE = re.compile(
+    r"\[(SECTION\s+\d+|CTA_SUBSCRIBE_(?:MID|FINAL)|HOOK\s+TYPE|IMAGE\s+PROMPT)\b",
+    re.IGNORECASE,
+)
+
+# Script length thresholds (in total word count across all narrations)
+TOO_LONG_WORDS  = 2500   # >2500 words ≈ >18 min @ 140 wpm → warning
+TOO_SHORT_WORDS = 80     # <80 total words → script is basically empty
+# Per-block thresholds
+BLOCK_SHORT_WORDS = 15   # narration with <15 words → likely placeholder
+
 _GENERIC_RE = re.compile(
     r"^(abstract\s+(light|concept|background|theme|imagery)|"
     r"philosophical\s+(concept|imagery)|"
@@ -134,39 +146,102 @@ def _structural_checks(blocks: list[dict[str, Any]]) -> list[ScriptIssue]:
             reason="No CTA/outro block found in script",
         ))
 
-    # ── Cut-off check: last narration ends abruptly ──
-    last = blocks[-1]
-    narration = (last.get("narration") or "").strip()
-    if narration:
-        ends_with_punct = narration.endswith((".", "!", "?", "…"))
-        words = narration.split()
-        last_word = re.sub(r"[^\w]", "", words[-1]).lower() if words else ""
-        if not ends_with_punct or last_word in _CONNECTOR_WORDS:
-            issues.append(ScriptIssue(
-                type="cut_off",
-                block_id=last.get("id", ""),
-                severity="critical",
-                reason=f"Script ends abruptly: '…{narration[-80:]}'",
-            ))
+    # ── Cut-off check: last NON-CTA block ends abruptly ──
+    # Check the final block; also scan all blocks for internal cut-offs (mid-script truncation)
+    check_cutoff = [blocks[-1]]
+    # Also check the block just before the CTA if it's the penultimate
+    if len(blocks) >= 2 and blocks[-1].get("type") in ("cta", "outro"):
+        check_cutoff.append(blocks[-2])
+    for blk in check_cutoff:
+        narration = (blk.get("narration") or "").strip()
+        if narration:
+            ends_with_punct = narration.endswith((".", "!", "?", "…"))
+            words = narration.split()
+            last_word = re.sub(r"[^\w]", "", words[-1]).lower() if words else ""
+            if not ends_with_punct or last_word in _CONNECTOR_WORDS:
+                issues.append(ScriptIssue(
+                    type="cut_off",
+                    block_id=blk.get("id", ""),
+                    severity="critical",
+                    reason=f"Block ends abruptly: '…{narration[-80:]}'",
+                ))
 
-    # ── Embedded [IMAGE_PROMPT:] tag in narration (parser artifact) ──
+    # ── Per-block narration quality checks ──
     for block in blocks:
-        bid = block.get("id", "")
+        bid  = block.get("id", "")
         narr = (block.get("narration") or "").strip()
+
+        # Empty narration after cleaning
+        if not narr and block.get("type") not in ("cta",):
+            issues.append(ScriptIssue(
+                type="empty_narration", block_id=bid, severity="critical",
+                reason="Block has no narration text",
+            ))
+            continue
+
+        # Parser artifact tags in narration ([IMAGE_PROMPT:], [SECTION], [CTA_SUBSCRIBE])
         if _IMAGE_TAG_IN_NARRATION_RE.search(narr):
             issues.append(ScriptIssue(
-                type="bad_narration",
-                block_id=bid,
-                severity="critical",
+                type="bad_narration", block_id=bid, severity="critical",
                 reason="Narration contains raw [IMAGE_PROMPT:] tag — parser artifact, will be read aloud by TTS",
             ))
+        elif _OTHER_TAG_IN_NARRATION_RE.search(narr):
+            m = _OTHER_TAG_IN_NARRATION_RE.search(narr)
+            tag = m.group(0) if m else "unknown tag"
+            issues.append(ScriptIssue(
+                type="bad_narration", block_id=bid, severity="critical",
+                reason=f"Narration contains raw parser tag '{tag}' — will be read aloud by TTS",
+            ))
+
+        # Too-short narration (likely placeholder or truncated)
+        word_count = len(narr.split())
+        if narr and word_count < BLOCK_SHORT_WORDS and block.get("type") not in ("cta",):
+            issues.append(ScriptIssue(
+                type="short_block", block_id=bid, severity="warning",
+                reason=f"Narration too short ({word_count} words) — may be truncated or placeholder",
+            ))
+
+    # ── Script-level length check ──
+    total_words = sum(len((b.get("narration") or "").split()) for b in blocks)
+    if total_words > TOO_LONG_WORDS:
+        est_min = round(total_words / 140, 0)
+        issues.append(ScriptIssue(
+            type="too_long", block_id="",
+            severity="warning",
+            reason=f"Script is {total_words} words (~{int(est_min)} min) — YouTube optimal is 8-15 min (1100-2100 words). Possible duplicate content.",
+        ))
+    elif total_words < TOO_SHORT_WORDS:
+        issues.append(ScriptIssue(
+            type="too_short", block_id="", severity="critical",
+            reason=f"Script has only {total_words} words total — likely generation failure",
+        ))
+
+    # ── Duplicate section titles (strong signal of doubled LLM output) ──
+    seen_labels: dict[str, str] = {}  # normalized_label → block_id
+    for block in blocks:
+        bid   = block.get("id", "")
+        label = (block.get("timestamp_label") or "").strip().lower()
+        if not label or label in ("hook", "subscribe", "intro", "outro"):
+            continue
+        # Normalize: remove "the", "a", extra spaces, punctuation
+        norm = re.sub(r"\b(the|a|an)\b", "", label)
+        norm = re.sub(r"[^\w\s]", "", norm).strip()
+        if norm in seen_labels:
+            issues.append(ScriptIssue(
+                type="duplicate_section",
+                block_id=bid,
+                severity="warning",
+                reason=f"Section title '{block.get('timestamp_label')}' duplicates block {seen_labels[norm]} — possible doubled LLM output",
+            ))
+        else:
+            seen_labels[norm] = bid
 
     # ── Image prompt checks ──
-    seen: dict[str, str] = {}  # prompt_key → block_id
+    seen_prompts: dict[str, str] = {}  # prompt_key → block_id
     for block in blocks:
-        bid = block.get("id", "")
+        bid    = block.get("id", "")
         prompt = (block.get("image_prompt") or "").strip()
-        narr = (block.get("narration") or "").strip()
+        narr   = (block.get("narration") or "").strip()
 
         # CTA blocks don't need images
         if block.get("type") in ("cta",):
@@ -194,13 +269,13 @@ def _structural_checks(blocks: list[dict[str, Any]]) -> list[ScriptIssue]:
 
         if prompt:
             key = prompt.lower()[:80]
-            if key in seen:
+            if key in seen_prompts:
                 issues.append(ScriptIssue(
                     type="duplicate_prompt", block_id=bid, severity="warning",
-                    reason=f"Duplicate of block {seen[key]}: '{prompt[:60]}'",
+                    reason=f"Duplicate of block {seen_prompts[key]}: '{prompt[:60]}'",
                 ))
             else:
-                seen[key] = bid
+                seen_prompts[key] = bid
 
     return issues
 
@@ -238,42 +313,57 @@ async def _llm(
 
 async def _fix_cut_off(script: dict[str, Any], image_style: str) -> list[dict[str, Any]]:
     """Generate continuation blocks for a cut-off script (adds synthesis + CTA)."""
-    blocks = script.get("blocks", [])
+    blocks  = script.get("blocks", [])
+    title   = script.get("title", "Unknown")
+    niche   = script.get("niche", "")
+    language = script.get("language", "en")
+
+    # Pass last 5 blocks for richer context (was 3)
+    context_blocks = blocks[-5:] if len(blocks) >= 5 else blocks
     tail = "\n\n".join(
-        f"[{b.get('type', 'section')} — {b.get('id', '')}]\n{(b.get('narration') or '')[:300]}"
-        for b in blocks[-3:]
+        f"[{b.get('type', 'section').upper()} — {b.get('timestamp_label', b.get('id', ''))}]\n"
+        f"{(b.get('narration') or '')[:400]}"
+        for b in context_blocks
     )
-    prompt = f"""A video script was cut off before completion. Generate 3-6 continuation blocks.
 
-SCRIPT ENDS WITH:
-{tail}
+    prompt = f"""A YouTube video script was cut off before completion. Continue it naturally and close it properly.
 
+VIDEO TITLE: "{title}"
+NICHE: {niche or "general"}
+LANGUAGE: {language}
 IMAGE STYLE: {image_style}
 
-Requirements:
-- Continue naturally from where the script cut off
-- Include a synthesis/climax section that ties everything together
-- The LAST block must be type "outro" with a subscribe CTA in the narration
-- Match the tone, depth, and style of the original exactly
+SCRIPT ENDS WITH (last {len(context_blocks)} blocks):
+{tail}
 
-Return ONLY a JSON array of new blocks:
+Requirements:
+- Continue EXACTLY from where the text cuts off — no repetition of what was said
+- Write 2-4 continuation section blocks that complete the argument/story arc
+- Synthesize the key insight into a memorable closing takeaway
+- The FINAL block must be type "outro" with a 30-50 word subscribe CTA
+- Match tone, vocabulary, and depth of the original script precisely
+- Each narration must end with proper punctuation (period/exclamation/question mark)
+
+Return ONLY a JSON array (no markdown, no explanation):
 [
   {{
     "id": "block_cont_001",
     "type": "section",
-    "narration": "continuation text — complete sentences only",
-    "image_prompt": "specific cinematic visual that matches exactly what is being said",
+    "timestamp_label": "Section Title",
+    "narration": "continuation text — complete sentences only, ending with punctuation.",
+    "image_prompt": "specific cinematic visual (15-40 words) that matches exactly what is being said",
     "animation": "zoom_in"
   }},
   {{
     "id": "block_cont_NNN",
     "type": "outro",
-    "narration": "If this video resonated with you... [subscribe CTA]",
-    "image_prompt": "warm, hopeful closing visual",
+    "timestamp_label": "Subscribe",
+    "narration": "If this resonated with you... compelling 30-50 word CTA with specific question for comments.",
+    "image_prompt": "warm, hopeful closing visual matching {image_style[:60]}",
     "animation": "zoom_in"
   }}
 ]"""
-    raw = await _llm(FIX_MODEL, [{"role": "user", "content": prompt}], max_tokens=2500)
+    raw = await _llm(FIX_MODEL, [{"role": "user", "content": prompt}], max_tokens=3000)
     match = re.search(r"\[.*\]", raw, re.DOTALL)
     if not match:
         raise ValueError("No JSON array in cut_off fix response")
@@ -491,6 +581,22 @@ async def validate_and_fix_script(
         _emit("Saving fixed script…", 90.0)
         script_path.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info("Saved fixed script: %s", script_path)
+
+        # ── Post-fix re-check: verify fixes actually resolved issues ──
+        remaining = _structural_checks(script.get("blocks", []))
+        still_critical = [i for i in remaining if i.severity == "critical"]
+        if still_critical:
+            log.warning(
+                "Post-fix re-check: %d critical issue(s) remain after fixes:",
+                len(still_critical),
+            )
+            for iss in still_critical:
+                log.warning("  [REMAIN] %s — %s", iss.type, iss.reason)
+            result.ok = False
+        else:
+            result.ok = True
+            log.info("Post-fix re-check: all critical issues resolved ✓")
+    else:
         result.ok = not any(i.severity == "critical" and not i.fixed for i in issues)
 
     result.elapsed = time.monotonic() - t0
