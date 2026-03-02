@@ -105,6 +105,27 @@ _GENERIC_RE = re.compile(
 _CYRILLIC_LANGS = frozenset(["uk", "ru", "be", "bg", "sr", "mk", "kk", "mn"])
 _CYRILLIC_RE    = re.compile(r"[\u0400-\u04FF]")
 
+# ── TTS compliance patterns (v3 narration guidelines) ─────────────────────────
+# Markdown formatting that TTS reads literally ("asterisk bold asterisk")
+_TTS_MARKDOWN_RE = re.compile(
+    r"\*\*[^*\n]+\*\*"         # **bold**
+    r"|__[^_\n]+__"             # __bold__
+    r"|\*\S[^*\n]{0,40}\*"     # *italic* (non-space start to skip bullet points)
+    r"|_\S[^_\n]{0,40}_"       # _italic_
+    r"|^#{1,6}\s",              # # Header at line start
+    re.MULTILINE,
+)
+_TTS_ELLIPSIS_RE   = re.compile(r"\.{2,}|…")           # ... or … — awkward TTS pause
+_TTS_PARENS_RE     = re.compile(r"\([^)]{3,}\)")         # (...) parenthetical asides
+_TTS_EXCLAIM_RE    = re.compile(r"!")                    # ! forbidden per v3 TTS rules
+_TTS_SYMBOLS_RE    = re.compile(r"[%#&@]")              # symbols TTS reads by name
+_TTS_FILLER_RE     = re.compile(                        # filler opener phrases
+    r"^(in this video|today we|welcome back|hi\s+everyone|hey\s+everyone|hello\s+everyone)",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE    = re.compile(r"(?<=[.?])\s+")    # split on sentence boundaries
+TTS_MAX_SENTENCE_WORDS = 30  # v3 guideline is 25 words/sentence; warn at 30
+
 # Words that, when they are the last word of a narration, suggest a cut-off
 _CONNECTOR_WORDS = frozenset([
     "and", "but", "or", "because", "when", "that", "this", "the",
@@ -282,6 +303,74 @@ def _structural_checks(
                     f"— may be truncated or placeholder"
                 ),
             ))
+
+        # ── TTS compliance (v3 narration rules) — regex only, zero API cost ──
+        # Skip CTA/outro blocks — they have different formatting conventions.
+        if narr and block.get("type") not in ("cta", "outro"):
+
+            # Markdown: TTS reads "**word**" as "asterisk asterisk word asterisk asterisk"
+            md_m = _TTS_MARKDOWN_RE.search(narr)
+            if md_m:
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Markdown in narration (TTS reads literally): '{md_m.group(0)[:40]}'",
+                ))
+
+            # Ellipsis: TTS reads "..." as "dot dot dot" or creates dead silence
+            el_m = _TTS_ELLIPSIS_RE.search(narr)
+            if el_m:
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Ellipsis '{el_m.group(0)}' in narration (forbidden per v3 TTS rules)",
+                ))
+
+            # Parenthetical asides: break spoken rhythm, often swallowed by TTS
+            par_m = _TTS_PARENS_RE.search(narr)
+            if par_m:
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Parenthetical aside (breaks TTS rhythm): '{par_m.group(0)[:50]}'",
+                ))
+
+            # Exclamation mark: TTS delivers it flat — sounds forced and unnatural
+            exc_m = _TTS_EXCLAIM_RE.search(narr)
+            if exc_m:
+                ctx = narr[max(0, exc_m.start() - 25): exc_m.start() + 1]
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Exclamation mark (forbidden per v3): '…{ctx}'",
+                ))
+
+            # Forbidden symbols: % → "percent", # → "hash", & → "ampersand"
+            sym_m = _TTS_SYMBOLS_RE.search(narr)
+            if sym_m:
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Symbol '{sym_m.group(0)}' in narration (TTS reads symbol name aloud)",
+                ))
+
+            # Long sentences: >30 words causes listener fatigue (v3 guideline: max 25)
+            for sent in _SENTENCE_SPLIT_RE.split(narr):
+                sent = sent.strip()
+                if not sent:
+                    continue
+                wc = len(sent.split())
+                if wc > TTS_MAX_SENTENCE_WORDS:
+                    issues.append(ScriptIssue(
+                        type="tts_violation", block_id=bid, severity="warning",
+                        reason=(
+                            f"Sentence too long ({wc} words, max={TTS_MAX_SENTENCE_WORDS}): "
+                            f"'{sent[:70]}…'"
+                        ),
+                    ))
+                    break  # one warning per block is enough
+
+            # Filler opener in intro block
+            if block.get("type") == "intro" and _TTS_FILLER_RE.match(narr[:80]):
+                issues.append(ScriptIssue(
+                    type="tts_violation", block_id=bid, severity="warning",
+                    reason=f"Filler opener phrase (forbidden per v3): '{narr[:50]}'",
+                ))
 
     # ── Script-level length check ─────────────────────────────────────────────
     total_words = sum(len((b.get("narration") or "").split()) for b in blocks)
