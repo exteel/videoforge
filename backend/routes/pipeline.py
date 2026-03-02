@@ -43,6 +43,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         dry_run=req.dry_run,
         background_music=req.background_music,
         no_ken_burns=req.no_ken_burns,
+        skip_thumbnail=req.skip_thumbnail,
         image_style=req.image_style,
         voice_id=req.voice_id,
         master_prompt=req.master_prompt,

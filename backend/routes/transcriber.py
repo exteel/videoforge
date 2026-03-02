@@ -56,6 +56,7 @@ class TranscribeRequest(BaseModel):
     draft:          bool = False
     dry_run:        bool = False
     background_music: bool = True
+    skip_thumbnail: bool = False
     image_style:    str | None = None
     voice_id:       str | None = None
     master_prompt:  str | None = None
@@ -153,6 +154,7 @@ async def start_transcribe(req: TranscribeRequest) -> dict[str, Any]:
                 "draft":            req.draft,
                 "dry_run":          req.dry_run,
                 "background_music": req.background_music,
+                "skip_thumbnail":   req.skip_thumbnail,
                 "duration_min":     req.duration_min if req.duration_min is not None else 8,
                 "duration_max":     req.duration_max if req.duration_max is not None else 12,
             }

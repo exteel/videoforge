@@ -130,6 +130,11 @@ class ScriptBlock(BaseModel):
     narration: str
     image_prompt: str = ""                          # primary image prompt (image_prompts[0])
     image_prompts: list[str] = Field(default_factory=list)  # all image prompts for this block
+    image_word_offsets: list[int] = Field(default_factory=list)
+    # Word offset (0-based) in the narration at which each image_prompt was placed by LLM.
+    # image_word_offsets[i] corresponds to image_prompts[i].
+    # Used by the video compiler to sync each image to the correct moment in audio:
+    #   audio_time = (word_offset / total_words) * audio_duration
     animation: str = "zoom_in"
     timestamp_label: str = ""
     audio_duration: float | None = None
@@ -230,11 +235,14 @@ def _parse_llm_output(
     section_title: str = "Hook"
     section_type: BlockType = "intro"
     is_cta_block = False
-    all_image_prompts: list[str] = []   # accumulates ALL [IMAGE_PROMPT:] in current section
+    all_image_prompts: list[str] = []       # accumulates ALL [IMAGE_PROMPT:] in current section
+    all_word_offsets: list[int] = []        # word count in narration at time of each IMAGE_PROMPT
     narration_lines: list[str] = []
+    _narration_word_count: int = 0          # running word count within current section
 
     def flush() -> None:
-        nonlocal order, all_image_prompts, narration_lines, section_title, is_cta_block
+        nonlocal order, all_image_prompts, all_word_offsets, narration_lines, section_title
+        nonlocal is_cta_block, _narration_word_count
 
         # Strip inline IMAGE_PROMPTs from narration (closed: [IMAGE_PROMPT: ...])
         raw_narration = "\n".join(narration_lines)
@@ -246,6 +254,7 @@ def _parse_llm_output(
 
         if not narration and not all_image_prompts:
             narration_lines = []
+            _narration_word_count = 0
             return
 
         is_intro = order == 0
@@ -265,7 +274,8 @@ def _parse_llm_output(
                 type=actual_type,
                 narration=narration,
                 image_prompt=primary_prompt,
-                image_prompts=list(all_image_prompts),  # copy so reset below doesn't mutate
+                image_prompts=list(all_image_prompts),        # copy so reset below doesn't mutate
+                image_word_offsets=list(all_word_offsets),   # parallel list: word pos per image
                 animation=default_animation,
                 timestamp_label=section_title,
                 hook=hook_info,
@@ -273,7 +283,9 @@ def _parse_llm_output(
         )
         order += 1
         all_image_prompts = []
+        all_word_offsets = []
         narration_lines = []
+        _narration_word_count = 0
 
     lines = raw.splitlines()
 
@@ -281,8 +293,19 @@ def _parse_llm_output(
     has_sections = bool(_SECTION_RE.search(raw))
 
     if not has_sections:
-        # Fallback: treat entire output as one block, extract all image prompts
-        found_images = [img.strip() for img in _IMAGE_INLINE_RE.findall(raw) if img.strip()]
+        # Fallback: treat entire output as one block, extract all image prompts.
+        # Compute word offsets by scanning the raw text line by line.
+        found_images: list[str] = []
+        fallback_offsets: list[int] = []
+        _fb_words = 0
+        for _fb_line in raw.splitlines():
+            _fb_stripped = _fb_line.rstrip()
+            _img_fb = _IMAGE_INLINE_RE.search(_fb_stripped)
+            if _img_fb:
+                found_images.append(_img_fb.group(1).strip())
+                fallback_offsets.append(_fb_words)
+            else:
+                _fb_words += len(_fb_stripped.split()) if _fb_stripped.strip() else 0
         narration = _IMAGE_INLINE_RE.sub("", raw).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
         blocks.append(
@@ -293,6 +316,7 @@ def _parse_llm_output(
                 narration=narration,
                 image_prompt=found_images[0] if found_images else "",
                 image_prompts=found_images,
+                image_word_offsets=fallback_offsets,
                 animation=default_animation,
                 timestamp_label="Hook",
                 hook=HookInfo(type=hook_type),
@@ -330,9 +354,11 @@ def _parse_llm_output(
 
             # [IMAGE_PROMPT: ...] standalone line (closed — has ] on same line)
             # Collect ALL prompts per section (not just the first — v2 prompt has multiple per section)
+            # Record the current narration word count as the word offset for this image.
             img_m = _IMAGE_LINE_RE.match(stripped)
             if img_m:
                 all_image_prompts.append(img_m.group(1).strip())
+                all_word_offsets.append(_narration_word_count)  # snapshot at time of image tag
                 # Skip adding to narration — it's a visual directive
                 continue
 
@@ -342,10 +368,13 @@ def _parse_llm_output(
                 salvaged = re.sub(r"^\[IMAGE_PROMPT:\s*", "", stripped, flags=re.IGNORECASE).strip(" ,")
                 if salvaged:
                     all_image_prompts.append(salvaged)
+                    all_word_offsets.append(_narration_word_count)
                 # Never add raw tag text to narration
                 continue
 
             narration_lines.append(stripped)
+            # Count words accumulated in narration so far (for image offset tracking)
+            _narration_word_count += len(stripped.split()) if stripped.strip() else 0
 
         flush()  # Flush the last section
 
@@ -480,6 +509,9 @@ def _build_user_prompt(
         f"__NEW TOPIC__: {new_topic}\n"
         f"[DURATION]: {duration_min}-{duration_max} minutes\n"
         f"[TARGET WORDS]: {target_words_min}–{target_words_max} words\n"
+        f"⚠️ HARD WORD LIMIT: {target_words_max} words maximum. "
+        f"Write [CTA_SUBSCRIBE_FINAL] as soon as you approach this limit. "
+        f"Do NOT exceed {target_words_max} words under any circumstances.\n"
         f"__SPECIAL REQUESTS__:\n{special}"
     )
 
@@ -549,28 +581,51 @@ async def _call_llm(
     model: str,
     voidai_client: Any,
     temperature: float = 0.7,
+    duration_max: int = 12,
 ) -> str:
     """
     Generate script in chunks of ~10K chars to avoid Opus timeout on long scripts.
 
     Strategy:
-    - Call 1: normal prompt → max MAX_TOKENS_PER_CHUNK tokens
-    - If no final CTA found → continuation call with tail context (up to MAX_SCRIPT_CHUNKS)
+    - Call 1: normal prompt → max tokens calibrated to duration_max
+    - If no final CTA found AND word count < budget → continuation call (up to MAX_SCRIPT_CHUNKS)
     - Continuation provides last 2K chars + "continue from Section N" instruction
+    - Hard stop: if accumulated word count exceeds duration_max * 150 * 1.15, no more chunks.
     """
     full_output = ""
 
+    # Word budget: speech pace 150 wpm, +15% tolerance for LLM overshoot.
+    # Once we exceed this, the script is already too long — don't ask for more.
+    word_budget = int(duration_max * 150 * 1.15)
+    # Tokens per chunk: target ~80% of one language's total word budget so the first
+    # call can produce a complete short script (8-min = 1400 words ≈ 1960 tokens output).
+    # Cap at MAX_TOKENS_PER_CHUNK to avoid runaway costs on long durations.
+    tokens_first_chunk = min(MAX_TOKENS_PER_CHUNK, int(duration_max * 150 * 1.4 * 0.9))
+
     for chunk_num in range(1, MAX_SCRIPT_CHUNKS + 1):
+        # Hard word-count guard: if we already have too many words, stop here.
+        current_words = len(full_output.split())
+        if chunk_num > 1 and current_words >= word_budget:
+            log.warning(
+                "Word budget reached (%d words ≥ %d limit for %d-min target) — "
+                "stopping continuation to avoid over-length script.",
+                current_words, word_budget, duration_max,
+            )
+            break
+
         if chunk_num == 1:
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
+            chunk_tokens = tokens_first_chunk
         else:
             # Detect last section number so continuation knows where to resume
             section_nums = _LAST_SECTION_NUM_RE.findall(full_output)
             last_section = int(section_nums[-1]) if section_nums else 0
             tail = full_output[-2_000:]  # last 2K chars as context anchor
+            remaining_words = max(0, word_budget - current_words)
+            remaining_tokens = min(MAX_TOKENS_PER_CHUNK, int(remaining_words * 1.4))
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -580,25 +635,38 @@ async def _call_llm(
                     f"Here is the end of what you wrote so far:\n```\n{tail}\n```\n\n"
                     f"Continue the script starting with [SECTION {last_section + 1}: ...]. "
                     f"Do NOT repeat any content from sections 1-{last_section}. "
-                    f"Write from Section {last_section + 1} through the final CTA."
+                    f"Write from Section {last_section + 1} through the final CTA. "
+                    f"You have approximately {remaining_words} words remaining before the hard limit."
                 )},
             ]
             log.info(
-                "Script continuation request: chunk %d/%d, resuming after Section %d",
-                chunk_num, MAX_SCRIPT_CHUNKS, last_section,
+                "Script continuation request: chunk %d/%d, resuming after Section %d "
+                "(%d words used, %d remaining)",
+                chunk_num, MAX_SCRIPT_CHUNKS, last_section, current_words, remaining_words,
             )
+            chunk_tokens = remaining_tokens
+
+        if chunk_tokens < 200:
+            log.warning("Remaining token budget too small (%d) — stopping.", chunk_tokens)
+            break
 
         chunk = await voidai_client.chat_completion(
             model=model,
             messages=messages,
             temperature=temperature,
-            max_tokens=MAX_TOKENS_PER_CHUNK,
+            max_tokens=chunk_tokens,
         )
 
         full_output += ("\n" if full_output else "") + chunk
+        chunk_words = len(chunk.split())
+        total_words = len(full_output.split())
         log.info(
-            "Script chunk %d/%d: %d chars → total %d chars",
-            chunk_num, MAX_SCRIPT_CHUNKS, len(chunk), len(full_output),
+            "Script chunk %d/%d: %d chars / %d words → total %d chars / %d words "
+            "(budget: %d words)",
+            chunk_num, MAX_SCRIPT_CHUNKS,
+            len(chunk), chunk_words,
+            len(full_output), total_words,
+            word_budget,
         )
 
         if _FINAL_CTA_RE.search(full_output):
@@ -607,10 +675,16 @@ async def _call_llm(
 
         if chunk_num == MAX_SCRIPT_CHUNKS:
             log.warning(
-                "Reached max chunks (%d) without finding final CTA — using partial output (%d chars)",
-                MAX_SCRIPT_CHUNKS, len(full_output),
+                "Reached max chunks (%d) without finding final CTA — using partial output "
+                "(%d words / %d chars)",
+                MAX_SCRIPT_CHUNKS, total_words, len(full_output),
             )
 
+    final_words = len(full_output.split())
+    log.info(
+        "LLM output: %d words (target: ≤%d, budget: %d)",
+        final_words, duration_max * 150, word_budget,
+    )
     return full_output
 
 
@@ -637,7 +711,10 @@ async def _generate_one_variant(
         model, template, hook_type, temperature,
     )
 
-    raw = await _call_llm(system_prompt, user_prompt, model, voidai_client, temperature)
+    raw = await _call_llm(
+        system_prompt, user_prompt, model, voidai_client, temperature,
+        duration_max=duration_max,
+    )
     log.info("LLM response: %d chars", len(raw))
 
     # Debug: save raw LLM output for inspection

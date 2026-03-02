@@ -197,6 +197,52 @@ def _get_block_images(
     return []
 
 
+def _image_for_segment(
+    image_list: list[Path],
+    word_offsets: list[int],
+    total_words: int,
+    seg_idx: int,
+    n_segments: int,
+) -> Path:
+    """
+    Select the appropriate image for a given animation segment.
+
+    Uses LLM-placed word offsets to sync images to narration timing instead of
+    uniform cycling.  Each image is shown from its word-offset position until the
+    next image's word-offset position (or end of block).
+
+    Args:
+        image_list:    Ordered list of available image paths for this block.
+        word_offsets:  Word position in the narration where each image was placed by the LLM.
+                       Parallel to image_list (len must match or be ≤ len(image_list)).
+        total_words:   Total words in the block's narration.
+        seg_idx:       Current 10-second segment index (0-based).
+        n_segments:    Total number of segments in this block.
+
+    Returns:
+        Path to the image that should play during this segment.
+    """
+    # If no offset data (v1 script / fallback) — fall back to simple cycling
+    if not word_offsets or len(word_offsets) != len(image_list):
+        return image_list[seg_idx % len(image_list)]
+
+    if total_words <= 0:
+        return image_list[0]
+
+    # Convert segment index to approximate word position in narration
+    seg_word_pos = int((seg_idx / n_segments) * total_words)
+
+    # Find the last image whose word_offset ≤ seg_word_pos
+    chosen_idx = 0
+    for i, offset in enumerate(word_offsets):
+        if offset <= seg_word_pos:
+            chosen_idx = i
+        else:
+            break
+
+    return image_list[chosen_idx]
+
+
 def _animation_for_block(
     block: dict[str, Any],
     channel_config: dict[str, Any],
@@ -475,18 +521,23 @@ def compile_video(
 
                     else:
                         # Long block — 10s zoom_in/zoom_out loop, seamlessly hard-cut.
-                        # If the block has multiple images (from image_prompts[1:]),
-                        # they cycle across segments: seg 0→img0, seg 1→img1, seg 2→img2, …
-                        # giving the viewer a new image every 10s as intended by v2 prompt.
+                        # Image assignment is word-offset-aware: each image shows when the
+                        # narration reaches the word position where the LLM placed it.
+                        # Falls back to simple cycling for v1 scripts without offset data.
                         #
                         # Seamless zoom chain (identical zoompan z/x/y at hard-cut boundary):
                         #   zoom_in  last:  z≈1.15, x=iw/2-iw/1.15/2  (centered)
                         #   zoom_out first: z=1.15, x=iw/2-iw/1.15/2  ← identical ✓
+                        word_offsets: list[int] = block.get("image_word_offsets", [])
+                        total_words: int = len(block.get("narration", "").split())
+                        n_segments = len(segments)
                         seg_clips: list[Path] = []
                         for seg_idx, seg_dur in enumerate(segments):
                             within_anim = _WITHIN_BLOCK_KB_CYCLE[seg_idx % len(_WITHIN_BLOCK_KB_CYCLE)]
-                            # Cycle through available images (wraps if fewer images than segments)
-                            seg_image = image_list[seg_idx % len(image_list)]
+                            # Timing-aware image selection: show image aligned to narration position
+                            seg_image = _image_for_segment(
+                                image_list, word_offsets, total_words, seg_idx, n_segments,
+                            )
                             seg_path = tmp / f"clip_{block['id']}_{seg_idx:02d}{BLOCK_VIDEO_EXT}"
                             ken_burns(
                                 seg_image, seg_path,

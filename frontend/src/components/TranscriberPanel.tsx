@@ -125,6 +125,7 @@ export function TranscriberPanel({ onSelectDir }: Props) {
   const [quality, setQuality]       = useState('max')
   const [channel, setChannel]       = useState('config/channels/history.json')
   const [autoPipeline, setAutoPipeline] = useState(false)
+  const [skipThumbnail, setSkipThumbnail] = useState(false)
   const [durationMin, setDurationMin] = useState(8)
   const [durationMax, setDurationMax] = useState(12)
   const [submitting, setSubmitting] = useState(false)
@@ -153,12 +154,13 @@ export function TranscriberPanel({ onSelectDir }: Props) {
       for (const url of lines) {
         const res = await api.transcribe.start({
           url,
-          language:      language || undefined,
-          auto_pipeline: autoPipeline,
+          language:       language || undefined,
+          auto_pipeline:  autoPipeline,
           channel,
           quality,
-          duration_min:  durationMin,
-          duration_max:  durationMax,
+          duration_min:   durationMin,
+          duration_max:   durationMax,
+          skip_thumbnail: skipThumbnail,
         })
         newJobs.push({
           job_id: res.job_id,
@@ -281,6 +283,20 @@ export function TranscriberPanel({ onSelectDir }: Props) {
                 </span>
               </div>
             </div>
+
+            {/* Skip thumbnail — visible only when auto-pipeline is ON */}
+            {autoPipeline && (
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={skipThumbnail}
+                  onChange={e => setSkipThumbnail(e.target.checked)}
+                  className="accent-blue-500"
+                />
+                <span>Skip thumbnail</span>
+                <span className="text-xs text-gray-500">Пропустити генерацію thumbnail (Step 5)</span>
+              </label>
+            )}
 
             {/* Duration range — visible only when auto-pipeline is ON */}
             {autoPipeline && (

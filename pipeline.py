@@ -254,6 +254,7 @@ async def run_pipeline(
     no_ken_burns: bool = False,      # Skip Ken Burns — static slideshow (1 FFmpeg call, much faster)
     duration_min: int = 8,           # Minimum target video duration in minutes
     duration_max: int = 12,          # Maximum target video duration in minutes
+    skip_thumbnail: bool = False,    # Skip thumbnail generation (Step 5)
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -757,7 +758,9 @@ async def run_pipeline(
         _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL], pct=STEP_WEIGHTS[STEP_THUMBNAIL][0])
         t0 = time.monotonic()
 
-        if dry_run and not s_path.exists():
+        if skip_thumbnail:
+            log.info("Thumbnail generation SKIPPED (skip_thumbnail=True)")
+        elif dry_run and not s_path.exists():
             log.info("[DRY RUN] Thumbnail estimate: ~$0.010 (2 WaveSpeed attempts avg)")
             cost.add("Thumbnail estimate (WaveSpeed)", 2 * 0.005)
         else:
@@ -797,7 +800,10 @@ async def run_pipeline(
                     if cost.over_budget():
                         log.error("Budget exceeded after Thumbnail! %s", cost.summary())
                         sys.exit(1)
-        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
+        if not skip_thumbnail:
+            _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
+        else:
+            _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=0.0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 6 — METADATA

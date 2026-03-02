@@ -86,6 +86,7 @@ const LS_INPUT_DIR  = 'vf_last_input_dir'
 
 type PFormState = PipelineRunRequest & {
   background_music: boolean
+  skip_thumbnail: boolean
   image_style: string
   voice_id: string
   duration_min: number
@@ -108,6 +109,7 @@ export function JobList() {
     dry_run:          false,
     from_step:        1,
     background_music: true,
+    skip_thumbnail:   false,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
@@ -404,6 +406,13 @@ export function JobList() {
                   className="accent-blue-500" />
                 <span>Background music</span>
                 <Tip text="Додає royalty-free фонову музику на -20dB під голос." />
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={pForm.skip_thumbnail}
+                  onChange={(e) => setPForm({ ...pForm, skip_thumbnail: e.target.checked })}
+                  className="accent-blue-500" />
+                <span>Skip thumbnail</span>
+                <Tip text="Пропустити генерацію thumbnail (Step 5). Корисно коли thumbnail вже є або потрібно швидко отримати відео." />
               </label>
             </div>
 

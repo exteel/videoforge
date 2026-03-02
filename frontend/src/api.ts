@@ -97,6 +97,8 @@ export interface PipelineRunRequest {
   langs?: string[] | null
   dry_run?: boolean
   background_music?: boolean
+  no_ken_burns?: boolean
+  skip_thumbnail?: boolean
   image_style?: string | null
   voice_id?: string | null
   master_prompt?: string | null
@@ -350,6 +352,7 @@ export interface TranscribeRequest {
   draft?: boolean
   dry_run?: boolean
   background_music?: boolean
+  skip_thumbnail?: boolean
   image_style?: string | null
   voice_id?: string | null
   master_prompt?: string | null
