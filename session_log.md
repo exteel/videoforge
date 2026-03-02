@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-03-02 — №30 Image frequency tiers sync with master_script_v2.txt
+
+### modules/05_video_compiler.py
+- `_DEFAULT_FREQ_TIERS` оновлено: 2 зони → 4 зони, відповідно до master_script_v2.txt density model
+- Tier 1 (0–3 хв): кожні 10s | Tier 2 (3–6 хв): кожні 20s | Tier 3 (6–15 хв): кожні 60s | Tier 4 (15+ хв): кожні 120s
+- Логіка cross-tier: сегмент починається з інтервалу активного на старті, ділення відбувається поступово
+- Тест cross-boundary: блок 160s+60s → [10,10,20,20]✓; блок 870s+80s → [60,20]✓
+
+---
+
 ## 2026-03-02 — №29 Bug fixes: smooth Ken Burns, image_style override, image frequency
 
 ### utils/ffmpeg_utils.py

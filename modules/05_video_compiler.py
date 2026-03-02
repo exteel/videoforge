@@ -74,9 +74,17 @@ _WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
 # Default image frequency tiers when not configured in channel config.
 # Tiers are matched against elapsed VIDEO TIME (not block time).
 # Each tier fires until `until_seconds` is reached; last tier (until_seconds=None) is the catch-all.
+#
+# Mirrors the 4-tier density model in master_script_v2.txt:
+#   Tier 1 (0–3 min)  — Hook zone:       short segments, max visual variety → every 10s
+#   Tier 2 (3–6 min)  — Engagement zone: sustain attention, core content   → every 20s
+#   Tier 3 (6–15 min) — Depth zone:      viewer invested, fewer cuts        → every 60s
+#   Tier 4 (15+ min)  — Long-form zone:  image = chapter anchor, not pacing → every 120s
 _DEFAULT_FREQ_TIERS: list[dict] = [
-    {"until_seconds": 180, "interval": 10},  # 0–3 min: new image segment every 10s
-    {"until_seconds": None, "interval": 20}, # 3+ min:  new image segment every 20s
+    {"until_seconds": 180,  "interval": 10},   # 0–3 min:  every 10s
+    {"until_seconds": 360,  "interval": 20},   # 3–6 min:  every 20s
+    {"until_seconds": 900,  "interval": 60},   # 6–15 min: every 60s
+    {"until_seconds": None, "interval": 120},  # 15+ min:  every 2 min
 ]
 
 
