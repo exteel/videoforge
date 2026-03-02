@@ -37,6 +37,30 @@
 
 ---
 
+## 2026-03-02 — Duration range control (duration_min / duration_max)
+
+### Мотивація
+Попередній `target_duration: int = 12` був захардкодженим і навіть не передавався з pipeline у generate_scripts (тільки дефолт). Тепер можна вказати "від 25 хв до 35 хв" і LLM отримає точний діапазон + цільову кількість слів.
+
+### modules/01_script_generator.py
+- `Script` model: `duration_min: int = 8`, `duration_max: int = 12` (зберігаються в script.json)
+- `_build_user_prompt()`: `[DURATION]: 25-35 minutes\n[TARGET WORDS]: 3500–5250 words`
+- CLI: `--duration-min`, `--duration-max`; `--duration` (legacy alias)
+
+### modules/01b_script_validator.py
+- `_structural_checks(blocks, duration_min=None, duration_max=None)` — dynamic thresholds
+- `eff_too_long = int(duration_max * 150 * 1.25)` → 5202 слів + 25-35 min → no too_long ✓
+
+### pipeline.py + backend/models.py + backend/routes/pipeline.py
+- `duration_min/max` параметри наскрізь від UI до generate_scripts()
+
+### frontend — JobList.tsx + api.ts
+- Два числових поля "від [8] до [12] хв" з hint `≈ N–M слів`
+- Build: ✓ 40 modules, TypeScript clean
+- git: `e59dbf4`
+
+---
+
 ## 2026-03-02 — Validator improvements (01b + 02b round 2)
 
 ### modules/01b_script_validator.py — нові перевірки та покращений auto-fix

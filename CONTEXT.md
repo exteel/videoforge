@@ -52,6 +52,7 @@
 - [x] №27 Browser push notifications (Notification API — useNotifications hook, 🔔 navbar bell, review/done/error events)
 - [x] Fix: embedded [IMAGE_PROMPT:] tags у narration (parser + validator, no API cost cleanup)
 - [x] Validator improvements (01b + 02b round 2): empty_narration, other_tag_in_narration, duplicate_section, too_long/short, short_block, post-fix re-check, fix_cut_off з title+niche+5 blocks, per-block threshold (intro/outro -0.5), pre-flight missing/tiny image, WaveSpeed→VoidAI fallback, improved_prompt→script.json
+- [x] Duration range control: --duration-min/--duration-max CLI + pipeline + backend + frontend UI (від/до хв з word count hint); Script model зберігає duration_min/max; validator dynamic thresholds
 
 ## Поточний стан
 Всі фічі та баги реалізовані/виправлені. Останнє: запустити реальний pipeline end-to-end.
