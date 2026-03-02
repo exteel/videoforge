@@ -17,6 +17,7 @@ class PipelineRunRequest(BaseModel):
     template: str = Field("auto", description="Content template (auto/documentary/listicle/tutorial/comparison)")
     draft: bool = Field(False, description="Generate 480p preview without effects")
     from_step: int = Field(1, ge=1, le=6, description="Resume from step N (1-6)")
+    to_step: int = Field(6, ge=1, le=6, description="Stop after step N (1-6). Use with from_step to run a single step")
     budget: float | None = Field(None, description="Max spend in USD")
     langs: list[str] | None = Field(None, description="Language codes for multilingual output")
     dry_run: bool = Field(False, description="Estimate costs only, no API calls")

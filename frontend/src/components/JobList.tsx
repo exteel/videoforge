@@ -108,6 +108,7 @@ export function JobList() {
     draft:            false,
     dry_run:          false,
     from_step:        1,
+    to_step:          6,
     background_music: true,
     skip_thumbnail:   false,
     image_style:      '',
@@ -262,7 +263,7 @@ export function JobList() {
               </label>
             </div>
 
-            {/* Template + From step */}
+            {/* Template + Step range */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="space-y-1">
                 <span className="text-xs text-gray-400">
@@ -274,16 +275,48 @@ export function JobList() {
                   options={TEMPLATE_OPTS}
                 />
               </label>
-              <label className="space-y-1">
+              <div className="space-y-1">
                 <span className="text-xs text-gray-400">
-                  From step
-                  <Tip text="Пропустити вже зроблені кроки. Якщо script.json є — починай з кроку 2." />
+                  Steps
+                  <Tip text="From — з якого кроку стартувати (пропустити вже зроблені). To — на якому зупинитись. Для запуску одного кроку: from=to=N." />
                 </span>
-                <DescSelect value={pForm.from_step ?? 1}
-                  onChange={(v) => setPForm({ ...pForm, from_step: Number(v) })}
-                  options={STEP_OPTS}
-                />
-              </label>
+                {/* Quick-step presets */}
+                <div className="flex flex-wrap gap-1 mb-1">
+                  {[
+                    { label: 'All', f: 1, t: 6 },
+                    { label: '1 Script', f: 1, t: 1 },
+                    { label: '2 Images', f: 2, t: 2 },
+                    { label: '4 Video',  f: 4, t: 4 },
+                    { label: '5 Thumb',  f: 5, t: 5 },
+                    { label: '6 Meta',   f: 6, t: 6 },
+                  ].map(({ label, f, t }) => {
+                    const active = pForm.from_step === f && (pForm.to_step ?? 6) === t
+                    return (
+                      <button key={label} type="button"
+                        onClick={() => setPForm(p => ({ ...p, from_step: f, to_step: t }))}
+                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          active
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >{label}</button>
+                    )
+                  })}
+                </div>
+                {/* Manual from/to */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 shrink-0">from</span>
+                  <DescSelect value={pForm.from_step ?? 1}
+                    onChange={(v) => setPForm(p => ({ ...p, from_step: Number(v), to_step: Math.max(p.to_step ?? 6, Number(v)) }))}
+                    options={STEP_OPTS}
+                  />
+                  <span className="text-xs text-gray-500 shrink-0">to</span>
+                  <DescSelect value={pForm.to_step ?? 6}
+                    onChange={(v) => setPForm(p => ({ ...p, to_step: Number(v), from_step: Math.min(p.from_step ?? 1, Number(v)) }))}
+                    options={STEP_OPTS}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Master prompt selector */}

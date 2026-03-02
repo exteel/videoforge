@@ -239,6 +239,7 @@ async def run_pipeline(
     dry_run: bool = False,
     draft: bool = False,
     from_step: int = 1,
+    to_step: int = TOTAL_STEPS,   # Stop after this step (inclusive); default = run all
     langs: list[str] | None = None,
     budget: float | None = None,
     project_dir: Path | None = None,
@@ -309,6 +310,8 @@ async def run_pipeline(
     log.info("Quality     : %s", quality)
     log.info("Template    : %s", template)
     log.info("From step   : %d (%s)", from_step, STEP_NAMES[from_step])
+    if to_step < TOTAL_STEPS:
+        log.info("To step     : %d (%s)  ← pipeline will STOP after this step", to_step, STEP_NAMES.get(to_step, str(to_step)))
     if langs:
         log.info("Languages   : %s", ", ".join(langs))
     if budget is not None:
@@ -357,7 +360,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 1 — SCRIPT
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_SCRIPT:
+    if from_step <= STEP_SCRIPT and to_step >= STEP_SCRIPT:
         # Auto-skip: if script.json already exists and has valid blocks, don't re-generate.
         # This prevents burning expensive Opus credits on repeated runs.
         if s_path.exists() and not dry_run:
@@ -377,7 +380,7 @@ async def run_pipeline(
             except Exception:
                 pass  # corrupt JSON → regenerate normally
 
-    if from_step <= STEP_SCRIPT:
+    if from_step <= STEP_SCRIPT and to_step >= STEP_SCRIPT:
         _step_header(STEP_SCRIPT, STEP_NAMES[STEP_SCRIPT])
         _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
         t0 = time.monotonic()
@@ -499,7 +502,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 2 — IMAGES + VOICES (parallel)
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_MEDIA:
+    if from_step <= STEP_MEDIA and to_step >= STEP_MEDIA:
         _step_header(STEP_MEDIA, STEP_NAMES[STEP_MEDIA])
         _emit(progress_callback, type="step_start", step=STEP_MEDIA, name=STEP_NAMES[STEP_MEDIA], pct=STEP_WEIGHTS[STEP_MEDIA][0])
         t0 = time.monotonic()
@@ -653,7 +656,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3 — SUBTITLES
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_SUBTITLES:
+    if from_step <= STEP_SUBTITLES and to_step >= STEP_SUBTITLES:
         _step_header(STEP_SUBTITLES, STEP_NAMES[STEP_SUBTITLES])
         _emit(progress_callback, type="step_start", step=STEP_SUBTITLES, name=STEP_NAMES[STEP_SUBTITLES], pct=STEP_WEIGHTS[STEP_SUBTITLES][0])
         t0 = time.monotonic()
@@ -695,7 +698,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 4 — VIDEO
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_VIDEO:
+    if from_step <= STEP_VIDEO and to_step >= STEP_VIDEO:
         _step_header(STEP_VIDEO, STEP_NAMES[STEP_VIDEO])
         _emit(progress_callback, type="step_start", step=STEP_VIDEO, name=STEP_NAMES[STEP_VIDEO], pct=STEP_WEIGHTS[STEP_VIDEO][0])
         t0 = time.monotonic()
@@ -753,7 +756,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 5 — THUMBNAIL
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_THUMBNAIL:
+    if from_step <= STEP_THUMBNAIL and to_step >= STEP_THUMBNAIL:
         _step_header(STEP_THUMBNAIL, STEP_NAMES[STEP_THUMBNAIL])
         _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL], pct=STEP_WEIGHTS[STEP_THUMBNAIL][0])
         t0 = time.monotonic()
@@ -808,7 +811,7 @@ async def run_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 6 — METADATA
     # ══════════════════════════════════════════════════════════════════════════
-    if from_step <= STEP_METADATA:
+    if from_step <= STEP_METADATA and to_step >= STEP_METADATA:
         _step_header(STEP_METADATA, STEP_NAMES[STEP_METADATA])
         _emit(progress_callback, type="step_start", step=STEP_METADATA, name=STEP_NAMES[STEP_METADATA], pct=STEP_WEIGHTS[STEP_METADATA][0])
         t0 = time.monotonic()
@@ -968,6 +971,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     mode_group.add_argument(
+        "--to-step", type=int, metavar="N", default=TOTAL_STEPS,
+        choices=range(1, TOTAL_STEPS + 1),
+        help=(
+            "Stop after step N (inclusive). Combine with --from-step to run exactly one step. "
+            "E.g. --from-step 2 --to-step 2 runs only Images+Voice."
+        ),
+    )
+    mode_group.add_argument(
         "--budget", type=float, metavar="USD",
         help="Maximum spend per video in USD (pipeline halts if exceeded)",
     )
@@ -1065,6 +1076,7 @@ def main() -> None:
                 dry_run=args.dry_run,
                 draft=args.draft,
                 from_step=args.from_step,
+                to_step=args.to_step,
                 langs=langs,
                 budget=args.budget,
                 project_dir=project_dir,

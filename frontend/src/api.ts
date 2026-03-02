@@ -93,6 +93,7 @@ export interface PipelineRunRequest {
   template?: string
   draft?: boolean
   from_step?: number
+  to_step?: number
   budget?: number | null
   langs?: string[] | null
   dry_run?: boolean

@@ -38,6 +38,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         template=req.template,
         draft=req.draft,
         from_step=req.from_step,
+        to_step=req.to_step,
         budget=req.budget,
         langs=req.langs,
         dry_run=req.dry_run,
