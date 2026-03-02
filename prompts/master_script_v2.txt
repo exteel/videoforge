@@ -98,24 +98,34 @@ Requirements:
 3. MAIN CONTENT SECTIONS
 Purpose: Deliver core value through structured revelation
 
-For each section/point:
+SECTIONS and IMAGE_PROMPTs are TWO INDEPENDENT structures:
+- [SECTION N: Title] = narrative unit. One complete thought or argument. Length is content-driven.
+- [IMAGE_PROMPT: ...] = visual tag placed inline ANYWHERE in the text, at density intervals.
+  A single section can contain zero, one, or multiple IMAGE_PROMPTs.
+  IMAGE_PROMPTs do NOT have to appear at section boundaries.
 
-[SECTION X: TITLE]
-[IMAGE_PROMPT: {visual for this section}]
+Example of correct structure (Tier 1 zone — dense images every ~25 words):
 
-{Opening line that creates micro-hook for this section}
-{Explanation of concept — clear, accessible}
-{Deeper Jungian/psychological framework}
-{How this manifests in viewer's life — specific, relatable}
-{The hidden gift/reframe/insight}
-{Transitional line to next section}
+[SECTION 3: The Silent Pattern]
+There is something most people never notice about their own mind.
+[IMAGE_PROMPT: person staring into mirror in dim room, unsettled expression, psychological tension]
+You have been taught to think that your reactions are random — that moods arrive without reason.
+[IMAGE_PROMPT: scattered thoughts visualized as tangled threads in dark space, surreal]
+But Jung saw something different.
+[IMAGE_PROMPT: Carl Jung seated at desk writing by candlelight, scholarly atmosphere, warm tones]
+He called it the complex — a wound in the psyche with its own gravity.
+
+Example of correct structure (Tier 3 zone — one image per ~150 words):
+
+[SECTION 12: The Weight You Carry]
+{~150 words of narration on a single deep idea}
+[IMAGE_PROMPT: specific visual for that idea]
+{section ends, or continues with next 150 words before next image}
 
 Section requirements:
-- Section length is determined by its position in the video — follow the 4-tier model below EXACTLY:
-    Minutes 0–3:   20-30 words per section  (short, punchy, fast cuts)
-    Minutes 3–6:   40-55 words per section  (slightly longer, still tight)
-    Minutes 6–15:  120-150 words per section (deeper, immersive)
-    Minutes 15+:   260-300 words per section (long-form, chapter-level)
+- Length: content-driven — one complete argument or idea, typically 80-400 words
+- Do NOT break sections into smaller pieces just to match image density
+  (image density is handled by inline IMAGE_PROMPT placement, not section size)
 - Vary section openings (don't start each the same way)
 - Include at least one metaphor or vivid example per section
 - End sections with forward momentum
@@ -179,27 +189,29 @@ CORRECT:
   Narration: "Jung described how we suppress our anger..."
   [IMAGE_PROMPT: Figure in dark room suppressing a roaring shadow behind them, psychological tension, dim red light, dramatic contrast]
 
-Quantity — 4-tier density model based on position in video:
+IMAGE_PROMPT DENSITY — 4-tier model based on position in video:
 
-TIER 1 — Minutes 0–3 (Hook zone):
-  Section length: 20-30 words (~25 avg)
-  Image rhythm: 1 image per ~10 seconds
-  Purpose: Maximum visual variety — grab and hold attention
+Place [IMAGE_PROMPT:] tags inline in the narration at the following intervals.
+Count cumulative words from the start of the script to determine which tier applies.
 
-TIER 2 — Minutes 3–6 (Engagement zone):
-  Section length: 40-55 words (~47 avg)
-  Image rhythm: 1 image per ~20 seconds
-  Purpose: Sustain engagement while delivering core content
+TIER 1 — Minutes 0–3  (~0–450 words):
+  Place IMAGE_PROMPT every ~25 words (~10 seconds of speech)
+  Purpose: Maximum visual variety — hook zone, grab and hold attention fast
 
-TIER 3 — Minutes 6–15 (Depth zone):
-  Section length: 120-150 words (~140 avg)
-  Image rhythm: 1 image per ~60 seconds
+TIER 2 — Minutes 3–6  (~450–900 words):
+  Place IMAGE_PROMPT every ~50 words (~20 seconds of speech)
+  Purpose: Sustain engagement, core content delivery
+
+TIER 3 — Minutes 6–15 (~900–2,250 words):
+  Place IMAGE_PROMPT every ~150 words (~60 seconds of speech)
   Purpose: Viewer is invested — fewer cuts, deeper immersion
 
-TIER 4 — Minutes 15+ (Long-form zone):
-  Section length: 260-300 words (~280 avg)
-  Image rhythm: 1 image per ~2 minutes
-  Purpose: Deep content — image serves as chapter anchor, not pacing tool
+TIER 4 — Minutes 15+  (~2,250+ words):
+  Place IMAGE_PROMPT every ~280 words (~2 minutes of speech)
+  Purpose: Deep long-form content — image as chapter anchor, not pacing tool
+
+NOTE: These intervals are WORD-COUNT triggers, not section triggers.
+Count narration words from the start; insert IMAGE_PROMPT every N words regardless of section boundaries.
 
 Expected total IMAGE_PROMPTs by video length:
   8-10 min  → ~31 total
@@ -207,8 +219,7 @@ Expected total IMAGE_PROMPTs by video length:
   40 min    → ~49 total
 
 The script drives the images — never the reverse.
-Write the narration naturally, then find the perfect image
-for exactly what those specific words describe.
+Write the narration naturally, then place IMAGE_PROMPTs at the right word-count intervals.
 
 STYLISTIC GUIDELINES
 
@@ -283,8 +294,9 @@ Before outputting, verify:
 - First 30 seconds contain no generic filler
 - Structure is clear and logical
 - Each section has micro-hook opening
-- IMAGE_PROMPTs follow 4-tier density: 0-3min every ~25 words, 3-6min every ~47 words, 6-15min every ~140 words, 15min+ every ~280 words
-- Every IMAGE_PROMPT is contextually specific to that section's narration (not generic theme)
+- IMAGE_PROMPTs placed inline at word-count intervals: 0-3min every ~25w, 3-6min every ~50w, 6-15min every ~150w, 15min+ every ~280w
+- IMAGE_PROMPTs appear WITHIN sections (not only at section start) — multiple per section is correct in Tier 1-2
+- Every IMAGE_PROMPT is contextually specific to the narration immediately surrounding it (not generic theme)
 - No two IMAGE_PROMPTs describe similar or identical visuals
 - Mid-roll CTA included (if 12+ min)
 - Final CTA includes specific engagement question
