@@ -20,7 +20,7 @@ class PipelineRunRequest(BaseModel):
     budget: float | None = Field(None, description="Max spend in USD")
     langs: list[str] | None = Field(None, description="Language codes for multilingual output")
     dry_run: bool = Field(False, description="Estimate costs only, no API calls")
-    background_music: bool = Field(False, description="Mix royalty-free background music at -20dB")
+    background_music: bool = Field(True, description="Mix royalty-free background music at -20dB")
     no_ken_burns: bool = Field(False, description="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)")
     image_style: str | None = Field(None, description="Override image generation style prompt")
     voice_id: str | None = Field(None, description="Override voice ID from channel config")

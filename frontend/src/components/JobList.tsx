@@ -107,7 +107,7 @@ export function JobList() {
     draft:            false,
     dry_run:          false,
     from_step:        1,
-    background_music: false,
+    background_music: true,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
