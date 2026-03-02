@@ -19,13 +19,14 @@ Target audience: {audience}
 
 EVALUATION CRITERIA:
 
-1. CLARITY — The SPECIFIC video topic ("{topic}") is clear within the first 2 sentences.
+1. CLARITY — The SPECIFIC video topic ("{topic}") is clear within the first paragraph (first 5 sentences).
    SSSQ rule: Single Subject, Single Question.
-   - Does the viewer immediately understand the specific topic (not just the niche)?
-   - Is there zero ambiguity about WHAT this video is about?
-   - Could 50,000 different viewers all understand the same specific topic?
-   FAIL signals: vague opener ("something crazy"), ambiguous wording that could mean multiple topics,
-     "what is it?" instead of knowing the topic, hook sounds like a different type of video than the actual topic
+   - A Context Lean-In opener (2-3 emotional setup sentences) before naming the topic is ALLOWED and GOOD.
+   - By sentence 4-5, the viewer must understand what specific topic or question this video answers.
+   - Is there zero ambiguity about WHAT this video is about (even if the topic arrives slightly delayed)?
+   - Could 50,000 different viewers all understand the same specific topic after reading the full intro?
+   FAIL signals: topic is NEVER named or clearly implied anywhere in the intro; vague filler ("something crazy
+     happened", "this will blow your mind") with no topic signal; hook could be about 5 different topics
 
 2. CURIOSITY — A curiosity gap or open loop is created.
    3-step formula: Context Lean-In → "BUT/HOWEVER" Interjection → Contrarian Snapback
@@ -52,9 +53,9 @@ EVALUATION CRITERIA:
 SCORING RULES:
 - Each criterion: pass (true) or fail (false)
 - pass_count: 0–4
-- Overall pass: pass_count >= 3 (need at least 3/4)
+- Overall pass: pass_count >= 4 (need all 4/4)
 - feedback: 1-2 sentences per criterion explaining what works or what to fix
-- suggested_rewrite: Only if pass_count < 3 — provide a 3-4 sentence improved intro narration
+- suggested_rewrite: Only if pass_count < 4 — provide a 3-4 sentence improved intro narration
 
 ---
 

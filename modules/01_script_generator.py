@@ -979,11 +979,11 @@ async def _generate_one_variant(
     # content, not just the channel niche (e.g. niche="history" but topic="Carl Jung shadow work")
     topic = source_data.get("title", "")
 
-    # Hook pass threshold: 3/4 criteria required.
-    # v3 hooks intentionally delay topic reveal, so CLARITY (criterion 1) will typically fail.
-    # A good v3 hook must compensate by passing CURIOSITY + RELEVANCE + INTEREST (3/4 total).
-    # If Opus only scores 2/4, the validator's suggested_rewrite is applied (up to MAX_INTRO_REGEN times).
-    hook_pass_threshold = 3
+    # Hook pass threshold: 4/4 criteria required.
+    # CLARITY now allows Context Lean-In (topic clear by sentence 4-5, not sentence 1-2).
+    # A good v3 hook must pass all 4: CLARITY (delayed OK) + CURIOSITY + RELEVANCE + INTEREST.
+    # If any criterion fails, Opus regenerates with targeted feedback (up to MAX_INTRO_REGEN times).
+    hook_pass_threshold = 4
 
     intro_block = script.blocks[0]
 
