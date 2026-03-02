@@ -61,9 +61,15 @@ MIN_IMAGE_BYTES = 5_000
 MIN_AUDIO_BYTES = 1_000
 BLOCK_VIDEO_EXT = ".mp4"
 
-# Alternating Ken Burns cycle applied to blocks without an explicit animation.
-# Pattern: zoom_in → pan_left → zoom_in → pan_right → repeat
+# Inter-block animation cycle (applied at block boundaries with crossfade).
 _KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
+
+# Within-block animation cycle for multi-segment blocks.
+# ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries:
+#   zoom_in  ends at: crop 1920×1080 center → zoom_out starts at: crop 1920×1080 center ✓
+#   zoom_out ends at: crop 2208×1242 wide   → zoom_in  starts at: crop 2208×1242 wide   ✓
+# No crossfade needed → block duration preserved exactly → no audio sync loss.
+_WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
 
 # Default image frequency tiers when not configured in channel config.
 # Tiers are matched against elapsed VIDEO TIME (not block time).
@@ -374,17 +380,23 @@ def compile_video(
 
         else:
             # ── Normal path: Ken Burns per block with image-frequency splitting ──
-            # Each block's audio duration is split into short segments (e.g. 10–20s).
-            # Each segment uses the same image but a different animation from _KB_CYCLE,
-            # giving a "new shot" feel without generating extra images.
-            freq_cfg  = channel_config.get("image_frequency", {})
-            freq_on   = freq_cfg.get("enabled", True)  # on by default
+            #
+            # Architecture (critical for audio sync):
+            #   WITHIN block: segments concat WITHOUT crossfade (hard cuts — invisible
+            #     because zoom_in/zoom_out start+end at identical crop positions).
+            #     → block duration preserved exactly, no audio trim.
+            #   BETWEEN blocks: crossfade 0.5s as before.
+            #     → only N_blocks-1 crossfades (7 for 8 blocks = 3.5s trim, acceptable).
+            #
+            # If all segments used crossfade, 80+ segments × 0.5s ≈ 40s audio would be cut!
+            freq_cfg   = channel_config.get("image_frequency", {})
+            freq_on    = freq_cfg.get("enabled", True)
             freq_tiers = freq_cfg.get("tiers", _DEFAULT_FREQ_TIERS) if freq_on else None
 
-            block_clips: list[Path] = []
+            block_videos: list[Path] = []   # one video per block (segments pre-merged)
             prev_image: Path | None = None
-            elapsed_video_time = 0.0   # running video position for tier selection
-            _kb_idx = 0                # global animation-cycle counter across all segments
+            elapsed_video_time = 0.0
+            _kb_idx = 0                     # inter-block animation cycle counter
 
             for i, block in enumerate(voiced_blocks, 1):
                 duration   = float(block["audio_duration"])
@@ -392,7 +404,7 @@ def compile_video(
 
                 if image_path is None:
                     log.warning("Block %s: no image — creating black frame", block["id"])
-                    clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
+                    clip_path = tmp / f"clip_{block['id']}_black{BLOCK_VIDEO_EXT}"
                     from utils.ffmpeg_utils import _run  # noqa: PLC0415
                     _run([
                         "ffmpeg", "-y",
@@ -400,44 +412,73 @@ def compile_video(
                         "-t", str(duration),
                         "-c:v", "libx264", "-crf", "22", str(clip_path),
                     ])
-                    block_clips.append(clip_path)
+                    block_videos.append(clip_path)
+                    _kb_idx += 1
+
                 else:
-                    # Split block into time-based segments
                     segments = (
                         _split_duration_to_segments(elapsed_video_time, duration, freq_tiers)
                         if freq_tiers else [duration]
                     )
-                    for seg_idx, seg_dur in enumerate(segments):
+
+                    if len(segments) == 1:
+                        # Short block — single clip, use inter-block cycle for variety
                         animation = _KB_CYCLE[_kb_idx % len(_KB_CYCLE)]
                         _kb_idx += 1
-                        seg_name  = f"clip_{block['id']}_{seg_idx:02d}{BLOCK_VIDEO_EXT}"
-                        clip_path = tmp / seg_name
+                        clip_path = tmp / f"clip_{block['id']}_00{BLOCK_VIDEO_EXT}"
                         ken_burns(
                             image_path, clip_path,
-                            duration=seg_dur,
+                            duration=segments[0],
                             animation=animation,
                             resolution=resolution,
                         )
-                        block_clips.append(clip_path)
+                        block_videos.append(clip_path)
+                        log.info(
+                            "  [%d/%d] %s (%.1fs, %s)",
+                            i, n_blocks, block["id"], duration, animation,
+                        )
 
-                    log.info(
-                        "  [%d/%d] %s (%.1fs → %d segment%s)",
-                        i, n_blocks, block["id"], duration,
-                        len(segments), "s" if len(segments) != 1 else "",
-                    )
+                    else:
+                        # Long block — split into seamlessly-chainable zoom_in/zoom_out segments.
+                        # Hard cuts between them are mathematically invisible:
+                        #   zoom_in  at t=T: crop 1920×1080 at x=144,y=81 (center)
+                        #   zoom_out at t=0: crop 1920×1080 at x=144,y=81 (center) ← identical
+                        #   zoom_out at t=T: crop 2208×1242 at x=0,y=0   (wide)
+                        #   zoom_in  at t=0: crop 2208×1242 at x=0,y=0   (wide)   ← identical
+                        seg_clips: list[Path] = []
+                        for seg_idx, seg_dur in enumerate(segments):
+                            within_anim = _WITHIN_BLOCK_KB_CYCLE[seg_idx % len(_WITHIN_BLOCK_KB_CYCLE)]
+                            seg_path = tmp / f"clip_{block['id']}_{seg_idx:02d}{BLOCK_VIDEO_EXT}"
+                            ken_burns(
+                                image_path, seg_path,
+                                duration=seg_dur,
+                                animation=within_anim,
+                                resolution=resolution,
+                            )
+                            seg_clips.append(seg_path)
+
+                        # Merge segments WITHOUT crossfade — hard cuts, duration preserved
+                        block_clip = tmp / f"block_{block['id']}{BLOCK_VIDEO_EXT}"
+                        concat_videos(seg_clips, block_clip, crossfade=False)
+                        block_videos.append(block_clip)
+                        _kb_idx += 1
+                        log.info(
+                            "  [%d/%d] %s (%.1fs → %d segments, zoom_in↔zoom_out)",
+                            i, n_blocks, block["id"], duration, len(segments),
+                        )
 
                 if image_path:
                     prev_image = image_path
                 elapsed_video_time += duration
                 _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
 
-            if not block_clips:
+            if not block_videos:
                 raise RuntimeError("No video clips generated")
 
-            # Concat with crossfade
-            _emit_progress(76.0, "Concatenating clips…")
+            # Crossfade only between BLOCKS (N_blocks-1 transitions, not N_segments-1)
+            _emit_progress(76.0, "Concatenating blocks…")
             concat_videos(
-                block_clips, video_raw,
+                block_videos, video_raw,
                 crossfade=use_crossfade,
                 crossfade_duration=crossfade_dur,
             )
