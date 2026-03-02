@@ -5,7 +5,7 @@ const BASE = '/api'
 export interface Job {
   job_id: string
   kind: 'pipeline' | 'batch'
-  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'waiting_review' | 'done' | 'failed' | 'cancelled'
   source: string
   channel: string
   quality: string
@@ -15,10 +15,11 @@ export interface Job {
   elapsed: number | null
   step: number
   step_name: string
-  pct: number       // 0–100 real progress from backend
+  pct: number          // 0–100 real progress from backend
   error: string
   logs: string[]
   db_video_id: number | null
+  review_stage: string | null  // 'script' | 'images' | null
 }
 
 export interface Video {
@@ -154,6 +155,8 @@ export const api = {
     get: (id: string) => req<Job>(`/jobs/${id}`),
     cancel: (id: string) =>
       req<{ status: string }>(`/jobs/${id}`, { method: 'DELETE' }),
+    approve: (id: string, stage: string) =>
+      req<{ approved: boolean; stage: string }>(`/jobs/${id}/approve?stage=${stage}`, { method: 'POST' }),
   },
 
   pipeline: {

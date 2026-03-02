@@ -20,11 +20,17 @@ const STEP_PCT_RANGE: [number, number][] = [
 ]
 
 const STATUS_COLOR: Record<string, string> = {
-  queued:    'bg-yellow-900 text-yellow-300',
-  running:   'bg-blue-900 text-blue-300',
-  done:      'bg-green-900 text-green-300',
-  failed:    'bg-red-900 text-red-300',
-  cancelled: 'bg-gray-700 text-gray-300',
+  queued:         'bg-yellow-900 text-yellow-300',
+  running:        'bg-blue-900 text-blue-300',
+  waiting_review: 'bg-amber-800 text-amber-300',
+  done:           'bg-green-900 text-green-300',
+  failed:         'bg-red-900 text-red-300',
+  cancelled:      'bg-gray-700 text-gray-300',
+}
+
+const REVIEW_LABEL: Record<string, { icon: string; title: string; hint: string }> = {
+  script: { icon: '📋', title: 'Review Script', hint: 'Script generated — approve to start image & voice generation' },
+  images: { icon: '🖼', title: 'Review Images', hint: 'Images validated — approve to continue to video compilation' },
 }
 
 function fmtSec(sec: number): string {
@@ -67,15 +73,42 @@ interface Props {
 }
 
 export function JobCard({ job, onRefresh }: Props) {
-  const isActive = job.status === 'running' || job.status === 'queued'
+  const isActive = ['running', 'queued', 'waiting_review'].includes(job.status)
   const { events } = useWebSocket(isActive ? job.job_id : null)
   const [expanded, setExpanded] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [approving, setApproving] = useState(false)
   const [liveSec, setLiveSec] = useState<number | null>(null)
 
-  // Live elapsed timer — ticks every second while job is active
+  // Derive current status from WS events (newest-first scan)
+  const liveStatus = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]
+      const t = e.type
+      if (t === 'done') return 'done'
+      if (t === 'error') return 'failed'
+      if (t === 'cancelled') return 'cancelled'
+      if (t === 'review_required') return 'waiting_review'
+      if (t === 'review_approved') return 'running'
+      if (t === 'status' && typeof e.status === 'string') return e.status as string
+    }
+    return job.status
+  })()
+
+  // Extract current review stage (review_required sets it, review_approved clears it)
+  const liveReviewStage = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]
+      if (e.type === 'review_required') return e.stage as string
+      if (e.type === 'review_approved') return null
+    }
+    return liveStatus === 'waiting_review' ? job.review_stage : null
+  })()
+
+  // Live elapsed timer — ticks every second while job is not terminal
   useEffect(() => {
-    if (!isActive || !job.started_at) {
+    const terminal = ['done', 'failed', 'cancelled']
+    if (terminal.includes(liveStatus) || !job.started_at) {
       setLiveSec(null)
       return
     }
@@ -86,7 +119,7 @@ export function JobCard({ job, onRefresh }: Props) {
     calc()
     const id = setInterval(calc, 1000)
     return () => clearInterval(id)
-  }, [isActive, job.started_at])
+  }, [liveStatus, job.started_at])
 
   // Derive live step from WS events (fall back to snapshot)
   const liveStep = events.reduce<number>((acc, e) => {
@@ -98,14 +131,6 @@ export function JobCard({ job, onRefresh }: Props) {
     ...job.logs,
     ...events.filter((e) => e.type === 'log').map((e) => String(e.message)),
   ]
-
-  const liveStatus = (() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const t = events[i].type
-      if (['done', 'error', 'cancelled', 'running'].includes(t)) return t
-    }
-    return job.status
-  })()
 
   const elapsedSec = liveSec ?? job.elapsed ?? 0
 
@@ -150,6 +175,18 @@ export function JobCard({ job, onRefresh }: Props) {
     }
   }
 
+  async function handleApprove() {
+    if (!liveReviewStage) return
+    setApproving(true)
+    try {
+      await api.jobs.approve(job.job_id, liveReviewStage)
+    } catch (err) {
+      console.error('Approve failed:', err)
+    } finally {
+      setApproving(false)
+    }
+  }
+
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
       {/* Header */}
@@ -186,7 +223,7 @@ export function JobCard({ job, onRefresh }: Props) {
       </div>
 
       {/* Step progress bar (pipeline only) */}
-      {job.kind === 'pipeline' && (liveStatus === 'running' || liveStatus === 'done') && (
+      {job.kind === 'pipeline' && (liveStatus === 'running' || liveStatus === 'waiting_review' || liveStatus === 'done') && (
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-gray-400">
             <span className="font-medium">
@@ -232,6 +269,30 @@ export function JobCard({ job, onRefresh }: Props) {
           </div>
         </div>
       )}
+
+      {/* Review checkpoint banner */}
+      {liveStatus === 'waiting_review' && liveReviewStage && (() => {
+        const info = REVIEW_LABEL[liveReviewStage] ?? { icon: '⏸', title: 'Review Required', hint: 'Waiting for approval' }
+        return (
+          <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-amber-300">
+                  {info.icon} {info.title}
+                </div>
+                <div className="text-xs text-amber-400/70 mt-0.5">{info.hint}</div>
+              </div>
+              <button
+                onClick={handleApprove}
+                disabled={approving}
+                className="shrink-0 px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-amber-950 disabled:opacity-50 transition-colors"
+              >
+                {approving ? 'Approving…' : 'Approve & Continue →'}
+              </button>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Timing row */}
       <div className="flex items-center gap-4 text-xs text-gray-400 tabular-nums">
