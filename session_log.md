@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-03-02 — №29 Bug fixes: smooth Ken Burns, image_style override, image frequency
+
+### utils/ffmpeg_utils.py
+- `ken_burns()` — замінено zoompan (ZOOMPAN_FPS=6 → frame duplication статтер на довгих блоках 130-240s) на dynamic crop filter з `t` time variable
+- Новий підхід: motion обчислюється per-frame при 30fps (без дублювання) → ідеально плавний zoom/pan
+- zoom_in: crop window shrinks overscan→output (15% → 0%); zoom_out: навпаки; pan_left/right: x позиція по `t`
+- `T = max(duration, 0.001)` — безпечний знаменник
+
+### modules/02_image_generator.py
+- `generate_images()` — додано `image_style: str | None = None` параметр
+- Якщо передано — перевизначає `channel_config["image_style"]`; якщо None — fallback на channel_config
+
+### pipeline.py
+- `generate_images()` тепер отримує `image_style=image_style or None` з `run_pipeline()` параметрів
+- Видалено TODO коментар (`# TODO: image_style override`)
+
+### modules/05_video_compiler.py
+- Додано `_DEFAULT_FREQ_TIERS`, `_get_interval_for_time()`, `_split_duration_to_segments()`
+- Ken Burns шлях: кожен блок ділиться на 10s сегменти (перші 3 хв відео) або 20s сегменти (після 3 хв)
+- Кожен сегмент — окремий `ken_burns()` кліп з тим самим зображенням але іншою анімацією з `_KB_CYCLE`
+- `elapsed_video_time` треків позицію відео для правильного вибору тиру; `_kb_idx` — глобальний індекс
+- Конфігурується через `channel_config.image_frequency.{enabled, tiers}`; default = вбудований
+
+**Commit:** `116460e`
+
+---
+
 ## 2026-03-02 — №28 Validator improvements (10 changes)
 
 ### modules/01b_script_validator.py
