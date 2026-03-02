@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-03-02 — №28 Validator improvements (10 changes)
+
+### modules/01b_script_validator.py
+- `_GENERIC_RE` розширено з 8 до 16+ паттернів: "A person thinking", "Concept of X", "Scene depicting", `generic\b`, "moody atmosphere" тощо — 12/12 тестів
+- Cut-off detection: тепер сканує ВСІ блоки (не лише останні 2); mid-script → warning, кінець → critical
+- Language heuristic: < 40% кирилиці для uk/ru/be/bg/sr/mk/kk/mn → `wrong_language` warning
+- Dynamic `short_block` threshold: `max(15, duration_min × 2)` замість фіксованого 15
+- Required fields check: відсутній `id` або `type` → critical
+- Block order check: CTA/outro як перший блок → warning
+- `_structural_checks` тепер приймає `language: str | None`
+
+### modules/02b_image_validator.py
+- Pre-regen: відсутні/пошкоджені зображення з `image_prompt` → авто-генерація перед scoring (не просто `failed`)
+- WaveSpeed semaphore тепер тримається тільки під час POST, не під час 3-хв polling → справжній паралелізм
+- Scoring failure → `skipped=True` замість фейкового `score=10.0`
+- `_regen_one`: рекурсія замінена на `for attempt in range(1, max_attempts + 1)`
+
+**Commits:** `e29e537` (10 покращень)
+
+---
+
 ## 2026-03-02 — №27 Browser push notifications
 
 ### frontend/src/hooks/useNotifications.ts (NEW)
