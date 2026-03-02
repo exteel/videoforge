@@ -65,6 +65,55 @@ BLOCK_VIDEO_EXT = ".mp4"
 # Pattern: zoom_in → pan_left → zoom_in → pan_right → repeat
 _KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
 
+# Default image frequency tiers when not configured in channel config.
+# Tiers are matched against elapsed VIDEO TIME (not block time).
+# Each tier fires until `until_seconds` is reached; last tier (until_seconds=None) is the catch-all.
+_DEFAULT_FREQ_TIERS: list[dict] = [
+    {"until_seconds": 180, "interval": 10},  # 0–3 min: new image segment every 10s
+    {"until_seconds": None, "interval": 20}, # 3+ min:  new image segment every 20s
+]
+
+
+def _get_interval_for_time(t: float, tiers: list[dict]) -> float:
+    """Return the image-change interval (seconds) for a given video timestamp t."""
+    for tier in tiers:
+        until = tier.get("until_seconds")
+        if until is None or t < until:
+            return float(tier.get("interval", 20))
+    return 20.0
+
+
+def _split_duration_to_segments(
+    start_time: float,
+    duration: float,
+    tiers: list[dict],
+) -> list[float]:
+    """
+    Split a block's audio duration into image segments based on frequency tiers.
+
+    Each segment will get its own ken_burns() clip using the same image
+    but a different animation from _KB_CYCLE — giving the visual effect of
+    the image "changing" every 10–20 seconds rather than holding for the full block.
+
+    Args:
+        start_time: Video timestamp (seconds) where this block begins.
+        duration:   Block audio duration in seconds.
+        tiers:      Image frequency tier config (list of dicts with 'until_seconds', 'interval').
+
+    Returns:
+        List of segment durations summing to `duration` (always at least one element).
+    """
+    segments: list[float] = []
+    remaining = duration
+    t = start_time
+    while remaining > 0.01:   # 10ms floor to avoid float-noise micro-segments
+        interval = _get_interval_for_time(t, tiers)
+        seg_dur = min(interval, remaining)
+        segments.append(seg_dur)
+        t += seg_dur
+        remaining -= seg_dur
+    return segments if segments else [duration]
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -324,18 +373,26 @@ def compile_video(
             _emit_progress(75.0, "Slideshow done")
 
         else:
-            # ── Normal path: Ken Burns per block ──
+            # ── Normal path: Ken Burns per block with image-frequency splitting ──
+            # Each block's audio duration is split into short segments (e.g. 10–20s).
+            # Each segment uses the same image but a different animation from _KB_CYCLE,
+            # giving a "new shot" feel without generating extra images.
+            freq_cfg  = channel_config.get("image_frequency", {})
+            freq_on   = freq_cfg.get("enabled", True)  # on by default
+            freq_tiers = freq_cfg.get("tiers", _DEFAULT_FREQ_TIERS) if freq_on else None
+
             block_clips: list[Path] = []
-            prev_image = None
+            prev_image: Path | None = None
+            elapsed_video_time = 0.0   # running video position for tier selection
+            _kb_idx = 0                # global animation-cycle counter across all segments
 
             for i, block in enumerate(voiced_blocks, 1):
-                duration  = float(block["audio_duration"])
-                animation = _animation_for_block(block, channel_config, block_index=i - 1)
+                duration   = float(block["audio_duration"])
                 image_path = _get_block_image(block, images_dir, prev_image)
-                clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
 
                 if image_path is None:
                     log.warning("Block %s: no image — creating black frame", block["id"])
+                    clip_path = tmp / f"clip_{block['id']}{BLOCK_VIDEO_EXT}"
                     from utils.ffmpeg_utils import _run  # noqa: PLC0415
                     _run([
                         "ffmpeg", "-y",
@@ -343,18 +400,35 @@ def compile_video(
                         "-t", str(duration),
                         "-c:v", "libx264", "-crf", "22", str(clip_path),
                     ])
+                    block_clips.append(clip_path)
                 else:
-                    ken_burns(
-                        image_path, clip_path,
-                        duration=duration,
-                        animation=animation,
-                        resolution=resolution,
+                    # Split block into time-based segments
+                    segments = (
+                        _split_duration_to_segments(elapsed_video_time, duration, freq_tiers)
+                        if freq_tiers else [duration]
+                    )
+                    for seg_idx, seg_dur in enumerate(segments):
+                        animation = _KB_CYCLE[_kb_idx % len(_KB_CYCLE)]
+                        _kb_idx += 1
+                        seg_name  = f"clip_{block['id']}_{seg_idx:02d}{BLOCK_VIDEO_EXT}"
+                        clip_path = tmp / seg_name
+                        ken_burns(
+                            image_path, clip_path,
+                            duration=seg_dur,
+                            animation=animation,
+                            resolution=resolution,
+                        )
+                        block_clips.append(clip_path)
+
+                    log.info(
+                        "  [%d/%d] %s (%.1fs → %d segment%s)",
+                        i, n_blocks, block["id"], duration,
+                        len(segments), "s" if len(segments) != 1 else "",
                     )
 
                 if image_path:
                     prev_image = image_path
-                block_clips.append(clip_path)
-                log.info("  [%d/%d] %s (%.1fs, %s)", i, n_blocks, block["id"], duration, animation)
+                elapsed_video_time += duration
                 _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
 
             if not block_clips:

@@ -512,8 +512,8 @@ async def run_pipeline(
                 channel_config_path,
                 dry_run=dry_run,
                 skip_existing=True,
+                image_style=image_style or None,
                 progress_callback=_img_sub_cb,
-                # TODO: image_style override — module 02 reads style from channel_config
             )
             voice_task = generate_voices(
                 s_path,

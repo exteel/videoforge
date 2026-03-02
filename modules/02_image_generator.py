@@ -283,6 +283,7 @@ async def generate_images(
     dry_run: bool = False,
     max_retries: int = MAX_VALIDATION_RETRIES,
     size: str | None = None,
+    image_style: str | None = None,
     progress_callback: Any | None = None,
 ) -> GenerationSummary:
     """
@@ -297,6 +298,8 @@ async def generate_images(
         dry_run: Log plan without making API calls.
         max_retries: Max regeneration attempts per image if validation fails.
         size: WaveSpeed image size string (e.g. "1280*720"). Default from constants.
+        image_style: Override image style from channel config (e.g. "cinematic, 8k").
+            If None, falls back to channel_config["image_style"].
 
     Returns:
         GenerationSummary with per-block results and cost totals.
@@ -311,7 +314,8 @@ async def generate_images(
     channel_config = load_channel_config(channel_config_path)
 
     blocks: list[dict[str, Any]] = script.get("blocks", [])
-    image_style = channel_config.get("image_style", "")
+    # image_style param overrides channel_config value when provided
+    image_style = image_style if image_style is not None else channel_config.get("image_style", "")
     image_size = size or DEFAULT_SIZE
 
     # Output directory

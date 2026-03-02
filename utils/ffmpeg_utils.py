@@ -51,9 +51,10 @@ DRAFT_RESOLUTION = "854x480"
 DRAFT_CRF = 28
 DRAFT_PRESET = "ultrafast"
 
-# Ken Burns internal computation FPS.
-# zoompan computes motion at this FPS, then fps= filter duplicates to output FPS.
-# At 6fps the zoom moves ~1px/frame on 1920px — imperceptible. 5× faster than 30fps.
+# Ken Burns was previously computed via zoompan at reduced FPS (ZOOMPAN_FPS=6).
+# That caused visible frame-duplication stutter on long clips (130-240s blocks).
+# Now replaced by dynamic crop filter with `t` time variable (per-frame smooth motion).
+# ZOOMPAN_FPS kept for reference only — no longer used in ken_burns().
 ZOOMPAN_FPS = 6
 
 # Ken Burns animation types
@@ -239,13 +240,10 @@ def ken_burns(
     _ensure_parent(out)
 
     w, h = (int(x) for x in resolution.split("x"))
-    # Compute zoompan at reduced internal FPS, then duplicate frames to output FPS.
-    # Ken Burns moves ~1px/frame at 6fps — indistinguishable from 30fps at this zoom speed.
-    zoom_fps = ZOOMPAN_FPS if not draft else fps
-    total_frames = int(duration * zoom_fps)
     crf = DRAFT_CRF if draft else DEFAULT_CRF
     preset = DRAFT_PRESET if draft else DEFAULT_PRESET
     res = DRAFT_RESOLUTION if draft else resolution
+    T = max(duration, 0.001)  # Safe denominator for time expressions
 
     if draft or animation == "static":
         # Simple static: image → video at target resolution
@@ -267,59 +265,57 @@ def ken_burns(
             str(out),
         ]
     else:
-        # Overscan factor — work with slightly larger canvas for motion room
+        # Dynamic crop Ken Burns — `t` time variable is evaluated per output frame,
+        # giving perfectly smooth motion at full fps with no frame-duplication stutter.
+        # (Previous zoompan approach computed at 6fps then duplicated frames → visible jitter.)
         overscan = 1.15
         ow, oh = int(w * overscan), int(h * overscan)
+        dw, dh = ow - w, oh - h  # Pan/zoom pixel margin
+
+        # Common first step: scale image to overscan canvas and force exact dimensions
+        scale_filter = (
+            f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+            f"crop={ow}:{oh}"
+        )
 
         if animation == "zoom_in":
-            # Zoom from 1.0× to 1.15× (scale from w→ow over duration)
-            # trunc() on x/y prevents 1-pixel jitter caused by float→int rounding in zoompan
-            vf = (
-                f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{oh},"
-                f"zoompan=z='1+{(overscan-1)/total_frames:.6f}*on':"
-                f"x='trunc(iw/2-(iw/zoom/2))':"
-                f"y='trunc(ih/2-(ih/zoom/2))':"
-                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
-                f"scale={w}:{h},"
-                f"fps={fps}"
+            # Crop window shrinks from overscan→output as t→T: smooth zoom in
+            motion = (
+                f"crop=w='trunc({ow}-{dw}*t/{T:.3f})':"
+                f"h='trunc({oh}-{dh}*t/{T:.3f})':"
+                f"x='trunc({dw}*t/{T:.3f}/2)':"
+                f"y='trunc({dh}*t/{T:.3f}/2)'"
             )
+            vf = f"{scale_filter},{motion},scale={w}:{h},fps={fps}"
+
         elif animation == "zoom_out":
-            # Zoom from 1.15× to 1.0×
-            vf = (
-                f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{oh},"
-                f"zoompan=z='{overscan:.4f}-{(overscan-1)/total_frames:.6f}*on':"
-                f"x='trunc(iw/2-(iw/zoom/2))':"
-                f"y='trunc(ih/2-(ih/zoom/2))':"
-                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
-                f"scale={w}:{h},"
-                f"fps={fps}"
+            # Crop window grows from output→overscan as t→T: smooth zoom out
+            motion = (
+                f"crop=w='trunc({w}+{dw}*t/{T:.3f})':"
+                f"h='trunc({h}+{dh}*t/{T:.3f})':"
+                f"x='trunc({dw}/2-{dw}*t/{T:.3f}/2)':"
+                f"y='trunc({dh}/2-{dh}*t/{T:.3f}/2)'"
             )
+            vf = f"{scale_filter},{motion},scale={w}:{h},fps={fps}"
+
         elif animation == "pan_left":
-            # Pan from right to left
-            vf = (
-                f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{oh},"
-                f"zoompan=z='{overscan:.4f}':"
-                f"x='trunc(iw/zoom*(on/{total_frames}))':"
-                f"y='trunc(ih/2-(ih/zoom/2))':"
-                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
-                f"scale={w}:{h},"
-                f"fps={fps}"
+            # Crop pans right→left: x from dw→0 at constant output size w×h
+            motion = (
+                f"crop={w}:{h}:"
+                f"x='trunc({dw}*(1-t/{T:.3f}))':"
+                f"y='trunc({dh}/2)'"
             )
+            vf = f"{scale_filter},{motion},fps={fps}"
+
         elif animation == "pan_right":
-            # Pan from left to right
-            vf = (
-                f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{oh},"
-                f"zoompan=z='{overscan:.4f}':"
-                f"x='trunc(iw/zoom*(1-on/{total_frames}))':"
-                f"y='trunc(ih/2-(ih/zoom/2))':"
-                f"d={total_frames}:s={w}x{h}:fps={zoom_fps},"
-                f"scale={w}:{h},"
-                f"fps={fps}"
+            # Crop pans left→right: x from 0→dw at constant output size w×h
+            motion = (
+                f"crop={w}:{h}:"
+                f"x='trunc({dw}*t/{T:.3f})':"
+                f"y='trunc({dh}/2)'"
             )
+            vf = f"{scale_filter},{motion},fps={fps}"
+
         else:
             raise ValueError(f"Unknown animation type: {animation!r}")
 
