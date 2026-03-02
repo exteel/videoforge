@@ -4,10 +4,13 @@ VideoForge — Module 01b: Script Validator & Auto-Fixer.
 Validates script.json after LLM generation and auto-fixes common issues.
 
 Detection (structural, no API cost):
-  cut_off        — script ends mid-sentence / without CTA
-  missing_cta    — no outro/CTA block at end
-  bad_prompt     — image_prompt is empty, too short, or matches generic patterns
-  duplicate      — same image concept repeated verbatim
+  cut_off         — block ends mid-sentence / connector word (ALL blocks, not just last)
+  missing_cta     — no outro/CTA block at end
+  bad_prompt      — image_prompt is empty, too short, or matches generic patterns (expanded list)
+  duplicate       — same image concept repeated verbatim
+  wrong_language  — narration Cyrillic ratio < 40% for declared Cyrillic-script language
+  missing_field   — block missing required 'id' or 'type'
+  bad_block_order — first block is CTA/outro (unexpected ordering)
 
 Auto-fix (LLM):
   cut_off + missing_cta → claude-sonnet-4-5: generates continuation blocks + CTA
@@ -63,17 +66,44 @@ TOO_SHORT_WORDS = 80     # <80 total words → script is basically empty
 # Per-block thresholds
 BLOCK_SHORT_WORDS = 15   # narration with <15 words → likely placeholder
 
+# Generic image prompt patterns — expanded set.
+# Anchored at ^ so we catch prompts that *start* with a vague/lazy description.
 _GENERIC_RE = re.compile(
-    r"^(abstract\s+(light|concept|background|theme|imagery)|"
+    r"^("
+    # ── Original patterns ──────────────────────────────────────────────────────
+    r"abstract\s+(light|concept|background|theme|imagery)|"
     r"philosophical\s+(concept|imagery)|"
     r"dark\s+(mood|atmosphere|background|tone)|"
     r"misty\s+(light|background|scene)|"
     r"cinematic\s+(scene|background)\s*$|"
     r"symbolic\s+(image|scene|concept|representation)\s*$|"
     r"visual\s+(metaphor|concept|representation)\s*$|"
-    r"atmospheric\s+(scene|image|visual)\s*$)",
+    r"atmospheric\s+(scene|image|visual)\s*$|"
+    # ── People doing vague things ───────────────────────────────────────────────
+    r"a?\s*(person|human|individual|man|woman|figure)\s+"
+    r"(thinking|standing|sitting|looking|walking|contemplating|pondering|reflecting)\b|"
+    r"people\s+(thinking|standing|sitting|walking|looking)\b|"
+    # ── "Concept / idea / symbol of X" ─────────────────────────────────────────
+    r"(concept|idea|notion|theme|essence)\s+of\b|"
+    r"(symbol|illustration|depiction|representation|embodiment)\s+of\b|"
+    # ── "Scene / image showing X" ───────────────────────────────────────────────
+    r"(scene|image|visual|picture|shot)\s+(depicting|showing|illustrating|representing)\b|"
+    # ── Catch-all generic descriptors ──────────────────────────────────────────
+    r"generic\b|"
+    r"(simple|plain|basic|minimal)\s+(background|scene|image|visual)\s*$|"
+    r"(abstract|generic|typical|standard)\s+(visual|image|scene|background)\s*$|"
+    r"(moody|dramatic|emotional|powerful)\s+(atmosphere|background)\b|"
+    r"(dark|light|bright|gloomy)\s+atmosphere\b|"
+    r"something\s+(abstract|symbolic|metaphorical|atmospheric)\b|"
+    # ── Vague camera shots ──────────────────────────────────────────────────────
+    r"(wide|establishing|aerial|overhead)\s+shot\s+of\s+(something|a\s+scene|a\s+concept)\s*$"
+    r")",
     re.IGNORECASE,
 )
+
+# Cyrillic-script language codes (ISO 639-1) used for language consistency check
+_CYRILLIC_LANGS = frozenset(["uk", "ru", "be", "bg", "sr", "mk", "kk", "mn"])
+_CYRILLIC_RE    = re.compile(r"[\u0400-\u04FF]")
 
 # Words that, when they are the last word of a narration, suggest a cut-off
 _CONNECTOR_WORDS = frozenset([
@@ -89,7 +119,7 @@ _CONNECTOR_WORDS = frozenset([
 
 @dataclass
 class ScriptIssue:
-    type: str           # cut_off | missing_cta | bad_prompt | duplicate_prompt
+    type: str           # cut_off | missing_cta | bad_prompt | duplicate_prompt | ...
     block_id: str = ""
     severity: str = "warning"   # critical | warning
     reason: str = ""
@@ -133,26 +163,59 @@ def _structural_checks(
     blocks: list[dict[str, Any]],
     duration_min: int | None = None,
     duration_max: int | None = None,
+    language: str | None = None,
 ) -> list[ScriptIssue]:
     """Fast checks that require no API call.
 
     Args:
-        blocks: Script blocks from script.json.
-        duration_min: Target minimum duration in minutes (used to compute TOO_SHORT threshold).
-        duration_max: Target maximum duration in minutes (used to compute TOO_LONG threshold).
+        blocks:       Script blocks from script.json.
+        duration_min: Target minimum duration in minutes (used for TOO_SHORT threshold).
+        duration_max: Target maximum duration in minutes (used for TOO_LONG threshold).
+        language:     Declared script language ISO 639-1 (e.g. 'uk', 'en').
+                      Used for language consistency heuristic.
     """
     issues: list[ScriptIssue] = []
 
     # Dynamic word count thresholds based on target duration
-    # too_long: 25% over max target (warns about duplicate/excessive content)
+    # too_long:  25% over max target (warns about duplicate/excessive content)
     # too_short: 50% under min target (critical — generation likely failed)
     eff_too_long  = int(duration_max * 150 * 1.25) if duration_max else TOO_LONG_WORDS
     eff_too_short = int(duration_min * 140 * 0.50) if duration_min else TOO_SHORT_WORDS
+    # Dynamic per-block minimum: scales with video length to avoid false positives on long-form.
+    # Formula: 2 words per minute of target (8 min → 16, 25 min → 50, 35 min → 70).
+    eff_block_short = max(BLOCK_SHORT_WORDS, int(duration_min * 2)) if duration_min else BLOCK_SHORT_WORDS
 
     if not blocks:
         return [ScriptIssue(type="no_blocks", severity="critical", reason="Script has no blocks")]
 
-    # ── CTA / outro check ──
+    # ── [NEW] Required fields check ──────────────────────────────────────────
+    for idx, block in enumerate(blocks):
+        if not block.get("id"):
+            issues.append(ScriptIssue(
+                type="missing_field",
+                block_id=f"block[{idx}]",
+                severity="critical",
+                reason=f"Block at index {idx} is missing required field 'id'",
+            ))
+        if not block.get("type"):
+            issues.append(ScriptIssue(
+                type="missing_field",
+                block_id=block.get("id", f"block[{idx}]"),
+                severity="critical",
+                reason=f"Block at index {idx} is missing required field 'type'",
+            ))
+
+    # ── [NEW] Block ordering check ────────────────────────────────────────────
+    first_type = blocks[0].get("type", "") if blocks else ""
+    if first_type in ("cta", "outro"):
+        issues.append(ScriptIssue(
+            type="bad_block_order",
+            block_id=blocks[0].get("id", ""),
+            severity="warning",
+            reason=f"First block is type '{first_type}' — expected 'intro' or 'section'",
+        ))
+
+    # ── CTA / outro check ─────────────────────────────────────────────────────
     has_cta = any(b.get("type") in ("cta", "outro") for b in blocks)
     if not has_cta:
         issues.append(ScriptIssue(
@@ -162,32 +225,32 @@ def _structural_checks(
             reason="No CTA/outro block found in script",
         ))
 
-    # ── Cut-off check: last NON-CTA block ends abruptly ──
-    # Check the final block; also scan all blocks for internal cut-offs (mid-script truncation)
-    check_cutoff = [blocks[-1]]
-    # Also check the block just before the CTA if it's the penultimate
-    if len(blocks) >= 2 and blocks[-1].get("type") in ("cta", "outro"):
-        check_cutoff.append(blocks[-2])
-    for blk in check_cutoff:
+    # ── [IMPROVED] Cut-off check: scan ALL blocks ─────────────────────────────
+    # Previously only checked last 2 blocks; now flags mid-script abrupt endings
+    # as warnings and final blocks as critical.
+    for i, blk in enumerate(blocks):
         narration = (blk.get("narration") or "").strip()
-        if narration:
-            ends_with_punct = narration.endswith((".", "!", "?", "…"))
-            words = narration.split()
-            last_word = re.sub(r"[^\w]", "", words[-1]).lower() if words else ""
-            if not ends_with_punct or last_word in _CONNECTOR_WORDS:
-                issues.append(ScriptIssue(
-                    type="cut_off",
-                    block_id=blk.get("id", ""),
-                    severity="critical",
-                    reason=f"Block ends abruptly: '…{narration[-80:]}'",
-                ))
+        if not narration:
+            continue
+        ends_with_punct = narration.endswith((".", "!", "?", "…"))
+        words    = narration.split()
+        last_word = re.sub(r"[^\w]", "", words[-1]).lower() if words else ""
+        if not ends_with_punct or last_word in _CONNECTOR_WORDS:
+            # Last two positions (penultimate section + CTA/outro) → critical
+            is_near_end = (i >= len(blocks) - 2)
+            issues.append(ScriptIssue(
+                type="cut_off",
+                block_id=blk.get("id", ""),
+                severity="critical" if is_near_end else "warning",
+                reason=f"Block ends abruptly: '…{narration[-80:]}'",
+            ))
 
-    # ── Per-block narration quality checks ──
+    # ── Per-block narration quality checks ───────────────────────────────────
     for block in blocks:
         bid  = block.get("id", "")
         narr = (block.get("narration") or "").strip()
 
-        # Empty narration after cleaning
+        # Empty narration
         if not narr and block.get("type") not in ("cta",):
             issues.append(ScriptIssue(
                 type="empty_narration", block_id=bid, severity="critical",
@@ -202,30 +265,36 @@ def _structural_checks(
                 reason="Narration contains raw [IMAGE_PROMPT:] tag — parser artifact, will be read aloud by TTS",
             ))
         elif _OTHER_TAG_IN_NARRATION_RE.search(narr):
-            m = _OTHER_TAG_IN_NARRATION_RE.search(narr)
+            m   = _OTHER_TAG_IN_NARRATION_RE.search(narr)
             tag = m.group(0) if m else "unknown tag"
             issues.append(ScriptIssue(
                 type="bad_narration", block_id=bid, severity="critical",
                 reason=f"Narration contains raw parser tag '{tag}' — will be read aloud by TTS",
             ))
 
-        # Too-short narration (likely placeholder or truncated)
+        # [IMPROVED] Too-short narration — now uses dynamic threshold
         word_count = len(narr.split())
-        if narr and word_count < BLOCK_SHORT_WORDS and block.get("type") not in ("cta",):
+        if narr and word_count < eff_block_short and block.get("type") not in ("cta",):
             issues.append(ScriptIssue(
                 type="short_block", block_id=bid, severity="warning",
-                reason=f"Narration too short ({word_count} words) — may be truncated or placeholder",
+                reason=(
+                    f"Narration too short ({word_count} words, min={eff_block_short}) "
+                    f"— may be truncated or placeholder"
+                ),
             ))
 
-    # ── Script-level length check ──
+    # ── Script-level length check ─────────────────────────────────────────────
     total_words = sum(len((b.get("narration") or "").split()) for b in blocks)
     if total_words > eff_too_long:
-        est_min = round(total_words / 140, 0)
+        est_min     = round(total_words / 140, 0)
         target_desc = f"{duration_min}-{duration_max} min" if duration_min and duration_max else "8-15 min"
         issues.append(ScriptIssue(
             type="too_long", block_id="",
             severity="warning",
-            reason=f"Script is {total_words} words (~{int(est_min)} min) — target is {target_desc}. Possible duplicate content.",
+            reason=(
+                f"Script is {total_words} words (~{int(est_min)} min) — target is {target_desc}. "
+                f"Possible duplicate content."
+            ),
         ))
     elif total_words < eff_too_short:
         issues.append(ScriptIssue(
@@ -233,14 +302,13 @@ def _structural_checks(
             reason=f"Script has only {total_words} words total — likely generation failure",
         ))
 
-    # ── Duplicate section titles (strong signal of doubled LLM output) ──
+    # ── Duplicate section titles (strong signal of doubled LLM output) ────────
     seen_labels: dict[str, str] = {}  # normalized_label → block_id
     for block in blocks:
         bid   = block.get("id", "")
         label = (block.get("timestamp_label") or "").strip().lower()
         if not label or label in ("hook", "subscribe", "intro", "outro"):
             continue
-        # Normalize: remove "the", "a", extra spaces, punctuation
         norm = re.sub(r"\b(the|a|an)\b", "", label)
         norm = re.sub(r"[^\w\s]", "", norm).strip()
         if norm in seen_labels:
@@ -248,12 +316,35 @@ def _structural_checks(
                 type="duplicate_section",
                 block_id=bid,
                 severity="warning",
-                reason=f"Section title '{block.get('timestamp_label')}' duplicates block {seen_labels[norm]} — possible doubled LLM output",
+                reason=(
+                    f"Section title '{block.get('timestamp_label')}' duplicates "
+                    f"block {seen_labels[norm]} — possible doubled LLM output"
+                ),
             ))
         else:
             seen_labels[norm] = bid
 
-    # ── Image prompt checks ──
+    # ── [NEW] Language consistency heuristic (no API) ─────────────────────────
+    # For Cyrillic-script languages: if <40% of alphabetic chars are Cyrillic,
+    # the LLM likely responded in a different language (e.g. English).
+    if language and language in _CYRILLIC_LANGS and blocks:
+        all_narration = " ".join((b.get("narration") or "") for b in blocks)
+        alpha_chars   = [c for c in all_narration if c.isalpha()]
+        if alpha_chars:
+            cyrillic_count = sum(1 for c in alpha_chars if _CYRILLIC_RE.match(c))
+            ratio = cyrillic_count / len(alpha_chars)
+            if ratio < 0.40:
+                issues.append(ScriptIssue(
+                    type="wrong_language",
+                    severity="warning",
+                    reason=(
+                        f"Declared language '{language}' is Cyrillic-script "
+                        f"but only {ratio:.0%} of characters are Cyrillic — "
+                        f"LLM may have responded in the wrong language"
+                    ),
+                ))
+
+    # ── Image prompt checks ───────────────────────────────────────────────────
     seen_prompts: dict[str, str] = {}  # prompt_key → block_id
     for block in blocks:
         bid    = block.get("id", "")
@@ -278,6 +369,7 @@ def _structural_checks(
             ))
             continue
 
+        # [IMPROVED] Expanded generic pattern detection
         if prompt and _GENERIC_RE.match(prompt):
             issues.append(ScriptIssue(
                 type="bad_prompt", block_id=bid, severity="warning",
@@ -330,12 +422,12 @@ async def _llm(
 
 async def _fix_cut_off(script: dict[str, Any], image_style: str) -> list[dict[str, Any]]:
     """Generate continuation blocks for a cut-off script (adds synthesis + CTA)."""
-    blocks  = script.get("blocks", [])
-    title   = script.get("title", "Unknown")
-    niche   = script.get("niche", "")
+    blocks   = script.get("blocks", [])
+    title    = script.get("title", "Unknown")
+    niche    = script.get("niche", "")
     language = script.get("language", "en")
 
-    # Pass last 5 blocks for richer context (was 3)
+    # Pass last 5 blocks for richer context
     context_blocks = blocks[-5:] if len(blocks) >= 5 else blocks
     tail = "\n\n".join(
         f"[{b.get('type', 'section').upper()} — {b.get('timestamp_label', b.get('id', ''))}]\n"
@@ -380,7 +472,7 @@ Return ONLY a JSON array (no markdown, no explanation):
     "animation": "zoom_in"
   }}
 ]"""
-    raw = await _llm(FIX_MODEL, [{"role": "user", "content": prompt}], max_tokens=3000)
+    raw   = await _llm(FIX_MODEL, [{"role": "user", "content": prompt}], max_tokens=3000)
     match = re.search(r"\[.*\]", raw, re.DOTALL)
     if not match:
         raise ValueError("No JSON array in cut_off fix response")
@@ -440,9 +532,9 @@ async def validate_and_fix_script(
     Validate script.json and auto-fix critical issues via LLM.
 
     Args:
-        script_path:      Path to script.json.
-        channel_config:   Channel config dict (used for image_style context).
-        auto_fix:         If True, call LLM to fix detected issues.
+        script_path:       Path to script.json.
+        channel_config:    Channel config dict (used for image_style context).
+        auto_fix:          If True, call LLM to fix detected issues.
         progress_callback: Optional callable({type, pct, message}).
 
     Returns:
@@ -460,17 +552,24 @@ async def validate_and_fix_script(
                 pass
 
     _emit("Validating script…", 5.0)
-    script = json.loads(script_path.read_text(encoding="utf-8"))
-    blocks = script.get("blocks", [])
+    script      = json.loads(script_path.read_text(encoding="utf-8"))
+    blocks      = script.get("blocks", [])
     image_style = (channel_config or {}).get("image_style", "cinematic, photorealistic, dramatic lighting")
 
     # Read target duration range from script.json (set by script generator, may be absent in old scripts)
     script_duration_min: int | None = script.get("duration_min")
     script_duration_max: int | None = script.get("duration_max")
+    # Language declared in script (for language consistency check)
+    script_language: str | None = script.get("language")
 
     # ── Structural checks (no API) ──
     _emit("Checking structure…", 15.0)
-    issues = _structural_checks(blocks, duration_min=script_duration_min, duration_max=script_duration_max)
+    issues = _structural_checks(
+        blocks,
+        duration_min=script_duration_min,
+        duration_max=script_duration_max,
+        language=script_language,
+    )
     result = ValidationResult(
         ok=not any(i.severity == "critical" for i in issues),
         issues=issues,
@@ -520,7 +619,6 @@ async def validate_and_fix_script(
                             block["image_prompt"] = salvaged
             # Strip all [IMAGE_PROMPT:...] (closed and unclosed) from narration
             narr = _CLOSED_IMAGE_INLINE_RE.sub("", narr)
-            # _UNCLOSED_IMAGE_TAG_RE stops at \n\n, so text after a blank line is preserved
             narr = _UNCLOSED_IMAGE_TAG_RE.sub("", narr).strip()
             narr = re.sub(r"\n{3,}", "\n\n", narr)
             block["narration"] = narr
@@ -534,7 +632,7 @@ async def validate_and_fix_script(
             log.info("Fixed %d bad_narration blocks (stripped embedded tags)", cleaned)
 
     # ── Fix 1: cut_off (also covers missing_cta since continuation includes CTA) ──
-    has_cut_off = any(i.type == "cut_off" for i in issues)
+    has_cut_off = any(i.type == "cut_off" and i.severity == "critical" for i in issues)
     has_no_cta  = any(i.type == "missing_cta" for i in issues)
 
     if has_cut_off:
@@ -603,11 +701,12 @@ async def validate_and_fix_script(
         script_path.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info("Saved fixed script: %s", script_path)
 
-        # ── Post-fix re-check: verify fixes actually resolved issues ──
+        # ── Post-fix re-check: verify fixes actually resolved critical issues ──
         remaining = _structural_checks(
             script.get("blocks", []),
             duration_min=script_duration_min,
             duration_max=script_duration_max,
+            language=script_language,
         )
         still_critical = [i for i in remaining if i.severity == "critical"]
         if still_critical:
