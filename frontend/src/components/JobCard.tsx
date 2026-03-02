@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { type Job, api } from '../api'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { useNotifications } from '../hooks/useNotifications'
 
 const STEPS = ['', 'Script', 'Images + Voices', 'Subtitles', 'Video', 'Thumbnail', 'Metadata']
 
@@ -86,6 +87,37 @@ export function JobCard({ job, onRefresh }: Props) {
   const [cancelling, setCancelling] = useState(false)
   const [approving, setApproving] = useState(false)
   const [liveSec, setLiveSec] = useState<number | null>(null)
+
+  // ── Browser notifications ──────────────────────────────────────────────────
+  const { notify } = useNotifications()
+  // Track how many events we've already evaluated so we only notify on NEW ones
+  const notifyPtrRef = useRef(0)
+
+  useEffect(() => {
+    const newEvents = events.slice(notifyPtrRef.current)
+    notifyPtrRef.current = events.length
+
+    for (const e of newEvents) {
+      const label = job.source || job.job_id
+      if (e.type === 'review_required') {
+        const stage = e.stage === 'script' ? 'Сценарій' : 'Зображення'
+        notify('VideoForge — Потрібне ревью', `${label}: ${stage} готовий до перевірки`, {
+          tag: `review-${job.job_id}`,
+          onlyWhenHidden: true,
+        })
+      } else if (e.type === 'done') {
+        notify('VideoForge — Готово ✓', `${label}: відео згенеровано`, {
+          tag: `done-${job.job_id}`,
+          onlyWhenHidden: true,
+        })
+      } else if (e.type === 'error') {
+        notify('VideoForge — Помилка', `${label}: ${String(e.message ?? 'Pipeline error')}`.slice(0, 120), {
+          tag: `error-${job.job_id}`,
+          onlyWhenHidden: true,
+        })
+      }
+    }
+  }, [events, job.source, job.job_id, notify])
 
   // Derive current status from WS events (newest-first scan)
   const liveStatus = (() => {

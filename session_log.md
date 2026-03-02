@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-03-02 — №27 Browser push notifications
+
+### frontend/src/hooks/useNotifications.ts (NEW)
+- `useNotifications()` hook — тонкий wrapper над Web Notifications API
+- `permission` state (default/granted/denied), читається з `Notification.permission`
+- `requestPermission()` — async, оновлює state після відповіді браузера
+- `notify(title, body, { tag?, icon?, onlyWhenHidden? })` — stable `useCallback` з `[]` deps
+  - Читає `Notification.permission` при виклику (не stale closure)
+  - `onlyWhenHidden: true` — не показує якщо `document.hasFocus() && visibilityState === 'visible'`
+  - `n.onclick → window.focus(); n.close()` — фокус на таб при кліку
+
+### frontend/src/App.tsx
+- Імпорт `useNotifications`
+- `🔔` кнопка в navbar справа від tabs:
+  - `permission === 'default'` → amber кнопка, клік → `requestPermission()`
+  - `permission === 'denied'` → `🔕`, disabled, tooltip з інструкцією
+  - `permission === 'granted'` → нічого (кнопка зникає)
+
+### frontend/src/components/JobCard.tsx
+- Імпорт `useRef` + `useNotifications`
+- `notifyPtrRef` — відстежує кількість оброблених подій (уникає повторних нотифікацій)
+- `useEffect` на `events` — сканує тільки НОВІ події:
+  - `review_required` → `notify('VideoForge — Потрібне ревью', '…: Сценарій/Зображення готовий')`
+  - `done` → `notify('VideoForge — Готово ✓', '…: відео згенеровано')`
+  - `error` → `notify('VideoForge — Помилка', '…: error message[:120]')`
+  - Всі з `tag: review/done/error-{job_id}` + `onlyWhenHidden: true`
+
+### Build: ✓ 40 modules (було 39), TypeScript чистий
+
+**Далі:** тест script validator
+
+---
+
 ## 2026-03-02 — Ken Burns fix + Validators + Review checkpoints
 
 ### utils/ffmpeg_utils.py

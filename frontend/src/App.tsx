@@ -5,6 +5,7 @@ import { VideoList } from './components/VideoList'
 import { StatsPanel } from './components/StatsPanel'
 import { ChannelsPanel } from './components/ChannelsPanel'
 import { YoutubePanel } from './components/YoutubePanel'
+import { useNotifications } from './hooks/useNotifications'
 
 type Tab = 'jobs' | 'script' | 'channels' | 'history' | 'youtube' | 'stats'
 
@@ -47,6 +48,7 @@ const TAB_DESC: Record<Tab, { title: string; desc: string }> = {
 export default function App() {
   const [tab, setTab] = useState<Tab>('jobs')
   const { title, desc } = TAB_DESC[tab]
+  const { permission, requestPermission } = useNotifications()
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -71,15 +73,36 @@ export default function App() {
               </button>
             ))}
           </nav>
-          <div className="ml-auto text-xs text-gray-500">
-            <a
-              href="http://localhost:8000/docs"
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-gray-300 transition-colors"
-            >
-              API docs ↗
-            </a>
+          <div className="ml-auto flex items-center gap-3">
+            {/* Notification permission bell */}
+            {permission !== 'granted' && (
+              <button
+                onClick={permission === 'default' ? requestPermission : undefined}
+                disabled={permission === 'denied'}
+                title={
+                  permission === 'denied'
+                    ? 'Сповіщення заблоковані — дозвольте в налаштуваннях браузера'
+                    : 'Увімкнути browser-сповіщення для review checkpoints та завершення задач'
+                }
+                className={`text-sm transition-colors ${
+                  permission === 'denied'
+                    ? 'text-gray-600 cursor-not-allowed'
+                    : 'text-amber-400 hover:text-amber-300 hover:bg-gray-700/50 px-1.5 py-0.5 rounded cursor-pointer'
+                }`}
+              >
+                {permission === 'denied' ? '🔕' : '🔔'}
+              </button>
+            )}
+            <span className="text-xs text-gray-500">
+              <a
+                href="http://localhost:8000/docs"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:text-gray-300 transition-colors"
+              >
+                API docs ↗
+              </a>
+            </span>
           </div>
         </div>
       </header>

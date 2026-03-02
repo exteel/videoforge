@@ -1,5 +1,5 @@
 # Project Context — VideoForge
-Останнє оновлення: 2026-03-01 20:00
+Останнє оновлення: 2026-03-02 12:00
 
 ## Що вже зроблено
 - [x] Архітектура: 8 CLI-модулів, PROJECT_PLAN, dev.py
@@ -45,9 +45,14 @@
 - [x] Image validator 02b (vision scoring gpt-4.1 + WaveSpeed auto-regen, threshold 7/10)
 - [x] Review checkpoints: pipeline паузи після script та після images, WebSocket review_required event
 - [x] POST /api/jobs/{id}/approve endpoint; Job.approve() + waiting_review status
+- [x] Review UI: script block preview + image grid з score badges
+- [x] WS reconnect: exponential backoff (1s→30s)
+- [x] Оптимізації: channel_config кешування, duration via wpm, validator costs, image_url в review data
+
+- [x] №27 Browser push notifications (Notification API — useNotifications hook, 🔔 navbar bell, review/done/error events)
 
 ## Поточний стан
-Validators + review checkpoints готові. Наступне: frontend review UI (модалки script/images + кнопка approve).
+Browser push notifications готові. Всі заплановані фічі реалізовані.
 
 ## Відомі баги
 (немає)
