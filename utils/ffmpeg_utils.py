@@ -243,8 +243,6 @@ def ken_burns(
     crf = DRAFT_CRF if draft else DEFAULT_CRF
     preset = DRAFT_PRESET if draft else DEFAULT_PRESET
     res = DRAFT_RESOLUTION if draft else resolution
-    T = max(duration, 0.001)  # Safe denominator for time expressions
-
     if draft or animation == "static":
         # Simple static: image → video at target resolution
         dw, dh = (int(x) for x in res.split("x"))
@@ -254,74 +252,74 @@ def ken_burns(
         )
         cmd = [
             FFMPEG, "-y",
-            "-loop", "1", "-i", str(inp),
+            "-loop", "1", "-r", str(fps), "-i", str(inp),
             "-vf", vf,
             "-c:v", DEFAULT_VIDEO_CODEC, "-crf", str(crf),
             "-preset", preset,
             "-threads", "0",
             "-t", str(duration),
             "-pix_fmt", "yuv420p",
-            "-r", str(fps),
             str(out),
         ]
     else:
-        # Dynamic crop Ken Burns — `t` time variable is evaluated per output frame,
-        # giving perfectly smooth motion at full fps with no frame-duplication stutter.
-        # (Previous zoompan approach computed at 6fps then duplicated frames → visible jitter.)
-        overscan = 1.15
-        ow, oh = int(w * overscan), int(h * overscan)
-        dw, dh = ow - w, oh - h  # Pan/zoom pixel margin
+        # Zoompan Ken Burns — smooth motion at full fps.
+        #
+        # WHY NOT CROP with dynamic w/h: changing crop dimensions per frame causes
+        # FFmpeg to reinitialize the filter chain mid-stream → "Error reinitializing
+        # filters!" / Error -22 (EINVAL). Only crop x/y can animate; w/h must be fixed.
+        #
+        # ZOOMPAN solution: `fps={fps}` + `-r {fps}` on input ensures one unique
+        # output frame per input frame → `on` counter advances 0,1,2,...N-1.
+        # No frame duplication → perfectly smooth motion at full fps.
+        # (Old bug: zoompan fps=6 → 5× frame duplication to reach 30fps → visible stutter.)
+        #
+        # Seamless within-block chain (zoom_in → zoom_out hard cut):
+        #   zoom_in  last frame:  z≈1.15  →  x = iw/2 - iw/1.15/2
+        #   zoom_out first frame: z=1.15  →  x = iw/2 - iw/1.15/2  ← identical
+        total_frames = max(int(duration * fps), 1)
 
-        # Common first step: scale image to overscan canvas and force exact dimensions
+        # Scale to exact output resolution with aspect-preserve padding
         scale_filter = (
-            f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-            f"crop={ow}:{oh}"
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"
         )
 
         if animation == "zoom_in":
-            # Crop window shrinks from overscan→output as t→T: smooth zoom in
-            motion = (
-                f"crop=w='trunc({ow}-{dw}*t/{T:.3f})':"
-                f"h='trunc({oh}-{dh}*t/{T:.3f})':"
-                f"x='trunc({dw}*t/{T:.3f}/2)':"
-                f"y='trunc({dh}*t/{T:.3f}/2)'"
-            )
-            vf = f"{scale_filter},{motion},scale={w}:{h},fps={fps}"
+            # Slow zoom in: z 1.0→1.15 (view window shrinks toward center)
+            z_expr = f"1+0.15*on/{total_frames}"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
 
         elif animation == "zoom_out":
-            # Crop window grows from output→overscan as t→T: smooth zoom out
-            motion = (
-                f"crop=w='trunc({w}+{dw}*t/{T:.3f})':"
-                f"h='trunc({h}+{dh}*t/{T:.3f})':"
-                f"x='trunc({dw}/2-{dw}*t/{T:.3f}/2)':"
-                f"y='trunc({dh}/2-{dh}*t/{T:.3f}/2)'"
-            )
-            vf = f"{scale_filter},{motion},scale={w}:{h},fps={fps}"
+            # Slow zoom out: z 1.15→1.0 (view window expands to full frame)
+            z_expr = f"1.15-0.15*on/{total_frames}"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
 
         elif animation == "pan_left":
-            # Crop pans right→left: x from dw→0 at constant output size w×h
-            motion = (
-                f"crop={w}:{h}:"
-                f"x='trunc({dw}*(1-t/{T:.3f}))':"
-                f"y='trunc({dh}/2)'"
-            )
-            vf = f"{scale_filter},{motion},fps={fps}"
+            # Pan right→left at constant zoom 1.15x
+            z_expr = "1.15"
+            x_expr = f"(iw-iw/zoom)*(1-on/{total_frames})"
+            y_expr = "ih/2-(ih/zoom/2)"
 
         elif animation == "pan_right":
-            # Crop pans left→right: x from 0→dw at constant output size w×h
-            motion = (
-                f"crop={w}:{h}:"
-                f"x='trunc({dw}*t/{T:.3f})':"
-                f"y='trunc({dh}/2)'"
-            )
-            vf = f"{scale_filter},{motion},fps={fps}"
+            # Pan left→right at constant zoom 1.15x
+            z_expr = "1.15"
+            x_expr = f"(iw-iw/zoom)*on/{total_frames}"
+            y_expr = "ih/2-(ih/zoom/2)"
 
         else:
             raise ValueError(f"Unknown animation type: {animation!r}")
 
+        vf = (
+            f"{scale_filter},"
+            f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
+            f":d=1:fps={fps}:s={w}x{h}"
+        )
+
         cmd = [
             FFMPEG, "-y",
-            "-loop", "1", "-i", str(inp),
+            "-loop", "1", "-r", str(fps), "-i", str(inp),
             "-vf", vf,
             "-c:v", DEFAULT_VIDEO_CODEC, "-crf", str(crf),
             "-preset", preset,
@@ -637,14 +635,18 @@ def mix_audio(
         f"[0:a][music]amix=inputs=2:duration=first:dropout_transition=3[aout]"
     )
 
+    # Choose codec to match output container (.mp3 → libmp3lame, otherwise aac)
+    audio_codec = "libmp3lame" if out.suffix.lower() == ".mp3" else DEFAULT_AUDIO_CODEC
+    audio_bitrate = "128k" if audio_codec == "libmp3lame" else DEFAULT_AUDIO_BITRATE
+
     cmd = [
         FFMPEG, "-y",
         "-i", str(vp),
         "-i", str(mp),
         "-filter_complex", filter_complex,
         "-map", "[aout]",
-        "-c:a", DEFAULT_AUDIO_CODEC,
-        "-b:a", DEFAULT_AUDIO_BITRATE,
+        "-c:a", audio_codec,
+        "-b:a", audio_bitrate,
         str(out),
     ]
     _run(cmd)

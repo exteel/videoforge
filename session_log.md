@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-03-02 — №31 Fix Ken Burns (zoompan fps=30) + fix music mixing codec
+
+### utils/ffmpeg_utils.py — ken_burns()
+- Dynamic crop w/h REMOVED: changing crop dimensions per frame → FFmpeg reinit error (-22)
+- REPLACED with zoompan d=1:fps={fps} — one unique frame per `on` counter → smooth 30fps
+- zoom_in: z=1+0.15*on/N, zoom_out: z=1.15-0.15*on/N, pans: constant z=1.15
+- Seamless chain preserved: zoom_in end (z≈1.15) = zoom_out start (z=1.15)
+
+### utils/ffmpeg_utils.py — mix_audio()
+- Bug: -c:a aac written to .mp3 container → "Invalid audio stream" / Error -22
+- Fix: .mp3 output → libmp3lame; others → aac
+
+### tests/test_components.py (new)
+- Isolated tests: --ken-burns, --music, --freq-tiers, --video-info
+
+---
+
 ## 2026-03-02 — №30 Image frequency tiers sync with master_script_v2.txt
 
 ### modules/05_video_compiler.py
