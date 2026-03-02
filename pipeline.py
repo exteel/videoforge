@@ -283,6 +283,13 @@ async def run_pipeline(
 
     proj.mkdir(parents=True, exist_ok=True)
 
+    # ── Channel config (read once, passed to all validators) ──────────────────
+    _chan_cfg: dict[str, Any] = {}
+    try:
+        _chan_cfg = json.loads(channel_config_path.read_text(encoding="utf-8"))
+    except Exception as _ce:
+        log.warning("Could not load channel config: %s", _ce)
+
     # ── DB tracking variables ──────────────────────────────────────────────────
     _vid_id: int | None = None
     _video_path: Path | None = None
@@ -396,15 +403,22 @@ async def run_pipeline(
             # ── Script validation + auto-fix ───────────────────────────────
             def _script_val_cb(ev: dict) -> None:
                 _emit(progress_callback, **ev)
+            _val_result: Any = None
             try:
                 _validate_script = _fn("modules/01b_script_validator.py", "validate_and_fix_script")
-                _chan_cfg = json.loads(channel_config_path.read_text(encoding="utf-8"))
-                _val = await _validate_script(s_path, _chan_cfg, progress_callback=_script_val_cb)
-                if _val.issues:
+                _val_result = await _validate_script(s_path, _chan_cfg, progress_callback=_script_val_cb)
+                if _val_result.issues:
                     log.info(
                         "Script validator: %d issues found, %d fixed",
-                        len(_val.issues), len(_val.fixes_applied),
+                        len(_val_result.issues), len(_val_result.fixes_applied),
                     )
+                # Track LLM costs from auto-fix
+                if _val_result.fixes_applied:
+                    _bad_prompt_fixes = sum(1 for f in _val_result.fixes_applied if "prompt" in f.lower())
+                    if _bad_prompt_fixes:
+                        cost.add("Script validator (prompts)", _bad_prompt_fixes * 0.001)
+                    if any("cont" in f.lower() for f in _val_result.fixes_applied):
+                        cost.add("Script validator (cut-off)", 0.012)
             except Exception as _vexc:
                 log.warning("Script validation skipped (non-fatal): %s", _vexc)
 
@@ -424,12 +438,21 @@ async def run_pipeline(
         elif review_callback is not None:
             _sd = _load_script(s_path)
             _blocks = _sd.get("blocks", [])
+            # Duration: word count / 140 wpm (audio_duration is null before TTS)
+            _word_count = sum(len((b.get("narration") or "").split()) for b in _blocks)
             await review_callback("script", {
                 "script_path": str(s_path),
                 "block_count": len(_blocks),
-                "duration_min": round(
-                    sum(b.get("audio_duration") or 0.0 for b in _blocks) / 60, 1
-                ),
+                "duration_min": round(_word_count / 140, 1),
+                "word_count": _word_count,
+                "blocks": [
+                    {
+                        "id": b.get("id", ""),
+                        "type": b.get("type", "section"),
+                        "narration": (b.get("narration") or "")[:150],
+                    }
+                    for b in _blocks[:30]
+                ],
             })
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -505,12 +528,22 @@ async def run_pipeline(
             _img_val_data: dict = {}
             try:
                 _validate_images = _fn("modules/02b_image_validator.py", "validate_and_fix_images")
-                _chan_cfg2 = json.loads(channel_config_path.read_text(encoding="utf-8"))
                 _images_dir = proj / "images"
+                _img_threshold = float(_chan_cfg.get("image_validation_threshold", 7.0))
                 _img_val = await _validate_images(
-                    s_path, _images_dir, _chan_cfg2, progress_callback=_img_sub_cb,
+                    s_path, _images_dir, _chan_cfg,
+                    threshold=_img_threshold,
+                    progress_callback=_img_sub_cb,
                 )
                 _img_val_data = _img_val.to_dict()
+                # Add image URLs for frontend preview (/projects is a static mount)
+                _src_name = proj.name
+                for _sc in _img_val_data.get("scores", []):
+                    _sc["image_url"] = f"/projects/{_src_name}/images/{_sc['block_id']}.png"
+                # Track scoring + regen costs
+                cost.add("Image validator (scoring)", _img_val.total * 0.003)
+                if _img_val.regenerated > 0:
+                    cost.add("Image validator (regen)", _img_val.regenerated * 0.005)
                 log.info(
                     "Image validator: %d/%d OK, %d regen, %d failed",
                     _img_val.ok_count, _img_val.total,
@@ -524,6 +557,7 @@ async def run_pipeline(
                 await review_callback("images", {
                     "images_dir": str(proj / "images"),
                     "script_path": str(s_path),
+                    "source_name": proj.name,
                     "validation": _img_val_data,
                 })
 

@@ -33,6 +33,13 @@ const REVIEW_LABEL: Record<string, { icon: string; title: string; hint: string }
   images: { icon: '🖼', title: 'Review Images', hint: 'Images validated — approve to continue to video compilation' },
 }
 
+const BLOCK_TYPE_COLOR: Record<string, string> = {
+  intro:   'bg-blue-800 text-blue-200',
+  section: 'bg-gray-700 text-gray-300',
+  cta:     'bg-purple-800 text-purple-200',
+  outro:   'bg-green-800 text-green-200',
+}
+
 function fmtSec(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
@@ -95,14 +102,20 @@ export function JobCard({ job, onRefresh }: Props) {
     return job.status
   })()
 
-  // Extract current review stage (review_required sets it, review_approved clears it)
-  const liveReviewStage = (() => {
+  // Extract current review stage + data (review_required sets, review_approved clears)
+  const { liveReviewStage, liveReviewData } = (() => {
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i]
-      if (e.type === 'review_required') return e.stage as string
-      if (e.type === 'review_approved') return null
+      if (e.type === 'review_required') return {
+        liveReviewStage: e.stage as string,
+        liveReviewData: (e.data ?? {}) as Record<string, unknown>,
+      }
+      if (e.type === 'review_approved') return { liveReviewStage: null, liveReviewData: null }
     }
-    return liveStatus === 'waiting_review' ? job.review_stage : null
+    return {
+      liveReviewStage: liveStatus === 'waiting_review' ? job.review_stage : null,
+      liveReviewData: null,
+    }
   })()
 
   // Live elapsed timer — ticks every second while job is not terminal
@@ -273,15 +286,42 @@ export function JobCard({ job, onRefresh }: Props) {
       {/* Review checkpoint banner */}
       {liveStatus === 'waiting_review' && liveReviewStage && (() => {
         const info = REVIEW_LABEL[liveReviewStage] ?? { icon: '⏸', title: 'Review Required', hint: 'Waiting for approval' }
+        const d = liveReviewData ?? {}
+
+        // Script-specific data
+        const scriptBlocks = d.blocks as { id: string; type: string; narration: string }[] | undefined
+        const blockCount   = (d.block_count as number) ?? scriptBlocks?.length ?? 0
+        const durationMin  = d.duration_min as number | undefined
+
+        // Image-specific data
+        const validation   = d.validation as { ok: number; total: number; regenerated: number; failed: number; scores: { block_id: string; score: number; ok: boolean; regenerated: boolean; image_url: string }[] } | undefined
+
         return (
-          <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-2">
+          <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-3">
+
+            {/* Header row */}
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-amber-300">
-                  {info.icon} {info.title}
-                </div>
+                <div className="text-sm font-semibold text-amber-300">{info.icon} {info.title}</div>
                 <div className="text-xs text-amber-400/70 mt-0.5">{info.hint}</div>
+
+                {/* Script stats */}
+                {liveReviewStage === 'script' && blockCount > 0 && (
+                  <div className="text-xs text-amber-300/60 mt-1 tabular-nums">
+                    {blockCount} блоків{durationMin ? ` · ~${durationMin} хв` : ''}
+                  </div>
+                )}
+
+                {/* Image stats */}
+                {liveReviewStage === 'images' && validation && (
+                  <div className="text-xs mt-1 flex gap-2 tabular-nums">
+                    <span className="text-green-400">✓ {validation.ok}/{validation.total} OK</span>
+                    {validation.regenerated > 0 && <span className="text-blue-400">↻ {validation.regenerated} regen</span>}
+                    {validation.failed > 0      && <span className="text-red-400">✗ {validation.failed} failed</span>}
+                  </div>
+                )}
               </div>
+
               <button
                 onClick={handleApprove}
                 disabled={approving}
@@ -290,6 +330,49 @@ export function JobCard({ job, onRefresh }: Props) {
                 {approving ? 'Approving…' : 'Approve & Continue →'}
               </button>
             </div>
+
+            {/* Script block preview */}
+            {liveReviewStage === 'script' && scriptBlocks && scriptBlocks.length > 0 && (
+              <div className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
+                {scriptBlocks.map((b) => (
+                  <div key={b.id} className="flex items-start gap-2 text-xs leading-snug">
+                    <span className={`shrink-0 mt-0.5 px-1 py-px rounded text-[10px] font-medium ${BLOCK_TYPE_COLOR[b.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                      {b.type}
+                    </span>
+                    <span className="text-gray-300 line-clamp-2">{b.narration}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Image grid */}
+            {liveReviewStage === 'images' && validation?.scores && validation.scores.length > 0 && (
+              <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                {validation.scores.slice(0, 24).map((s) => (
+                  <div key={s.block_id} className="relative group">
+                    <img
+                      src={s.image_url}
+                      alt={s.block_id}
+                      className="w-full aspect-video object-cover rounded bg-gray-700"
+                      loading="lazy"
+                    />
+                    {/* Score badge */}
+                    <div className={`absolute top-0.5 right-0.5 text-[9px] font-bold px-0.5 rounded leading-tight ${
+                      s.score >= 8 ? 'bg-green-500 text-white' :
+                      s.score >= 7 ? 'bg-yellow-500 text-black' :
+                                     'bg-red-500 text-white'
+                    }`}>
+                      {s.score.toFixed(0)}
+                    </div>
+                    {/* Regen indicator */}
+                    {s.regenerated && (
+                      <div className="absolute top-0.5 left-0.5 text-[9px] bg-blue-500 text-white px-0.5 rounded leading-tight">↻</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
           </div>
         )
       })()}

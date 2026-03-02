@@ -43,6 +43,7 @@ class Job:
     logs: list[str] = field(default_factory=list)
     db_video_id: int | None = None
     review_stage: str | None = None
+    review_data: dict = field(default_factory=dict, repr=False, compare=False)
     task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     subscribers: list[asyncio.Queue] = field(
         default_factory=list, repr=False, compare=False,
@@ -214,6 +215,7 @@ class JobManager:
             ev = asyncio.Event()
             job._review_events[stage] = ev
             job.review_stage = stage
+            job.review_data = data  # stored for late WS joiners
             job.status = "waiting_review"
             job.emit(type="review_required", stage=stage, data=data)
             job.log(f"[Review] Waiting for approval at stage: {stage}")
