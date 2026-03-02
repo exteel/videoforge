@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-03-02 — №36 Critical pipeline quality fixes (commit d15f5f4)
+
+### Діагноз реального проекту "Become Who You Are Afraid to Be / Carl Jung"
+- Total words: 2118 → 15.4 min замість 8-12 (duration ігнорується)
+- Blocks: 11, images per long block: 1-3, audio_duration block_005: 173s
+- Всі картинки циклювались по 10s незалежно від тексту → повтори + невідповідність
+
+### Fix 1+3+4 — Image-narration sync (modules/01_script_generator.py + 05_video_compiler.py)
+- **Parser**: при зустрічі `[IMAGE_PROMPT:]` рахуємо `_narration_word_count` і зберігаємо у `image_word_offsets: list[int]`; `ScriptBlock.image_word_offsets` → script.json
+- **Compiler**: нова функція `_image_for_segment(image_list, word_offsets, total_words, seg_idx, n_segments)` — `seg_word_pos = (seg_idx/n_segments)*total_words` → знаходить image для цієї позиції; fallback до cycling якщо offsets відсутні (v1 scripts)
+
+### Fix 5 — Duration control (modules/01_script_generator.py)
+- `_call_llm(duration_max)`: `word_budget = duration_max*150*1.15`; `tokens_first_chunk = min(MAX_TOKENS_PER_CHUNK, duration_max*150*1.4*0.9)`; guard `chunk_num > 1 and current_words >= word_budget → break`; continuation prompt includes `remaining_words`
+- `_build_user_prompt()`: `⚠️ HARD WORD LIMIT: {max_words} words maximum`
+
+### Fix 6 — Smooth Ken Burns (utils/ffmpeg_utils.py)
+- `scale={w*2}:{h*2}` перед zoompan (замість `{w}:{h}`) → iw=3840 → 0.84px/frame → rounded 1px → 0.5px apparent в 1080p → smooth
+
+### Fix bonus — Skip thumbnail (pipeline.py + backend + frontend)
+- `pipeline.run_pipeline(skip_thumbnail=False)`: `if skip_thumbnail: log + emit; elif ...`
+- `PipelineRunRequest` + `TranscribeRequest`: поле `skip_thumbnail: bool = False`
+- `backend/routes/pipeline.py + transcriber.py`: pass-through
+- `frontend/src/api.ts`: `PipelineRunRequest + TranscribeRequest` interface
+- `JobList.tsx + TranscriberPanel.tsx`: checkbox "Skip thumbnail"
+
+### Файли: `utils/ffmpeg_utils.py`, `modules/01_script_generator.py`, `modules/05_video_compiler.py`, `pipeline.py`, `backend/models.py`, `backend/routes/pipeline.py`, `backend/routes/transcriber.py`, `frontend/src/api.ts`, `frontend/src/components/JobList.tsx`, `frontend/src/components/TranscriberPanel.tsx`
+
+---
+
 ## 2026-03-02 — №35 CLI/Batch duration gaps fixed
 
 ### Gap 5 — pipeline.py CLI missing --duration-min/max

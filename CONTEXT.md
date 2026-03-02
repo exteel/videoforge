@@ -53,9 +53,15 @@
 - [x] Fix: embedded [IMAGE_PROMPT:] tags у narration (parser + validator, no API cost cleanup)
 - [x] Validator improvements (01b + 02b round 2): empty_narration, other_tag_in_narration, duplicate_section, too_long/short, short_block, post-fix re-check, fix_cut_off з title+niche+5 blocks, per-block threshold (intro/outro -0.5), pre-flight missing/tiny image, WaveSpeed→VoidAI fallback, improved_prompt→script.json
 - [x] Duration range control: --duration-min/--duration-max CLI + pipeline + backend + frontend UI (від/до хв з word count hint); Script model зберігає duration_min/max; validator dynamic thresholds
+- [x] Pipeline audit: 6 param passthrough gaps (voice_id, master_prompt, background_music default, no_ken_burns UI, duration CLI, batch duration)
+- [x] Review UI redesign: script 4 metric cards (duration/words/images/hook) + collapsible blocks; image grid з score/regen/reason badges
+- [x] Fix: image-narration sync — word_offset в parser + timing-aware _image_for_segment() в compiler
+- [x] Fix: duration control — dynamic max_tokens + word budget guard в _call_llm + ⚠️ HARD WORD LIMIT в промпті
+- [x] Fix: smooth Ken Burns — 2× pre-scale (3840×2160) перед zoompan → 0.5px apparent motion
+- [x] Fix: skip_thumbnail checkbox — pipeline.py + backend models/routes + frontend JobList + TranscriberPanel
 
 ## Поточний стан
-Всі фічі та баги реалізовані/виправлені. Останнє: запустити реальний pipeline end-to-end.
+Всі фічі та баги реалізовані/виправлені. Pipeline запускався реально (проект "Become Who You Are Afraid to Be...") — знайдено та виправлено 6 критичних проблем.
 
 ## Відомі баги
 (немає)
