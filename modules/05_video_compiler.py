@@ -73,15 +73,17 @@ _KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
 # No crossfade needed → block duration preserved exactly → no audio sync loss.
 _WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
 
-# Default image frequency tiers when not configured in channel config.
-# Tiers are matched against elapsed VIDEO TIME (not block time).
-# Each tier fires until `until_seconds` is reached; last tier (until_seconds=None) is the catch-all.
-#
-# Mirrors the 4-tier density model in master_script_v2.txt:
-#   Tier 1 (0–3 min)  — Hook zone:       short segments, max visual variety → every 10s
-#   Tier 2 (3–6 min)  — Engagement zone: sustain attention, core content   → every 20s
-#   Tier 3 (6–15 min) — Depth zone:      viewer invested, fewer cuts        → every 60s
-#   Tier 4 (15+ min)  — Long-form zone:  image = chapter anchor, not pacing → every 120s
+# Fixed duration of a single animation segment (zoom_in or zoom_out).
+# Two animations form one visual cycle: zoom_in(10s) + zoom_out(10s) = 20s loop.
+# This repeats to fill the full block duration regardless of video position or tier.
+ANIM_SEGMENT_DURATION = 10.0
+
+# Default image frequency tiers — used by master_script_v2.txt and test_components.py
+# to describe IMAGE_PROMPT density in the LLM prompt. NOT used for segment splitting.
+#   Tier 1 (0–3 min):  every 10s  → ~25 words → one IMAGE_PROMPT per ~10s of speech
+#   Tier 2 (3–6 min):  every 20s  → ~50 words
+#   Tier 3 (6–15 min): every 60s  → ~150 words
+#   Tier 4 (15+ min):  every 120s → ~280 words
 _DEFAULT_FREQ_TIERS: list[dict] = [
     {"until_seconds": 180,  "interval": 10},   # 0–3 min:  every 10s
     {"until_seconds": 360,  "interval": 20},   # 3–6 min:  every 20s
@@ -105,28 +107,28 @@ def _split_duration_to_segments(
     tiers: list[dict],
 ) -> list[float]:
     """
-    Split a block's audio duration into image segments based on frequency tiers.
+    Split a block's audio duration into fixed ANIM_SEGMENT_DURATION animation segments.
 
-    Each segment will get its own ken_burns() clip using the same image
-    but a different animation (zoom_in/zoom_out cycle) — giving the visual effect of
-    subtle motion every 10–120 seconds depending on tier, rather than a static hold.
+    Each segment gets its own ken_burns() clip (zoom_in / zoom_out alternating).
+    Result: zoom_in(10s) + zoom_out(10s) loop repeating for the full block duration.
+
+    Example — 90s block:
+      [10, 10, 10, 10, 10, 10, 10, 10, 10]  (9 × 10s)
+      animations: zoom_in, zoom_out, zoom_in, zoom_out, ... (seamless hard cuts)
 
     Args:
-        start_time: Video timestamp (seconds) where this block begins.
+        start_time: Kept for API compatibility (no longer used for tier selection).
         duration:   Block audio duration in seconds.
-        tiers:      Image frequency tier config (list of dicts with 'until_seconds', 'interval').
+        tiers:      Kept for API compatibility (no longer used for segment sizing).
 
     Returns:
         List of segment durations summing to `duration` (always at least one element).
     """
     segments: list[float] = []
     remaining = duration
-    t = start_time
     while remaining > 0.01:   # 10ms floor to avoid float-noise micro-segments
-        interval = _get_interval_for_time(t, tiers)
-        seg_dur = min(interval, remaining)
+        seg_dur = min(ANIM_SEGMENT_DURATION, remaining)
         segments.append(seg_dur)
-        t += seg_dur
         remaining -= seg_dur
     return segments if segments else [duration]
 
@@ -392,13 +394,14 @@ def compile_video(
             # ── Normal path: Ken Burns per block with image-frequency splitting ──
             #
             # Architecture (critical for audio sync):
-            #   WITHIN block: segments concat WITHOUT crossfade (hard cuts — invisible
-            #     because zoom_in/zoom_out end/start at identical zoompan z/x/y values).
+            #   WITHIN block: fixed 10s segments concat WITHOUT crossfade (hard cuts —
+            #     invisible because zoom_in/zoom_out share identical zoompan z/x/y at boundary).
+            #     zoom_in(10s) + zoom_out(10s) = 20s loop, repeating for the full block.
             #     → block duration preserved exactly, no audio trim.
             #   BETWEEN blocks: crossfade 0.5s as before.
-            #     → only N_blocks-1 crossfades (7 for 8 blocks = 3.5s trim, acceptable).
+            #     → only N_blocks-1 crossfades (acceptable trim).
             #
-            # If all segments used crossfade, 80+ segments × 0.5s ≈ 40s audio would be cut!
+            # If all 10s segments used crossfade, 80+ segments × 0.5s ≈ 40s audio would be cut!
             freq_cfg   = channel_config.get("image_frequency", {})
             freq_on    = freq_cfg.get("enabled", True)
             freq_tiers = freq_cfg.get("tiers", _DEFAULT_FREQ_TIERS) if freq_on else None
@@ -449,8 +452,7 @@ def compile_video(
                         )
 
                     else:
-                        # Long block — split into seamlessly-chainable zoom_in/zoom_out segments.
-                        # Hard cuts between them are invisible (zoompan boundary conditions):
+                        # Long block — 10s zoom_in/zoom_out loop, seamlessly hard-cut:
                         #   zoom_in  last:  z≈1.15, x=iw/2-iw/1.15/2  (centered)
                         #   zoom_out first: z=1.15, x=iw/2-iw/1.15/2  ← identical ✓
                         #   zoom_out last:  z≈1.0,  x=0                (full frame)
