@@ -233,9 +233,12 @@ def _parse_llm_output(
     def flush() -> None:
         nonlocal order, image_prompt, narration_lines, section_title, is_cta_block
 
-        # Strip inline IMAGE_PROMPTs from narration
+        # Strip inline IMAGE_PROMPTs from narration (closed: [IMAGE_PROMPT: ...])
         raw_narration = "\n".join(narration_lines)
         narration = _IMAGE_INLINE_RE.sub("", raw_narration).strip()
+        # Strip unclosed [IMAGE_PROMPT: tags (no closing ]) — stops at \n\n to preserve text
+        # after a paragraph break that follows a malformed/truncated tag
+        narration = re.sub(r"\[IMAGE_PROMPT:.*?(?=\n\n|\Z)", "", narration, flags=re.IGNORECASE | re.DOTALL).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
 
         if not narration and not image_prompt:
@@ -320,12 +323,21 @@ def _parse_llm_output(
                 is_cta_block = True
                 continue
 
-            # [IMAGE_PROMPT: ...] standalone line
+            # [IMAGE_PROMPT: ...] standalone line (closed — has ] on same line)
             img_m = _IMAGE_LINE_RE.match(stripped)
             if img_m:
                 if not image_prompt:
                     image_prompt = img_m.group(1).strip()
                 # Skip adding to narration — it's a visual directive
+                continue
+
+            # Unclosed [IMAGE_PROMPT: tag (line starts with tag but has no closing ])
+            # LLM sometimes omits ] or the response is truncated mid-tag
+            if re.match(r"^\[IMAGE_PROMPT:", stripped, re.IGNORECASE) and "]" not in stripped:
+                if not image_prompt:
+                    # Salvage whatever content is there
+                    image_prompt = re.sub(r"^\[IMAGE_PROMPT:\s*", "", stripped, flags=re.IGNORECASE).strip(" ,")
+                # Never add raw tag text to narration
                 continue
 
             narration_lines.append(stripped)

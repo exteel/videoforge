@@ -45,6 +45,12 @@ DETECT_MODEL = "gpt-4.1-mini"
 FIX_MODEL    = "claude-sonnet-4-5-20250929"
 
 # Patterns that indicate a generic / placeholder image prompt
+_IMAGE_TAG_IN_NARRATION_RE = re.compile(r"\[IMAGE_PROMPT:", re.IGNORECASE)
+# Matches unclosed [IMAGE_PROMPT: tag up to the next blank line (paragraph boundary) or end-of-string.
+# Using non-greedy + lookahead stops at \n\n so we don't accidentally eat valid narration below the tag.
+_UNCLOSED_IMAGE_TAG_RE    = re.compile(r"\[IMAGE_PROMPT:\s*(.*?)(?=\n\n|\Z)", re.IGNORECASE | re.DOTALL)
+_CLOSED_IMAGE_INLINE_RE   = re.compile(r"\[IMAGE_PROMPT:\s*(.+?)\]", re.IGNORECASE | re.DOTALL)
+
 _GENERIC_RE = re.compile(
     r"^(abstract\s+(light|concept|background|theme|imagery)|"
     r"philosophical\s+(concept|imagery)|"
@@ -141,6 +147,18 @@ def _structural_checks(blocks: list[dict[str, Any]]) -> list[ScriptIssue]:
                 block_id=last.get("id", ""),
                 severity="critical",
                 reason=f"Script ends abruptly: '…{narration[-80:]}'",
+            ))
+
+    # ── Embedded [IMAGE_PROMPT:] tag in narration (parser artifact) ──
+    for block in blocks:
+        bid = block.get("id", "")
+        narr = (block.get("narration") or "").strip()
+        if _IMAGE_TAG_IN_NARRATION_RE.search(narr):
+            issues.append(ScriptIssue(
+                type="bad_narration",
+                block_id=bid,
+                severity="critical",
+                reason="Narration contains raw [IMAGE_PROMPT:] tag — parser artifact, will be read aloud by TTS",
             ))
 
     # ── Image prompt checks ──
@@ -367,6 +385,42 @@ async def validate_and_fix_script(
         return result
 
     modified = False
+
+    # ── Fix 0: bad_narration — strip embedded [IMAGE_PROMPT:] tags (no API needed) ──
+    bad_narration_issues = [i for i in issues if i.type == "bad_narration" and i.block_id]
+    if bad_narration_issues:
+        _emit(f"Cleaning {len(bad_narration_issues)} narrations with embedded tags…", 20.0)
+        bad_narr_ids = {i.block_id for i in bad_narration_issues}
+        cleaned = 0
+        for block in blocks:
+            if block.get("id") not in bad_narr_ids:
+                continue
+            narr = (block.get("narration") or "").strip()
+            # Salvage image_prompt from the tag if block is missing one
+            if not block.get("image_prompt"):
+                for m in _CLOSED_IMAGE_INLINE_RE.finditer(narr):
+                    block["image_prompt"] = m.group(1).strip()
+                    break
+                if not block.get("image_prompt"):
+                    um = _UNCLOSED_IMAGE_TAG_RE.search(narr)
+                    if um:
+                        salvaged = um.group(1).strip(" ,")
+                        if salvaged:
+                            block["image_prompt"] = salvaged
+            # Strip all [IMAGE_PROMPT:...] (closed and unclosed) from narration
+            narr = _CLOSED_IMAGE_INLINE_RE.sub("", narr)
+            # _UNCLOSED_IMAGE_TAG_RE stops at \n\n, so text after a blank line is preserved
+            narr = _UNCLOSED_IMAGE_TAG_RE.sub("", narr).strip()
+            narr = re.sub(r"\n{3,}", "\n\n", narr)
+            block["narration"] = narr
+            cleaned += 1
+        if cleaned:
+            script["blocks"] = blocks
+            for iss in bad_narration_issues:
+                iss.fixed = True
+            result.fixes_applied.append(f"Cleaned {cleaned} narrations with embedded [IMAGE_PROMPT:] tags")
+            modified = True
+            log.info("Fixed %d bad_narration blocks (stripped embedded tags)", cleaned)
 
     # ── Fix 1: cut_off (also covers missing_cta since continuation includes CTA) ──
     has_cut_off = any(i.type == "cut_off" for i in issues)
