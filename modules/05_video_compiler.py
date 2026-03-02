@@ -65,9 +65,11 @@ BLOCK_VIDEO_EXT = ".mp4"
 _KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
 
 # Within-block animation cycle for multi-segment blocks.
-# ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries:
-#   zoom_in  ends at: crop 1920×1080 center → zoom_out starts at: crop 1920×1080 center ✓
-#   zoom_out ends at: crop 2208×1242 wide   → zoom_in  starts at: crop 2208×1242 wide   ✓
+# ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries (zoompan):
+#   zoom_in  last frame:  z≈1.15  →  x = iw/2 - iw/1.15/2  (centered, zoomed)
+#   zoom_out first frame: z=1.15  →  x = iw/2 - iw/1.15/2  ← identical ✓
+#   zoom_out last frame:  z≈1.0   →  x = 0                  (full frame)
+#   zoom_in  first frame: z=1.0   →  x = 0                  ← identical ✓
 # No crossfade needed → block duration preserved exactly → no audio sync loss.
 _WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
 
@@ -106,8 +108,8 @@ def _split_duration_to_segments(
     Split a block's audio duration into image segments based on frequency tiers.
 
     Each segment will get its own ken_burns() clip using the same image
-    but a different animation from _KB_CYCLE — giving the visual effect of
-    the image "changing" every 10–20 seconds rather than holding for the full block.
+    but a different animation (zoom_in/zoom_out cycle) — giving the visual effect of
+    subtle motion every 10–120 seconds depending on tier, rather than a static hold.
 
     Args:
         start_time: Video timestamp (seconds) where this block begins.
@@ -391,7 +393,7 @@ def compile_video(
             #
             # Architecture (critical for audio sync):
             #   WITHIN block: segments concat WITHOUT crossfade (hard cuts — invisible
-            #     because zoom_in/zoom_out start+end at identical crop positions).
+            #     because zoom_in/zoom_out end/start at identical zoompan z/x/y values).
             #     → block duration preserved exactly, no audio trim.
             #   BETWEEN blocks: crossfade 0.5s as before.
             #     → only N_blocks-1 crossfades (7 for 8 blocks = 3.5s trim, acceptable).
@@ -448,11 +450,11 @@ def compile_video(
 
                     else:
                         # Long block — split into seamlessly-chainable zoom_in/zoom_out segments.
-                        # Hard cuts between them are mathematically invisible:
-                        #   zoom_in  at t=T: crop 1920×1080 at x=144,y=81 (center)
-                        #   zoom_out at t=0: crop 1920×1080 at x=144,y=81 (center) ← identical
-                        #   zoom_out at t=T: crop 2208×1242 at x=0,y=0   (wide)
-                        #   zoom_in  at t=0: crop 2208×1242 at x=0,y=0   (wide)   ← identical
+                        # Hard cuts between them are invisible (zoompan boundary conditions):
+                        #   zoom_in  last:  z≈1.15, x=iw/2-iw/1.15/2  (centered)
+                        #   zoom_out first: z=1.15, x=iw/2-iw/1.15/2  ← identical ✓
+                        #   zoom_out last:  z≈1.0,  x=0                (full frame)
+                        #   zoom_in  first: z=1.0,  x=0                ← identical ✓
                         seg_clips: list[Path] = []
                         for seg_idx, seg_dur in enumerate(segments):
                             within_anim = _WITHIN_BLOCK_KB_CYCLE[seg_idx % len(_WITHIN_BLOCK_KB_CYCLE)]
