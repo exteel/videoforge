@@ -4,6 +4,125 @@
 
 ---
 
+## 2026-03-03 — №40 Accurate narration word counting + v3 script generation fixes
+
+### Root problem
+`_call_llm()` рахував total LLM output words (narration + image prompts + headers) замість narration-only.
+Image prompts для 40 img × 35 слів ≈ 1400 зайвих слів — фактичні відео виходили ~19-21 хв замість 22-25 хв.
+Старий хак `_IMG_OVERHEAD = 1.50` був неточним (реальний overhead = 42.7% в тест-зразку).
+
+### Fix: `_count_narration_words()` — `modules/01_script_generator.py`
+```python
+_NARRATION_STRIP_RE = re.compile(
+    r'\[IMAGE_PROMPT:.*?\]|\[SECTION\s+\d+[^\]]*\]|\[CTA_SUBSCRIBE[^\]]*\]',
+    re.IGNORECASE | re.DOTALL,
+)
+def _count_narration_words(text: str) -> int: ...
+```
+- Стрипить IMAGE_PROMPT, SECTION headers, CTA markers перед підрахунком
+- Unit test: 234 total words → 134 narration words (42.7% overhead stripped) ✓
+
+### Оновлено `_call_llm()`:
+- **Видалено** `_IMG_OVERHEAD = 1.50` (хак)
+- `word_budget = int(duration_max * 150 * 1.15)` — narration-only, +15% headroom
+- `min_words_for_cta = int(duration_min * 140)` — narration-only floor, 100% (без haircut)
+- `current_words` → `_count_narration_words(full_output)` (в loop guard)
+- `total_words` → `narration_words = _count_narration_words(full_output)` (post-chunk log + CTA check)
+- `remaining_tokens` multiplier: `1.4 → 2.1` (narration → total: ÷0.66, then ×1.4 ≈ ×2.1)
+- Усі log messages: "words" → "narration words"
+
+### Також в цій сесії (Run 1–4 під час попереднього контексту)
+- **Run 1**: CTA truncated — `tokens_first_chunk 1.4→2.0` multiplier fix
+- **Run 2+**: CTA repair call (500 tokens) якщо CTA < 80 слів і без terminal punctuation
+- **Run 1-3**: Hook validator замінював хороший Opus hook гіршим → `hook_pass_threshold=2` для v3
+- `history.json` + `example_history.json`: `mistral-small-latest→deepseek-v3.1`, `gemma-3n-e4b-it→gpt-4.1-nano`
+
+### Числа для перевірки (25 хв):
+- `word_budget = int(25*150*1.15) = 4312` narration words
+- `min_words_for_cta = int(22*140) = 3080` narration words
+- `tokens_first_chunk = min(8000, int(25*150*2.0)) = 7500` tokens (1 chunk ✓)
+
+### Числа для 40 хв:
+- `word_budget = int(40*150*1.15) = 6900` narration words
+- `min_words_for_cta = int(35*140) = 4900` narration words
+- `tokens_first_chunk = min(8000, int(40*150*2.0)) = 8000` → потрібно 2-3 chunks (MAX_SCRIPT_CHUNKS=5 ✓)
+
+### Файли: `modules/01_script_generator.py`
+
+---
+
+## 2026-03-03 — №39 master_script_v3.txt + v3 block architecture in code
+
+### Що зроблено
+**1. `prompts/master_script_v3.txt`** — новий системний промпт (замінює v2):
+- 8 фіксованих наративних блоків із % вагами (HOOK 4% → TENSION 10% → ROOT CAUSE 12% → RECOGNITION 16% → MID-CTA → FRAMEWORK 20% → TURN 14% → PRACTICE 14% → CLOSING 10%)
+- TTS writing guidelines — max 25 слів/речення, em-dash, заборона `!`, `(...)`, `...`, `%/#/&`
+- Image prompt formula: Subject + Emotional State + Lighting + Style + Composition
+- IMAGE-NARRATION lock rule: кожен промпт ілюструє конкретне оточуюче речення
+- Block completion rule: кожен блок завершується transition sentence
+- 4-tier image density model (з v2, уточнено з прикладами помилок)
+- ACTIVATION секція показує що буде ін'єктовано кодом
+
+**2. `modules/01_script_generator.py`** — нові константи та функції:
+- `BLOCK_STRUCTURE_V3` — список 8 блоків з `pct`
+- `_calc_images_for_block(start_word, block_words)` — 4-tier розрахунок кількості img на блок
+- `_calc_block_targets(duration_min, duration_max)` — повний список `{name, words_min, words_max, images}`
+- `_build_user_prompt()` — детектує "v3" в `master_prompt_path`, ін'єктує `[BLOCK WORD TARGETS]` + `[BLOCK IMAGE TARGETS]`
+- **Bug fix**: `_call_llm()` мав `duration_min` у тілі але не в сигнатурі → додано `duration_min: int = 8` параметр + передача у виклику
+
+**3. `config/channels/history.json`** — `master_prompt_path` → `"prompts/master_script_v3.txt"`
+
+### Перевірка математики (22-25 хв)
+- Block targets: 3078-3750 слів, ~40 images total
+- Tier 1 (0-450w): Block 1+2 → щільні 5+13 img ✓
+- Tier 2-3 (450-2250w): Block 3-5 → 8+4+5 img ✓
+- Tier 4 (2250+w): Block 6-8 → 2+2+1 img ✓
+
+### Файли: `prompts/master_script_v3.txt`, `modules/01_script_generator.py`, `config/channels/history.json`
+
+---
+
+## 2026-03-02 — №38 Root cause fixes: duration/cut-off/animation/hook validator
+
+### Root causes identified та виправлені
+
+**Bug 1 🔴 Duration (15 хв замість 22–25 хв) — два баги:**
+- `MAX_TOKENS_PER_CHUNK=2500` cap → `tokens_first_chunk=2500` для 25 хв = 1785 слів ≈ 11.9 хв; LLM писав повний сценарій у першому чанку
+- Не було MINIMUM floor — `⚠️ HARD WORD LIMIT` давав тільки стелю, LLM міг писати CTA коли захоче
+- Fix: `MAX_FIRST_CHUNK_TOKENS=8000`, `tokens_first_chunk=min(8000, duration_max*150*1.4)` → для 25 хв=5250 токенів≈3750 слів; `min_words_for_cta=int(duration_min*140*0.9)` + CTA stripping; `_build_user_prompt()` — MINIMUM + MAXIMUM
+
+**Bug 2 🔴 Cut-off block_006 — continuation "start Section N+1" кидав незавершений блок:**
+- `is_cut_off = not any(c in last_chars[-8:] for c in ".!?\"'")` — детектить обрізану відповідь
+- Cut-off mode: "Complete the interrupted sentence first, then continue" (не "start Section N+1")
+
+**Bug 3 🟡 Animation = zoom_in для всіх блоків:**
+- `flush()`: `_SECTION_ANIMS = ["pan_left","pan_right","zoom_in","zoom_out"]`; intro→zoom_in, cta/outro→zoom_out, sections rotate `(order-1)%4`
+
+**Bug 4 🟡 Hook score=2 — валідатор оцінював проти niche="history", не теми:**
+- `_validate_intro_hook(... topic=title)` — передаємо реальний заголовок
+- `hook_validator.txt`: `Video topic: {topic}` в INPUT; criterion 1 — `"The SPECIFIC video topic ("{topic}") is clear"`
+
+### Файли: `modules/01_script_generator.py`, `prompts/hook_validator.txt`
+
+---
+
+## 2026-03-02 — №37 `to_step` parameter + step-by-step testing workflow (commit 1730894)
+
+### `to_step` — зупинка пайплайну після конкретного кроку
+- `pipeline.py`: `to_step: int = TOTAL_STEPS` параметр; всі 7 step-gate умов: `if from_step <= STEP_X and to_step >= STEP_X:`; log при `to_step < TOTAL_STEPS`; `--to-step` CLI arg
+- `backend/models.py`: `to_step: int = Field(6, ge=1, le=6, ...)`
+- `backend/routes/pipeline.py`: `to_step=req.to_step` передається в `manager.start_pipeline()`
+- `frontend/src/api.ts`: `to_step?: number` у `PipelineRunRequest`
+- `frontend/src/components/JobList.tsx`: quick-preset кнопки [All | 1 Script | 2 Images | 4 Video | 5 Thumb | 6 Meta] + manual from/to dropdowns з mutual clamping
+
+### Сесія завершена: контекст переповнився
+- Контекст відновлено → перевірено всі 6 файлів плану duration range control → **всі вже реалізовані ✅**
+- CONTEXT.md + session_log.md оновлені
+
+### Файли: `pipeline.py`, `backend/models.py`, `backend/routes/pipeline.py`, `frontend/src/api.ts`, `frontend/src/components/JobList.tsx`
+
+---
+
 ## 2026-03-02 — №36 Critical pipeline quality fixes (commit d15f5f4)
 
 ### Діагноз реального проекту "Become Who You Are Afraid to Be / Carl Jung"

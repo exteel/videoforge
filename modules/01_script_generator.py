@@ -50,11 +50,81 @@ MAX_INTRO_REGEN = 2  # Default max intro regeneration attempts
 MAX_TRANSCRIPT_CHARS = 14_000   # ~10K tokens — keeps total prompt manageable for Opus
 MAX_HOOKS_GUIDE_CHARS = 8_000   # hooks_guide.md is now compact (~4KB), allow full pass-through
 
-# Chunked generation — each Opus call produces ~10K chars to avoid timeout
-MAX_TOKENS_PER_CHUNK = 2_500    # ~10K chars output per API call
-MAX_SCRIPT_CHUNKS = 4           # max continuation attempts before giving up
+# Chunked generation constants
+MAX_FIRST_CHUNK_TOKENS = 8_000  # first chunk cap — large enough for 37-min scripts in one shot
+MAX_TOKENS_PER_CHUNK   = 4_000  # continuation chunks cap (remaining budget, cost-controlled)
+MAX_SCRIPT_CHUNKS = 5           # max continuation attempts (raised for 20-30+ min scripts)
 
 BlockType = Literal["intro", "section", "cta", "outro"]
+
+# ─── V3 Block Architecture ────────────────────────────────────────────────────
+
+BLOCK_STRUCTURE_V3: list[dict] = [
+    {"name": "HOOK",           "pct": 0.04},
+    {"name": "TENSION SETUP",  "pct": 0.10},
+    {"name": "ROOT CAUSE",     "pct": 0.12},
+    {"name": "RECOGNITION",    "pct": 0.16},
+    {"name": "CORE FRAMEWORK", "pct": 0.20},
+    {"name": "THE TURN",       "pct": 0.14},
+    {"name": "THE PRACTICE",   "pct": 0.14},
+    {"name": "CLOSING + CTA",  "pct": 0.10},
+]
+
+
+def _calc_images_for_block(start_word: int, block_words: int) -> int:
+    """
+    Calculate expected image count for a block using the 4-tier density model.
+
+    Tier 1 (0–450 w):   1 image per  25 words  (~min 0–3)
+    Tier 2 (450–900 w): 1 image per  50 words  (~min 3–6)
+    Tier 3 (900–2250 w):1 image per 150 words  (~min 6–15)
+    Tier 4 (2250+ w):   1 image per 280 words  (~min 15+)
+    """
+    TIERS: list[tuple[int, int]] = [(450, 25), (900, 50), (2250, 150), (10**9, 280)]
+    count = 0.0
+    pos = start_word
+    remaining = block_words
+
+    for boundary, interval in TIERS:
+        if remaining <= 0:
+            break
+        if pos >= boundary:
+            continue  # haven't entered this tier yet
+        available_in_tier = boundary - pos
+        used = min(remaining, available_in_tier)
+        count += used / interval
+        pos += used
+        remaining -= used
+
+    return max(1, round(count))
+
+
+def _calc_block_targets(duration_min: int, duration_max: int) -> list[dict]:
+    """
+    Compute per-block word counts and image counts for BLOCK_STRUCTURE_V3.
+
+    Uses midpoint of the duration range for image-tier calculation.
+    Returns list of dicts: [{name, words_min, words_max, images}, ...].
+    """
+    words_min = duration_min * 140
+    words_max = duration_max * 150
+    total_mid = (words_min + words_max) // 2
+
+    results: list[dict] = []
+    cumulative_words = 0
+
+    for block in BLOCK_STRUCTURE_V3:
+        bmin = max(1, int(words_min * block["pct"]))
+        bmax = max(1, int(words_max * block["pct"]))
+        bmid = max(1, int(total_mid * block["pct"]))
+        images = _calc_images_for_block(cumulative_words, bmid)
+        results.append({"name": block["name"], "words_min": bmin, "words_max": bmax, "images": images})
+        cumulative_words += bmid
+
+    return results
+
+
+# ─── Template / Hook tables ───────────────────────────────────────────────────
 
 # Default hook type per content template
 HOOK_PER_TEMPLATE: dict[str, str] = {
@@ -267,6 +337,17 @@ def _parse_llm_output(
         actual_type: BlockType = "cta" if is_cta_block else section_type
         primary_prompt = all_image_prompts[0] if all_image_prompts else ""
 
+        # Rotating animation: intro=zoom_in, cta/outro=zoom_out, sections alternate
+        # pan_left → pan_right → zoom_in → zoom_out → pan_left → ...
+        _SECTION_ANIMS = ["pan_left", "pan_right", "zoom_in", "zoom_out"]
+        if actual_type == "intro":
+            _animation = "zoom_in"
+        elif actual_type in ("cta", "outro"):
+            _animation = "zoom_out"
+        else:
+            # order-1 because order=0 is intro; first section → _SECTION_ANIMS[0]=pan_left
+            _animation = _SECTION_ANIMS[(order - 1) % len(_SECTION_ANIMS)]
+
         blocks.append(
             ScriptBlock(
                 id=f"block_{order + 1:03d}",
@@ -276,7 +357,7 @@ def _parse_llm_output(
                 image_prompt=primary_prompt,
                 image_prompts=list(all_image_prompts),        # copy so reset below doesn't mutate
                 image_word_offsets=list(all_word_offsets),   # parallel list: word pos per image
-                animation=default_animation,
+                animation=_animation,
                 timestamp_label=section_title,
                 hook=hook_info,
             )
@@ -504,14 +585,45 @@ def _build_user_prompt(
     target_words_min = duration_min * 140
     target_words_max = duration_max * 150
 
+    # v3 block targets — injected when channel config uses master_script_v3
+    master_prompt_path = channel_config.get("master_prompt_path", "")
+    is_v3 = "v3" in Path(master_prompt_path).name
+    block_section = ""
+    if is_v3:
+        targets = _calc_block_targets(duration_min, duration_max)
+        word_lines = "\n".join(
+            f"Block {i + 1} {t['name']}: {t['words_min']}–{t['words_max']} words "
+            f"({int(BLOCK_STRUCTURE_V3[i]['pct'] * 100)}%)"
+            for i, t in enumerate(targets)
+        )
+        image_lines = "\n".join(
+            f"Block {i + 1} {t['name']}: ~{t['images']} images"
+            for i, t in enumerate(targets)
+        )
+        block_section = (
+            f"\n[BLOCK WORD TARGETS] — NARRATION WORDS ONLY (do NOT count [IMAGE_PROMPT:] tags):\n"
+            f"{word_lines}\n"
+            f"\n[BLOCK IMAGE TARGETS]:\n{image_lines}\n"
+        )
+        log.info(
+            "v3 block targets injected: %d blocks, words %d–%d, images total ~%d",
+            len(targets), target_words_min, target_words_max,
+            sum(t["images"] for t in targets),
+        )
+
     return (
         f"[TRANSCRIPTION]\n{transcript}\n\n"
         f"__NEW TOPIC__: {new_topic}\n"
         f"[DURATION]: {duration_min}-{duration_max} minutes\n"
         f"[TARGET WORDS]: {target_words_min}–{target_words_max} words\n"
-        f"⚠️ HARD WORD LIMIT: {target_words_max} words maximum. "
-        f"Write [CTA_SUBSCRIBE_FINAL] as soon as you approach this limit. "
-        f"Do NOT exceed {target_words_max} words under any circumstances.\n"
+        f"{block_section}"
+        f"⚠️ WORD COUNT REQUIREMENTS (BOTH apply — NARRATION WORDS ONLY, [IMAGE_PROMPT:] tags do NOT count):\n"
+        f"  MINIMUM — Do NOT write [CTA_SUBSCRIBE_FINAL] until you have written "
+        f"at least {target_words_min} NARRATION words (spoken text only, excluding [IMAGE_PROMPT:] tags). "
+        f"A {duration_min}-min video requires this depth — do not rush to close. "
+        f"If you feel done before {target_words_min} narration words, add more depth, examples, or analysis.\n"
+        f"  MAXIMUM — Hard limit: {target_words_max} NARRATION words. "
+        f"Write [CTA_SUBSCRIBE_FINAL] as soon as you approach this ceiling.\n"
         f"__SPECIAL REQUESTS__:\n{special}"
     )
 
@@ -523,6 +635,7 @@ async def _validate_intro_hook(
     niche: str,
     audience: str,
     voidai_client: Any,
+    topic: str = "",    # actual video topic/title — for CLARITY criterion
 ) -> HookValidationResult:
     """
     Validate intro block with cheap model (gpt-4.1-nano) + hook_validator.txt.
@@ -541,6 +654,7 @@ async def _validate_intro_hook(
         .replace("{intro_narration}", intro_narration)
         .replace("{niche}", niche or "general")
         .replace("{audience}", audience or (niche + " enthusiasts" if niche else "general viewers"))
+        .replace("{topic}", topic or "not specified")
     )
 
     try:
@@ -574,6 +688,28 @@ async def _validate_intro_hook(
 _FINAL_CTA_RE = re.compile(r"\[CTA_SUBSCRIBE_FINAL\]|Thank you for being here", re.IGNORECASE)
 _LAST_SECTION_NUM_RE = re.compile(r"\[SECTION\s+(\d+)\s*:", re.IGNORECASE)
 
+# Strips all non-narration markup before word counting:
+#   [IMAGE_PROMPT: ...]  — inline image directives (can span multiple lines)
+#   [SECTION N: ...]     — section headers
+#   [CTA_SUBSCRIBE...]   — CTA marker lines
+_NARRATION_STRIP_RE = re.compile(
+    r"\[IMAGE_PROMPT:.*?\]"         # image prompt tags (DOTALL applied below)
+    r"|\[SECTION\s+\d+[^\]]*\]"    # section headers
+    r"|\[CTA_SUBSCRIBE[^\]]*\]",   # CTA markers
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _count_narration_words(text: str) -> int:
+    """Return word count of *narration only*, stripping IMAGE_PROMPT tags and structural markers.
+
+    IMAGE_PROMPT tags can add 30-40% to total LLM output words for v3 scripts (~40 images
+    × ~35 words/prompt = ~1 400 extra words). Counting only narration words gives accurate
+    duration estimates for all target lengths (25 min, 40 min, etc.).
+    """
+    clean = _NARRATION_STRIP_RE.sub("", text)
+    return len(clean.split())
+
 
 async def _call_llm(
     system_prompt: str,
@@ -581,6 +717,7 @@ async def _call_llm(
     model: str,
     voidai_client: Any,
     temperature: float = 0.7,
+    duration_min: int = 8,
     duration_max: int = 12,
 ) -> str:
     """
@@ -594,17 +731,25 @@ async def _call_llm(
     """
     full_output = ""
 
-    # Word budget: speech pace 150 wpm, +15% tolerance for LLM overshoot.
-    # Once we exceed this, the script is already too long — don't ask for more.
+    # All word budgets are in NARRATION words (IMAGE_PROMPT tags stripped by _count_narration_words).
+    # This gives accurate duration control for all target lengths (25 min, 40 min, etc.).
+    #
+    # word_budget: ceiling — stop requesting more chunks once narration reaches this.
+    #   +15% headroom so the LLM can round off the last block cleanly.
     word_budget = int(duration_max * 150 * 1.15)
-    # Tokens per chunk: target ~80% of one language's total word budget so the first
-    # call can produce a complete short script (8-min = 1400 words ≈ 1960 tokens output).
-    # Cap at MAX_TOKENS_PER_CHUNK to avoid runaway costs on long durations.
-    tokens_first_chunk = min(MAX_TOKENS_PER_CHUNK, int(duration_max * 150 * 1.4 * 0.9))
+    # min_words_for_cta: floor — LLM must NOT write [CTA_SUBSCRIBE_FINAL] before this many
+    #   narration words. Set to 100% of min-duration target (no haircut).
+    min_words_for_cta = int(duration_min * 140)
+
+    # First chunk: multiplier 2.0 accounts for inline IMAGE_PROMPT overhead.
+    # v3 scripts with ~40 images × ~35 words/prompt ≈ 1 400 extra words beyond narration.
+    # For duration_max=25: min(8000, 25*150*2.0=7500) = 7500 tokens → fits full script in one shot.
+    # For duration_max=12: min(8000, 12*150*2.0=3600) = 3600 — same as before for short scripts.
+    tokens_first_chunk = min(MAX_FIRST_CHUNK_TOKENS, int(duration_max * 150 * 2.0))
 
     for chunk_num in range(1, MAX_SCRIPT_CHUNKS + 1):
-        # Hard word-count guard: if we already have too many words, stop here.
-        current_words = len(full_output.split())
+        # Hard word-count guard: narration words only (IMAGE_PROMPT tags stripped).
+        current_words = _count_narration_words(full_output)
         if chunk_num > 1 and current_words >= word_budget:
             log.warning(
                 "Word budget reached (%d words ≥ %d limit for %d-min target) — "
@@ -625,25 +770,49 @@ async def _call_llm(
             last_section = int(section_nums[-1]) if section_nums else 0
             tail = full_output[-2_000:]  # last 2K chars as context anchor
             remaining_words = max(0, word_budget - current_words)
-            remaining_tokens = min(MAX_TOKENS_PER_CHUNK, int(remaining_words * 1.4))
+            # remaining_words is narration-only; total output (narration + image prompts) is
+            # ~1.5× narration, at ~1.4 tokens/word → effective multiplier ≈ 2.1
+            remaining_tokens = min(MAX_TOKENS_PER_CHUNK, int(remaining_words * 2.1))
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": (
-                    f"{user_prompt}\n\n"
+            # Detect cut-off: if full_output ends without sentence-closing punctuation,
+            # the previous chunk was interrupted mid-sentence (hit max_tokens).
+            # In that case, tell the LLM to complete the interrupted section before
+            # moving on — otherwise it starts a fresh section, leaving a broken block.
+            last_chars = full_output.rstrip()[-8:]
+            is_cut_off = bool(last_chars) and not any(c in last_chars for c in ".!?\"'")
+
+            if is_cut_off:
+                continuation_instruction = (
+                    f"CONTINUATION — the previous response was cut off mid-sentence (hit token limit). "
+                    f"Here is exactly where it ended:\n```\n{tail}\n```\n\n"
+                    f"IMPORTANT: Do NOT start a new [SECTION]. "
+                    f"First, complete the interrupted sentence/paragraph from exactly where it was cut. "
+                    f"Then continue naturally with the remaining sections through [CTA_SUBSCRIBE_FINAL]. "
+                    f"You have approximately {remaining_words} words remaining."
+                )
+                log.warning(
+                    "Cut-off detected — chunk %d/%d instructed to complete Section %d before continuing",
+                    chunk_num, MAX_SCRIPT_CHUNKS, last_section,
+                )
+            else:
+                continuation_instruction = (
                     f"CONTINUATION — you already wrote sections 1-{last_section}. "
                     f"Here is the end of what you wrote so far:\n```\n{tail}\n```\n\n"
                     f"Continue the script starting with [SECTION {last_section + 1}: ...]. "
                     f"Do NOT repeat any content from sections 1-{last_section}. "
                     f"Write from Section {last_section + 1} through the final CTA. "
                     f"You have approximately {remaining_words} words remaining before the hard limit."
-                )},
+                )
+                log.info(
+                    "Script continuation request: chunk %d/%d, resuming after Section %d "
+                    "(%d words used, %d remaining)",
+                    chunk_num, MAX_SCRIPT_CHUNKS, last_section, current_words, remaining_words,
+                )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{user_prompt}\n\n{continuation_instruction}"},
             ]
-            log.info(
-                "Script continuation request: chunk %d/%d, resuming after Section %d "
-                "(%d words used, %d remaining)",
-                chunk_num, MAX_SCRIPT_CHUNKS, last_section, current_words, remaining_words,
-            )
             chunk_tokens = remaining_tokens
 
         if chunk_tokens < 200:
@@ -659,26 +828,87 @@ async def _call_llm(
 
         full_output += ("\n" if full_output else "") + chunk
         chunk_words = len(chunk.split())
-        total_words = len(full_output.split())
+        narration_words = _count_narration_words(full_output)
         log.info(
-            "Script chunk %d/%d: %d chars / %d words → total %d chars / %d words "
-            "(budget: %d words)",
+            "Script chunk %d/%d: %d chars / %d raw words → "
+            "total %d chars / %d narration words (budget: %d narration words)",
             chunk_num, MAX_SCRIPT_CHUNKS,
             len(chunk), chunk_words,
-            len(full_output), total_words,
+            len(full_output), narration_words,
             word_budget,
         )
 
         if _FINAL_CTA_RE.search(full_output):
-            log.info("Script complete (final CTA found) after %d chunk(s)", chunk_num)
-            break
+            if narration_words < min_words_for_cta:
+                # LLM closed script too early — strip premature CTA and request more.
+                cta_match = _FINAL_CTA_RE.search(full_output)
+                full_output = full_output[: cta_match.start()].rstrip()
+                log.warning(
+                    "Premature CTA stripped: %d narration words written but minimum is %d "
+                    "(duration_min=%d min) — requesting more content (chunk %d/%d)",
+                    narration_words, min_words_for_cta, duration_min, chunk_num, MAX_SCRIPT_CHUNKS,
+                )
+                # Don't break — fall through to next chunk
+            else:
+                log.info(
+                    "Script complete (%d narration words, min=%d) after %d chunk(s)",
+                    narration_words, min_words_for_cta, chunk_num,
+                )
+                break
 
         if chunk_num == MAX_SCRIPT_CHUNKS:
             log.warning(
                 "Reached max chunks (%d) without finding final CTA — using partial output "
-                "(%d words / %d chars)",
-                MAX_SCRIPT_CHUNKS, total_words, len(full_output),
+                "(%d narration words / %d chars)",
+                MAX_SCRIPT_CHUNKS, narration_words, len(full_output),
             )
+
+    # ── CTA repair ───────────────────────────────────────────────────────────
+    # If [CTA_SUBSCRIBE_FINAL] marker is present but its text is truncated
+    # (very short or ends without terminal punctuation), do a targeted repair call.
+    # This handles the case where chunk 2 runs out of tokens mid-CTA.
+    cta_search = _FINAL_CTA_RE.search(full_output)
+    if cta_search:
+        cta_pos = full_output.rfind("[CTA_SUBSCRIBE_FINAL]")
+        if cta_pos == -1:
+            # Matched "Thank you for being here" but no explicit marker — still check
+            cta_pos = cta_search.start()
+        cta_tail = full_output[cta_pos:].rstrip()
+        cta_words = len(cta_tail.split())
+        cta_ends_ok = bool(cta_tail) and cta_tail[-1] in ".!?\""
+
+        if cta_words < 80 and not cta_ends_ok:
+            log.warning(
+                "CTA appears truncated (%d words, last char=%r) — requesting repair",
+                cta_words, cta_tail[-1] if cta_tail else "",
+            )
+            repair_tail = full_output[-1_500:]
+            repair_instruction = (
+                f"The previous response was cut off during the final CTA (hit token limit). "
+                f"Here is exactly where it ended:\n```\n{repair_tail}\n```\n\n"
+                f"Complete ONLY the [CTA_SUBSCRIBE_FINAL] section — pick up exactly where it was "
+                f"cut and finish it naturally. "
+                f"End the CTA with: 'Thank you for being here. I will see you in the next one.'\n"
+                f"Do NOT repeat any narration that came before the CTA."
+            )
+            try:
+                repair_chunk = await voidai_client.chat_completion(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"{user_prompt}\n\n{repair_instruction}"},
+                    ],
+                    temperature=temperature,
+                    max_tokens=500,
+                )
+                # Replace the truncated CTA section with the repaired version
+                full_output = full_output[:cta_pos].rstrip() + "\n\n" + repair_chunk.strip()
+                log.info(
+                    "CTA repaired: %d chars added (total output now %d words)",
+                    len(repair_chunk), len(full_output.split()),
+                )
+            except Exception as exc:
+                log.warning("CTA repair call failed (%s: %s) — keeping truncated CTA", type(exc).__name__, exc)
 
     final_words = len(full_output.split())
     log.info(
@@ -713,6 +943,7 @@ async def _generate_one_variant(
 
     raw = await _call_llm(
         system_prompt, user_prompt, model, voidai_client, temperature,
+        duration_min=duration_min,
         duration_max=duration_max,
     )
     log.info("LLM response: %d chars", len(raw))
@@ -744,6 +975,17 @@ async def _generate_one_variant(
 
     niche = channel_config.get("niche", "")
     audience = channel_config.get("target_audience", "")
+    # Pass the actual video topic so validator evaluates CLARITY against the specific
+    # content, not just the channel niche (e.g. niche="history" but topic="Carl Jung shadow work")
+    topic = source_data.get("title", "")
+
+    # v3 hooks intentionally delay topic reveal (CLARITY criterion expects topic in sentence 1-2,
+    # but v3 HOOK block is designed as Context Lean-In with NO direct topic naming).
+    # For v3, lower the pass threshold: 2/4 criteria is sufficient.
+    master_path = channel_config.get("master_prompt_path", "")
+    hook_pass_threshold = 2 if "v3" in Path(master_path).name else 3
+    if hook_pass_threshold == 2:
+        log.info("v3 hook validation: pass threshold lowered to 2/4 (delayed topic reveal by design)")
 
     intro_block = script.blocks[0]
 
@@ -751,7 +993,7 @@ async def _generate_one_variant(
         log.info("Hook validation (attempt %d/%d)...", attempt, max_regen)
 
         result = await _validate_intro_hook(
-            intro_block.narration, niche, audience, voidai_client
+            intro_block.narration, niche, audience, voidai_client, topic=topic
         )
 
         # Store validation score in hook metadata
@@ -762,17 +1004,20 @@ async def _generate_one_variant(
         )
         intro_block = intro_block.model_copy(update={"hook": updated_hook})
 
-        if result.passed:
+        # Override passed status for v3 if meets lower threshold
+        is_passed = result.passed or (result.pass_count >= hook_pass_threshold)
+
+        if is_passed:
             log.info(
-                "Hook validation PASSED (%d/4 criteria: %s)",
-                result.pass_count,
+                "Hook validation PASSED (%d/4 criteria, threshold=%d: %s)",
+                result.pass_count, hook_pass_threshold,
                 [k for k, v in result.criteria.items() if v.get("pass", False)],
             )
             break
 
         log.warning(
-            "Hook validation FAILED (%d/4). Failed: %s",
-            result.pass_count,
+            "Hook validation FAILED (%d/4, threshold=%d). Failed: %s",
+            result.pass_count, hook_pass_threshold,
             result.failed_criteria,
         )
 

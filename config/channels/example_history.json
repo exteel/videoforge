@@ -40,8 +40,8 @@
         "thumbnail": "gemini-2.5-flash"
       },
       "test": {
-        "script": "mistral-small-latest",
-        "metadata": "gemma-3n-e4b-it",
+        "script": "deepseek-v3.1",
+        "metadata": "gpt-4.1-nano",
         "thumbnail": "gemini-2.5-flash"
       }
     }

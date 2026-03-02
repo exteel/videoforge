@@ -11,6 +11,7 @@ Script intro block narration:
 {intro_narration}
 """
 
+Video topic: {topic}
 Video niche: {niche}
 Target audience: {audience}
 
@@ -18,12 +19,13 @@ Target audience: {audience}
 
 EVALUATION CRITERIA:
 
-1. CLARITY — Topic is crystal clear within the first 2 sentences.
+1. CLARITY — The SPECIFIC video topic ("{topic}") is clear within the first 2 sentences.
    SSSQ rule: Single Subject, Single Question.
-   - Does the viewer immediately know what this video is about?
-   - Is there zero ambiguity about the topic?
-   - Could 50,000 different viewers all understand the same topic?
-   FAIL signals: vague opener ("something crazy"), no clear subject, "what is it?" instead of knowing the topic
+   - Does the viewer immediately understand the specific topic (not just the niche)?
+   - Is there zero ambiguity about WHAT this video is about?
+   - Could 50,000 different viewers all understand the same specific topic?
+   FAIL signals: vague opener ("something crazy"), ambiguous wording that could mean multiple topics,
+     "what is it?" instead of knowing the topic, hook sounds like a different type of video than the actual topic
 
 2. CURIOSITY — A curiosity gap or open loop is created.
    3-step formula: Context Lean-In → "BUT/HOWEVER" Interjection → Contrarian Snapback

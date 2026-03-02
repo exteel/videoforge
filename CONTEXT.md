@@ -59,6 +59,7 @@
 - [x] Fix: duration control — dynamic max_tokens + word budget guard в _call_llm + ⚠️ HARD WORD LIMIT в промпті
 - [x] Fix: smooth Ken Burns — 2× pre-scale (3840×2160) перед zoompan → 0.5px apparent motion
 - [x] Fix: skip_thumbnail checkbox — pipeline.py + backend models/routes + frontend JobList + TranscriberPanel
+- [x] `to_step` parameter — pipeline зупиняється після кроку N; quick-preset кнопки [All|1|2|4|5|6] у JobList.tsx
 
 ## Поточний стан
 Всі фічі та баги реалізовані/виправлені. Pipeline запускався реально (проект "Become Who You Are Afraid to Be...") — знайдено та виправлено 6 критичних проблем.
