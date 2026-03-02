@@ -252,6 +252,8 @@ async def run_pipeline(
     voice_id: str | None = None,     # Override voice ID from channel config
     master_prompt: str | None = None,  # Override master prompt path
     no_ken_burns: bool = False,      # Skip Ken Burns — static slideshow (1 FFmpeg call, much faster)
+    duration_min: int = 8,           # Minimum target video duration in minutes
+    duration_max: int = 12,          # Maximum target video duration in minutes
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -390,7 +392,8 @@ async def run_pipeline(
             preset=quality,
             dry_run=dry_run,
             output_dir=proj,
-            # TODO: master_prompt override — modules/01 reads from channel_config directly
+            duration_min=duration_min,
+            duration_max=duration_max,
         )
 
         if not dry_run:

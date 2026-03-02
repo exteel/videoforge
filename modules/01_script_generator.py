@@ -159,6 +159,8 @@ class Script(BaseModel):
     blocks: list[ScriptBlock]
     thumbnail_prompt: str = ""
     channel_config: ChannelConfigSummary
+    duration_min: int = 8   # target minimum duration in minutes
+    duration_max: int = 12  # target maximum duration in minutes
 
     @field_validator("blocks")
     @classmethod
@@ -427,7 +429,8 @@ def _build_user_prompt(
     channel_config: dict[str, Any],
     template: str,
     hook_type: str,
-    target_duration: int,
+    duration_min: int,
+    duration_max: int,
 ) -> str:
     """Build user message (transcript + topic + special requests)."""
     transcript = source_data.get("transcript") or ""
@@ -465,10 +468,15 @@ def _build_user_prompt(
         desc_short = description[:300].replace("\n", " ").strip()
         new_topic += f"\n   Context: {desc_short}"
 
+    # Compute target word count range (140-150 wpm speaking pace)
+    target_words_min = duration_min * 140
+    target_words_max = duration_max * 150
+
     return (
         f"[TRANSCRIPTION]\n{transcript}\n\n"
         f"__NEW TOPIC__: {new_topic}\n"
-        f"[DURATION]: {target_duration} minutes\n"
+        f"[DURATION]: {duration_min}-{duration_max} minutes\n"
+        f"[TARGET WORDS]: {target_words_min}–{target_words_max} words\n"
         f"__SPECIAL REQUESTS__:\n{special}"
     )
 
@@ -609,7 +617,8 @@ async def _generate_one_variant(
     model: str,
     template: str,
     hook_type: str,
-    target_duration: int,
+    duration_min: int,
+    duration_max: int,
     voidai_client: Any,
     do_validate: bool = True,
     temperature: float = 0.7,
@@ -617,7 +626,7 @@ async def _generate_one_variant(
     """Generate and optionally validate a single script variant."""
     system_prompt = _build_system_prompt(channel_config)
     user_prompt = _build_user_prompt(
-        source_data, channel_config, template, hook_type, target_duration
+        source_data, channel_config, template, hook_type, duration_min, duration_max
     )
 
     log.info(
@@ -638,6 +647,8 @@ async def _generate_one_variant(
         pass
 
     script = _parse_llm_output(raw, channel_config, source_data, hook_type)
+    # Store target duration range in script metadata
+    script = script.model_copy(update={"duration_min": duration_min, "duration_max": duration_max})
     log.info("Parsed %d blocks from LLM output", len(script.blocks))
 
     if not do_validate or not script.blocks:
@@ -713,7 +724,8 @@ async def generate_scripts(
     dry_run: bool = False,
     output_dir: str | Path | None = None,
     hook_type: str = "auto",
-    target_duration: int = 12,
+    duration_min: int = 8,
+    duration_max: int = 12,
     no_validate: bool = False,
 ) -> list[Path]:
     """
@@ -728,7 +740,8 @@ async def generate_scripts(
         dry_run: Estimate cost without API calls.
         output_dir: Directory to save script.json. Default: source_dir.
         hook_type: Hook type override. Default: auto (from template).
-        target_duration: Target video duration in minutes.
+        duration_min: Minimum target video duration in minutes.
+        duration_max: Maximum target video duration in minutes.
         no_validate: Skip hook validation step.
 
     Returns:
@@ -759,12 +772,12 @@ async def generate_scripts(
 
     if dry_run:
         log.info(
-            "[DRY RUN] Would generate %d variant(s): model=%s template=%s hook=%s duration=%dmin",
-            compare, model, template, hook_type, target_duration,
+            "[DRY RUN] Would generate %d variant(s): model=%s template=%s hook=%s duration=%d-%dmin",
+            compare, model, template, hook_type, duration_min, duration_max,
         )
-        # Rough token estimate: ~200 token system prompt + transcript ~1000 tokens
-        # Output: ~12 min * 150 wpm * 1.3 tokens/word ≈ 2340 tokens
-        log.info("[DRY RUN] Estimated output tokens per script: ~2000–4000")
+        est_words = (duration_min + duration_max) // 2 * 145
+        est_tokens = int(est_words * 1.3)
+        log.info("[DRY RUN] Estimated output tokens per script: ~%d–%d", est_tokens - 500, est_tokens + 500)
         log.info("[DRY RUN] No API calls made.")
         return []
 
@@ -790,7 +803,8 @@ async def generate_scripts(
                 model=model,
                 template=template,
                 hook_type=hook_type,
-                target_duration=target_duration,
+                duration_min=duration_min,
+                duration_max=duration_max,
                 voidai_client=voidai,
                 do_validate=not no_validate,
                 temperature=temperature,
@@ -890,10 +904,24 @@ Examples:
         help="Hook type for intro block. 'auto' picks from template config (default: auto)",
     )
     parser.add_argument(
+        "--duration-min",
+        type=int,
+        default=None,
+        dest="duration_min",
+        help="Minimum target duration in minutes (default: 8)",
+    )
+    parser.add_argument(
+        "--duration-max",
+        type=int,
+        default=None,
+        dest="duration_max",
+        help="Maximum target duration in minutes (default: 12)",
+    )
+    parser.add_argument(
         "--duration",
         type=int,
-        default=12,
-        help="Target video duration in minutes (default: 12)",
+        default=None,
+        help="Legacy: set both min and max to the same value (e.g. --duration 12)",
     )
     parser.add_argument(
         "--dry-run",
@@ -911,6 +939,16 @@ Examples:
     if args.compare < 1:
         parser.error("--compare must be >= 1")
 
+    # Resolve duration: --duration is a legacy alias for setting both min and max
+    if args.duration is not None:
+        resolved_min = args.duration
+        resolved_max = args.duration
+    else:
+        resolved_min = args.duration_min if args.duration_min is not None else 8
+        resolved_max = args.duration_max if args.duration_max is not None else 12
+    if resolved_min > resolved_max:
+        parser.error(f"--duration-min ({resolved_min}) must be <= --duration-max ({resolved_max})")
+
     t0 = time.monotonic()
 
     paths = await generate_scripts(
@@ -922,7 +960,8 @@ Examples:
         dry_run=args.dry_run,
         output_dir=args.output,
         hook_type=args.hook_type,
-        target_duration=args.duration,
+        duration_min=resolved_min,
+        duration_max=resolved_max,
         no_validate=args.no_validate,
     )
 

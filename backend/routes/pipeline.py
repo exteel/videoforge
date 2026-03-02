@@ -46,6 +46,8 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         image_style=req.image_style,
         voice_id=req.voice_id,
         master_prompt=req.master_prompt,
+        duration_min=req.duration_min if req.duration_min is not None else 8,
+        duration_max=req.duration_max if req.duration_max is not None else 12,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 

@@ -129,9 +129,25 @@ class ValidationResult:
 
 # ─── Structural checks (no API) ───────────────────────────────────────────────
 
-def _structural_checks(blocks: list[dict[str, Any]]) -> list[ScriptIssue]:
-    """Fast checks that require no API call."""
+def _structural_checks(
+    blocks: list[dict[str, Any]],
+    duration_min: int | None = None,
+    duration_max: int | None = None,
+) -> list[ScriptIssue]:
+    """Fast checks that require no API call.
+
+    Args:
+        blocks: Script blocks from script.json.
+        duration_min: Target minimum duration in minutes (used to compute TOO_SHORT threshold).
+        duration_max: Target maximum duration in minutes (used to compute TOO_LONG threshold).
+    """
     issues: list[ScriptIssue] = []
+
+    # Dynamic word count thresholds based on target duration
+    # too_long: 25% over max target (warns about duplicate/excessive content)
+    # too_short: 50% under min target (critical — generation likely failed)
+    eff_too_long  = int(duration_max * 150 * 1.25) if duration_max else TOO_LONG_WORDS
+    eff_too_short = int(duration_min * 140 * 0.50) if duration_min else TOO_SHORT_WORDS
 
     if not blocks:
         return [ScriptIssue(type="no_blocks", severity="critical", reason="Script has no blocks")]
@@ -203,14 +219,15 @@ def _structural_checks(blocks: list[dict[str, Any]]) -> list[ScriptIssue]:
 
     # ── Script-level length check ──
     total_words = sum(len((b.get("narration") or "").split()) for b in blocks)
-    if total_words > TOO_LONG_WORDS:
+    if total_words > eff_too_long:
         est_min = round(total_words / 140, 0)
+        target_desc = f"{duration_min}-{duration_max} min" if duration_min and duration_max else "8-15 min"
         issues.append(ScriptIssue(
             type="too_long", block_id="",
             severity="warning",
-            reason=f"Script is {total_words} words (~{int(est_min)} min) — YouTube optimal is 8-15 min (1100-2100 words). Possible duplicate content.",
+            reason=f"Script is {total_words} words (~{int(est_min)} min) — target is {target_desc}. Possible duplicate content.",
         ))
-    elif total_words < TOO_SHORT_WORDS:
+    elif total_words < eff_too_short:
         issues.append(ScriptIssue(
             type="too_short", block_id="", severity="critical",
             reason=f"Script has only {total_words} words total — likely generation failure",
@@ -447,9 +464,13 @@ async def validate_and_fix_script(
     blocks = script.get("blocks", [])
     image_style = (channel_config or {}).get("image_style", "cinematic, photorealistic, dramatic lighting")
 
+    # Read target duration range from script.json (set by script generator, may be absent in old scripts)
+    script_duration_min: int | None = script.get("duration_min")
+    script_duration_max: int | None = script.get("duration_max")
+
     # ── Structural checks (no API) ──
     _emit("Checking structure…", 15.0)
-    issues = _structural_checks(blocks)
+    issues = _structural_checks(blocks, duration_min=script_duration_min, duration_max=script_duration_max)
     result = ValidationResult(
         ok=not any(i.severity == "critical" for i in issues),
         issues=issues,
@@ -583,7 +604,11 @@ async def validate_and_fix_script(
         log.info("Saved fixed script: %s", script_path)
 
         # ── Post-fix re-check: verify fixes actually resolved issues ──
-        remaining = _structural_checks(script.get("blocks", []))
+        remaining = _structural_checks(
+            script.get("blocks", []),
+            duration_min=script_duration_min,
+            duration_max=script_duration_max,
+        )
         still_critical = [i for i in remaining if i.severity == "critical"]
         if still_critical:
             log.warning(

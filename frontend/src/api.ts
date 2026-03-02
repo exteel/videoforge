@@ -100,6 +100,8 @@ export interface PipelineRunRequest {
   image_style?: string | null
   voice_id?: string | null
   master_prompt?: string | null
+  duration_min?: number | null
+  duration_max?: number | null
 }
 
 export interface BatchRunRequest {

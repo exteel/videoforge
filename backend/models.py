@@ -25,6 +25,8 @@ class PipelineRunRequest(BaseModel):
     image_style: str | None = Field(None, description="Override image generation style prompt")
     voice_id: str | None = Field(None, description="Override voice ID from channel config")
     master_prompt: str | None = Field(None, description="Override master prompt path (e.g. 'prompts/master_script_v2.txt')")
+    duration_min: int | None = Field(None, ge=1, le=240, description="Minimum target video duration in minutes")
+    duration_max: int | None = Field(None, ge=1, le=240, description="Maximum target video duration in minutes")
 
 
 class BatchRunRequest(BaseModel):

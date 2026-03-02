@@ -88,6 +88,8 @@ type PFormState = PipelineRunRequest & {
   background_music: boolean
   image_style: string
   voice_id: string
+  duration_min: number
+  duration_max: number
 }
 
 export function JobList() {
@@ -109,6 +111,8 @@ export function JobList() {
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
+    duration_min:     8,
+    duration_max:     12,
   })
 
   const [bForm, setBForm] = useState<BatchRunRequest>({
@@ -301,6 +305,39 @@ export function JobList() {
                 </select>
               </label>
             )}
+
+            {/* Duration range */}
+            <div className="space-y-1">
+              <span className="text-xs text-gray-400">
+                Тривалість відео (хв)
+                <Tip text="Цільова тривалість відео. Сценарій генерується під вказаний діапазон. 8-12 хв = стандарт YouTube, 20-30 хв = поглиблений формат." />
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 shrink-0">від</span>
+                <input
+                  type="number" min="1" max="240" step="1"
+                  value={pForm.duration_min}
+                  onChange={(e) => {
+                    const v = Math.max(1, parseInt(e.target.value) || 1)
+                    setPForm((f) => ({ ...f, duration_min: v, duration_max: Math.max(f.duration_max, v) }))
+                  }}
+                  className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
+                />
+                <span className="text-xs text-gray-500 shrink-0">до</span>
+                <input
+                  type="number" min="1" max="240" step="1"
+                  value={pForm.duration_max}
+                  onChange={(e) => {
+                    const v = Math.max(pForm.duration_min, parseInt(e.target.value) || pForm.duration_min)
+                    setPForm((f) => ({ ...f, duration_max: v }))
+                  }}
+                  className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
+                />
+                <span className="text-xs text-gray-500">
+                  ≈ {pForm.duration_min * 140}–{pForm.duration_max * 150} слів
+                </span>
+              </div>
+            </div>
 
             {/* Voice selector */}
             {voices.length > 0 && (
