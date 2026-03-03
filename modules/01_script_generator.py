@@ -283,6 +283,7 @@ def _parse_llm_output(
     channel_config: dict[str, Any],
     source_data: dict[str, Any],
     hook_type: str,
+    image_style: str = "",
 ) -> Script:
     """
     Parse LLM narrative output into a Script pydantic model.
@@ -492,7 +493,7 @@ def _parse_llm_output(
         channel_config=ChannelConfigSummary(
             name=channel_name,
             voice_id=channel_config.get("voice_id", ""),
-            image_style=channel_config.get("image_style", ""),
+            image_style=image_style,  # from UI only — not channel_config
             subtitle_style=channel_config.get("subtitle_style", {}),
         ),
     )
@@ -545,8 +546,10 @@ def _build_user_prompt(
     hook_type: str,
     duration_min: int,
     duration_max: int,
+    image_style: str = "",
 ) -> str:
     """Build user message (transcript + topic + special requests)."""
+    language = channel_config.get("language", "en")
     transcript = source_data.get("transcript") or ""
     if len(transcript) > MAX_TRANSCRIPT_CHARS:
         log.warning(
@@ -589,7 +592,8 @@ def _build_user_prompt(
     # Image style — injected so the LLM applies it to every [IMAGE_PROMPT:] tag.
     # The 5-element formula in the master prompt has a "Style" slot; this replaces the
     # generic examples (e.g. "cinematic photorealism") with the channel's actual style.
-    image_style = channel_config.get("image_style", "").strip()
+    # NOTE: image_style comes exclusively from the UI parameter — channel_config is NOT used.
+    image_style = image_style.strip()
     image_style_line = (
         f"\n[IMAGE STYLE] — Apply to EVERY [IMAGE_PROMPT:] tag (replace the 'Style' element):\n"
         f"{image_style}\n"
@@ -606,19 +610,30 @@ def _build_user_prompt(
             f"({int(BLOCK_STRUCTURE_V3[i]['pct'] * 100)}%)"
             for i, t in enumerate(targets)
         )
-        image_lines = "\n".join(
-            f"Block {i + 1} {t['name']}: ~{t['images']} images"
-            for i, t in enumerate(targets)
-        )
+
+        # Global image minimum — derived from the 4-tier density model applied to the
+        # ENTIRE script word count (midpoint). This is the canonical calculation:
+        #   Tier 1 (0–450 w):   1 image / 25 w  → ~18 images for first 3 min
+        #   Tier 2 (450–900 w): 1 image / 50 w  → ~9 images for min 3–6
+        #   Tier 3 (900–2250 w):1 image / 150 w → ~9 images for min 6–15
+        #   Tier 4 (2250+ w):   1 image / 280 w → ~N images for min 15+
+        total_mid_words = (target_words_min + target_words_max) // 2
+        total_images_min = _calc_images_for_block(0, total_mid_words)
+
         block_section = (
             f"\n[BLOCK WORD TARGETS] — NARRATION WORDS ONLY (do NOT count [IMAGE_PROMPT:] tags):\n"
             f"{word_lines}\n"
-            f"\n[BLOCK IMAGE TARGETS]:\n{image_lines}\n"
+            f"\n⚠️ IMAGE COUNT — MANDATORY:\n"
+            f"You MUST place at least {total_images_min} [IMAGE_PROMPT:] tags across the ENTIRE script.\n"
+            f"This is the minimum calculated from the 4-tier density model for a "
+            f"{duration_min}–{duration_max} min ({target_words_min}–{target_words_max} word) video.\n"
+            f"Follow the tier intervals from the system prompt (every ~25w / ~50w / ~150w / ~280w).\n"
+            f"Do NOT reduce density — if you feel the scene needs fewer images, add more, not fewer.\n"
         )
         log.info(
-            "v3 block targets injected: %d blocks, words %d–%d, images total ~%d",
+            "v3 targets injected: %d blocks, words %d–%d, images MINIMUM %d (4-tier for %d mid-words)",
             len(targets), target_words_min, target_words_max,
-            sum(t["images"] for t in targets),
+            total_images_min, total_mid_words,
         )
 
     return (
@@ -626,6 +641,8 @@ def _build_user_prompt(
         f"__NEW TOPIC__: {new_topic}\n"
         f"[DURATION]: {duration_min}-{duration_max} minutes\n"
         f"[TARGET WORDS]: {target_words_min}–{target_words_max} words\n"
+        f"[LANGUAGE]: {language} — Write the ENTIRE script in this language, "
+        f"including all CTAs, image prompts, and section titles.\n"
         f"{image_style_line}"
         f"{block_section}"
         f"⚠️ WORD COUNT REQUIREMENTS (BOTH apply — NARRATION WORDS ONLY, [IMAGE_PROMPT:] tags do NOT count):\n"
@@ -940,11 +957,13 @@ async def _generate_one_variant(
     voidai_client: Any,
     do_validate: bool = True,
     temperature: float = 0.7,
+    image_style: str = "",
 ) -> Script:
     """Generate and optionally validate a single script variant."""
     system_prompt = _build_system_prompt(channel_config)
     user_prompt = _build_user_prompt(
-        source_data, channel_config, template, hook_type, duration_min, duration_max
+        source_data, channel_config, template, hook_type, duration_min, duration_max,
+        image_style=image_style,
     )
 
     log.info(
@@ -968,7 +987,7 @@ async def _generate_one_variant(
     except Exception:
         pass
 
-    script = _parse_llm_output(raw, channel_config, source_data, hook_type)
+    script = _parse_llm_output(raw, channel_config, source_data, hook_type, image_style=image_style)
     # Store target duration range in script metadata
     script = script.model_copy(update={"duration_min": duration_min, "duration_max": duration_max})
     log.info("Parsed %d blocks from LLM output", len(script.blocks))
@@ -1133,6 +1152,7 @@ async def generate_scripts(
     duration_max: int = 12,
     no_validate: bool = False,
     master_prompt_path: str | None = None,
+    image_style: str = "",
 ) -> list[Path]:
     """
     Generate script(s) from Transcriber output.
@@ -1220,6 +1240,7 @@ async def generate_scripts(
                 voidai_client=voidai,
                 do_validate=not no_validate,
                 temperature=temperature,
+                image_style=image_style,
             )
 
             # Determine output filename
