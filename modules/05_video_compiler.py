@@ -62,7 +62,8 @@ MIN_AUDIO_BYTES = 1_000
 BLOCK_VIDEO_EXT = ".mp4"
 
 # Inter-block animation cycle (applied at block boundaries with crossfade).
-_KB_CYCLE = ["zoom_in", "pan_left", "zoom_in", "pan_right"]
+# Only zoom_in/zoom_out — pan_left/pan_right cause visible jerks at transitions.
+_KB_CYCLE = ["zoom_in", "zoom_out"]
 
 # Within-block animation cycle for multi-segment blocks.
 # ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries (zoompan):
