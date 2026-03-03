@@ -614,7 +614,7 @@ Return ONLY a JSON object:
     return json.loads(raw)
 
 
-async def _fix_bad_prompts(bad_blocks: list[dict[str, Any]]) -> dict[str, str]:
+async def _fix_bad_prompts(bad_blocks: list[dict[str, Any]], image_style: str = "") -> dict[str, str]:
     """Rewrite bad image_prompts in a single batch LLM call."""
     if not bad_blocks:
         return {}
@@ -622,14 +622,16 @@ async def _fix_bad_prompts(bad_blocks: list[dict[str, Any]]) -> dict[str, str]:
         f"Block {b['id']}:\n  narration: \"{(b.get('narration') or '')[:200]}\"\n  bad_prompt: \"{b.get('image_prompt', '')}\""
         for b in bad_blocks
     )
+    style_line = f"\nIMAGE STYLE (apply to every prompt): {image_style}" if image_style else ""
     prompt = f"""Rewrite these image prompts. Each must directly illustrate exactly what the narration says — not the general theme.
+{style_line}
 
 {blocks_info}
 
 Rules:
 - 15-50 words per prompt
 - Must be specific to that block's exact narration content
-- Cinematic, atmospheric, suitable for AI image generation
+- Apply the image style to every prompt
 - No generic phrases ("abstract concept", "dark mood", "philosophical", "misty light")
 
 Return ONLY valid JSON: {{"block_id": "new_prompt", ...}}"""
@@ -716,7 +718,10 @@ async def validate_and_fix_script(
     _emit("Validating script…", 5.0)
     script      = json.loads(script_path.read_text(encoding="utf-8"))
     blocks      = script.get("blocks", [])
-    image_style = (channel_config or {}).get("image_style", "cinematic, photorealistic, dramatic lighting")
+    # image_style: prefer explicit channel_config param, fallback to script.json embedded config
+    _cfg_param  = (channel_config or {}).get("image_style", "")
+    _cfg_script = script.get("channel_config", {}).get("image_style", "")
+    image_style = _cfg_param or _cfg_script or "cinematic, photorealistic, dramatic lighting"
 
     # Read target duration range from script.json (set by script generator, may be absent in old scripts)
     script_duration_min: int | None = script.get("duration_min")
@@ -841,7 +846,7 @@ async def validate_and_fix_script(
         bad_blocks = [b for b in blocks if b.get("id") in {i.block_id for i in bad_prompt_issues}]
         if bad_blocks:
             try:
-                fixed_prompts = await _fix_bad_prompts(bad_blocks)
+                fixed_prompts = await _fix_bad_prompts(bad_blocks, image_style=image_style)
                 for bid, new_prompt in fixed_prompts.items():
                     for block in blocks:
                         if block.get("id") == bid:

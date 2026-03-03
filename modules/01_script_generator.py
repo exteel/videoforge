@@ -586,6 +586,15 @@ def _build_user_prompt(
     target_words_min = duration_min * 140
     target_words_max = duration_max * 150
 
+    # Image style — injected so the LLM applies it to every [IMAGE_PROMPT:] tag.
+    # The 5-element formula in the master prompt has a "Style" slot; this replaces the
+    # generic examples (e.g. "cinematic photorealism") with the channel's actual style.
+    image_style = channel_config.get("image_style", "").strip()
+    image_style_line = (
+        f"\n[IMAGE STYLE] — Apply to EVERY [IMAGE_PROMPT:] tag (replace the 'Style' element):\n"
+        f"{image_style}\n"
+    ) if image_style else ""
+
     # v3 block targets — injected when channel config uses master_script_v3
     master_prompt_path = channel_config.get("master_prompt_path", "")
     is_v3 = "v3" in Path(master_prompt_path).name
@@ -617,6 +626,7 @@ def _build_user_prompt(
         f"__NEW TOPIC__: {new_topic}\n"
         f"[DURATION]: {duration_min}-{duration_max} minutes\n"
         f"[TARGET WORDS]: {target_words_min}–{target_words_max} words\n"
+        f"{image_style_line}"
         f"{block_section}"
         f"⚠️ WORD COUNT REQUIREMENTS (BOTH apply — NARRATION WORDS ONLY, [IMAGE_PROMPT:] tags do NOT count):\n"
         f"  MINIMUM — Do NOT write [CTA_SUBSCRIBE_FINAL] until you have written "
