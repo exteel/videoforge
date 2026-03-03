@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-03-03 — №45 smooth zoom scale+crop + plan verification
+
+### Виконано
+- **Відповідь на питання "чи картинки відповідають нарації"**: Так — image_prompts генеруються LLM разом зі сценарієм і точно ілюструють конкретні метафори (напр. "4 gates" → 4 кам'яні арки, Jung Red Book → сторінки Red Book + Юнг у Цюриху)
+- **Заміна zoompan → scale+crop** для zoom_in/zoom_out у `ffmpeg_utils.py`:
+  - zoompan: integer crop rounding → 1.67px/frame → alternates 1-2px → 60% variation → stutter
+  - scale+crop (eval=frame): floating-point per-frame → CapCut-style smooth → ZOOM_SCALE=1.30 (30%)
+  - max(W,...) guard: prevents underflow at last frame
+  - pan_left/pan_right залишилися на zoompan (вже плавні)
+- **Тест**: zoom_in 10s + zoom_out 10s → обидва OK без помилок
+- **Перевірено план** duration range control: всі 6 файлів вже реалізовані раніше
+  - 01_script_generator.py ✓ (duration_min/max, CLI --duration-min/max, --duration legacy)
+  - 01b_script_validator.py ✓ (dynamic eff_too_long/eff_too_short thresholds)
+  - pipeline.py ✓ (duration_min/max params + CLI args)
+  - backend/models.py ✓ (PipelineRunRequest fields)
+  - frontend/api.ts ✓ (interface fields)
+  - frontend/src/components/JobList.tsx ✓ (UI з двома inputs + word count hint)
+
+### Файли
+- `utils/ffmpeg_utils.py` — scale+crop zoom implementation
+
+### Коміти
+- `22bc84b` feat: replace zoompan zoom with scale+crop for smooth Ken Burns
+
+---
+
+## 2026-03-03 — №44 Pipeline Steps 03-05 + animation fix
+
+### Виконано
+- **Step 03 TTS** (`03_voice_generator.py`): 17/17 блоків озвучено VoiceAPI, 25.8 хв нарації, EBU R128 нормалізація, 178.9s
+- **Step 04 Subtitles**: 379 записів, SRT + ASS формати
+- **Step 05 Video** (`05_video_compiler.py`): 1920x1080, crossfade, BGM -20dB, субтитри, final.mp4 476.5MB, 1469.8s
+- **Animation fix**: `_KB_CYCLE = ["zoom_in", "zoom_out"]` (прибрано `pan_left`/`pan_right` — давали ривки при block transitions)
+- `anim_demos/` — 5 тестових кліпів по 10s для порівняння анімацій
+
+### Коміти
+- `925c492` fix: remove pan_left/pan_right from animation cycle
+
+---
+
 ## 2026-03-03 — №43 image_style injection in LLM prompt
 
 ### Проблема

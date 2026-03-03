@@ -19,7 +19,29 @@
       "WebFetch(domain:voiceapi.csv666.ru)",
       "Bash(pip install:*)",
       "Bash(node:*)",
-      "Bash(npm:*)"
+      "Bash(npm:*)",
+      "Bash(curl:*)",
+      "Bash([SECTION 1: Hook] marker\" to remove ambiguity:*)",
+      "Bash(npx tsc:*)",
+      "Bash(pip show:*)",
+      "Bash(dir:*)",
+      "Bash(ls \"D:\\\\Project video generator\\\\frontend\\\\dist\\\\assets\"\" | head -5 && git -C \"D:Project video generator \" log --oneline frontend/src/components/TranscriberPanel.tsx)",
+      "Bash(tasklist /fi \"imagename eq python.exe\" /fo csv)",
+      "Bash(tasklist:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(netstat:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(where:*)",
+      "Bash(node_modules/.bin/vite.cmd build:*)",
+      "Bash(ls \"D:\\\\Project video generator\\\\assets\\\\music\"\" 2>/dev/null || echo \"ПАПКА ВІДСУТНЯ або ПОРОЖНЯ\":*)",
+      "Bash(ls \"D:\\\\Project video generator\\\\assets\"\" 2>/dev/null; find \"D:Project video generator\" -name \"*.mp3\" -o -name \"*.wav\" -o -name \"*.ogg \")",
+      "Bash(ffprobe:*)",
+      "Bash(grep:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(stream\" error. Fixed: detect output extension, use libmp3lame for .mp3.:*)",
+      "Bash(python3:*)",
+      "Bash(cmd /c \"dir /b \"\"D:\\\\transscript batch\\\\output\\\\output\"\" 2>&1\")",
+      "Bash(ls:*)"
     ]
   }
 }

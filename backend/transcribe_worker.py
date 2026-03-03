@@ -34,6 +34,11 @@ MAX_BYTES        = 24 * 1024 * 1024   # 24 MB — stay under 25 MB API limit
 AUDIO_BITRATE    = "64k"              # ~480 KB/min → ~28 MB/hr; split if larger
 CHUNK_MINUTES    = 25                 # Split into 25-min chunks if needed
 
+# Retry config for transient Whisper API errors (502, 503, 429, 500, 504)
+WHISPER_RETRY_ATTEMPTS = 3
+WHISPER_RETRY_STATUSES = {429, 500, 502, 503, 504}
+WHISPER_RETRY_DELAYS   = [5, 10, 20]  # seconds between retries (exponential-ish backoff)
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,30 +93,65 @@ async def _whisper_transcribe(
     base_url: str,
     language: str | None,
 ) -> dict[str, Any]:
-    """Transcribe a single audio file via VoidAI Whisper API."""
+    """
+    Transcribe a single audio file via VoidAI Whisper API.
+
+    Retries on transient errors (502, 503, 429, 500, 504) with backoff.
+    Raises RuntimeError on permanent failure or non-retryable status codes.
+    """
     import httpx
 
     with open(audio_path, "rb") as f:
         content = f.read()
 
-    files  = {"file": (audio_path.name, content, "audio/mpeg")}
+    files = {"file": (audio_path.name, content, "audio/mpeg")}
     data: dict[str, str] = {"model": WHISPER_MODEL, "response_format": "verbose_json"}
     if language:
         data["language"] = language
 
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        resp = await client.post(
-            f"{base_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            files=files,
-            data=data,
-        )
+    endpoint = f"{base_url}/audio/transcriptions"
+    last_error: Exception | None = None
 
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Whisper API error {resp.status_code}: {resp.text[:300]}"
-        )
-    return resp.json()
+    for attempt in range(1, WHISPER_RETRY_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                resp = await client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    files=files,
+                    data=data,
+                )
+
+            if resp.status_code == 200:
+                return resp.json()
+
+            # Transient server error — retry with backoff
+            if resp.status_code in WHISPER_RETRY_STATUSES and attempt < WHISPER_RETRY_ATTEMPTS:
+                delay = WHISPER_RETRY_DELAYS[attempt - 1]
+                last_error = RuntimeError(
+                    f"Whisper API error {resp.status_code} (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): "
+                    f"{resp.text[:200]}"
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Permanent error (400, 401, 403, 404, etc.) — fail immediately
+            raise RuntimeError(
+                f"Whisper API error {resp.status_code}: {resp.text[:300]}"
+            )
+
+        except httpx.TimeoutException as exc:
+            last_error = RuntimeError(f"Whisper API timeout (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): {exc}")
+            if attempt < WHISPER_RETRY_ATTEMPTS:
+                await asyncio.sleep(WHISPER_RETRY_DELAYS[attempt - 1])
+                continue
+        except httpx.RequestError as exc:
+            last_error = RuntimeError(f"Whisper API network error (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): {exc}")
+            if attempt < WHISPER_RETRY_ATTEMPTS:
+                await asyncio.sleep(WHISPER_RETRY_DELAYS[attempt - 1])
+                continue
+
+    raise last_error or RuntimeError("Whisper API: all retry attempts exhausted")
 
 
 async def _transcribe_file(
