@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-03-03 — №41 Hook regen 5+5 strategy + TTS limit 35 + test on Tired
+
+### Зміни
+
+**`modules/01b_script_validator.py`** — `TTS_MAX_SENTENCE_WORDS = 30 → 35`
+
+**`modules/01_script_generator.py`** — 5+5 hook regen strategy:
+- `MAX_INTRO_REGEN = 2` → `MAX_HOOK_ATTEMPTS = 10` + `HOOK_ROUND_SIZE = 5`
+- Loop тепер колекціонує `candidates: list[tuple[str, int, HookInfo]]`
+- Після спроби 5 (round 1): якщо best ≥3/4 → використовуємо найкращий і виходимо
+- Якщо нема ≥3/4 → round 2 (спроби 6-10)
+- Після спроби 10: best available незалежно від score
+- Ранній вихід при ≥4/4 як завжди
+
+### Тест: "Why You're Always Tired (Even When You Do Nothing)" (Opus, 22-25 хв)
+- Hook passed **4/4** на спробі 1 ✅
+- 10 блоків, **3358 narration words** (target 3080–3750) ✅
+- Validator: 1 warning (missing prompt block_009 → auto-fixed) ✅
+- 29 image prompts (деякі секції sparse — нормально для 1 chunk)
+- Cost: $0.64 (Opus chunk) + $0.003 (hook validate)
+
+### Файли: `modules/01_script_generator.py`, `modules/01b_script_validator.py`
+
+---
+
 ## 2026-03-03 — №40 Accurate narration word counting + v3 script generation fixes
 
 ### Root problem

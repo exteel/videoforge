@@ -46,7 +46,8 @@ log = setup_logging("script_gen")
 
 PROMPTS_DIR = ROOT / "prompts"
 VALIDATOR_MODEL = "gpt-4.1"  # gpt-4.1-nano consistently misclassifies good v3 hooks
-MAX_INTRO_REGEN = 2  # Default max intro regeneration attempts
+MAX_HOOK_ATTEMPTS = 10  # max total validation+regen cycles (5+5 two-round strategy)
+HOOK_ROUND_SIZE   = 5   # after round 1, pick best ≥3/4 before continuing round 2
 MAX_TRANSCRIPT_CHARS = 14_000   # ~10K tokens — keeps total prompt manageable for Opus
 MAX_HOOKS_GUIDE_CHARS = 8_000   # hooks_guide.md is now compact (~4KB), allow full pass-through
 
@@ -965,10 +966,10 @@ async def _generate_one_variant(
     if not do_validate or not script.blocks:
         return script
 
-    # ── Hook validation loop ──
+    # ── Hook validation loop (5+5 two-round strategy) ──
     hooks_cfg = channel_config.get("hooks", {})
     should_validate = hooks_cfg.get("auto_validate", True)
-    max_regen = hooks_cfg.get("max_regenerate_intro", MAX_INTRO_REGEN)
+    max_attempts = hooks_cfg.get("max_hook_attempts", MAX_HOOK_ATTEMPTS)
 
     if not should_validate:
         return script
@@ -980,34 +981,38 @@ async def _generate_one_variant(
     topic = source_data.get("title", "")
 
     # Hook pass threshold: 4/4 criteria required.
-    # CLARITY now allows Context Lean-In (topic clear by sentence 4-5, not sentence 1-2).
-    # A good v3 hook must pass all 4: CLARITY (delayed OK) + CURIOSITY + RELEVANCE + INTEREST.
-    # If any criterion fails, Opus regenerates with targeted feedback (up to MAX_INTRO_REGEN times).
+    # CLARITY allows Context Lean-In (topic clear by sentence 4-5, not sentence 1-2).
+    # Strategy:
+    #   Round 1 (attempts 1–5): collect candidates, exit early if ≥4/4.
+    #   After attempt 5: if best candidate ≥3/4, use it; else start round 2.
+    #   Round 2 (attempts 6–10): continue regenerating, exit if ≥4/4.
+    #   After attempt 10: use best available regardless of score.
     hook_pass_threshold = 4
+    round1_threshold    = 3   # minimum acceptable score after round 1
 
     intro_block = script.blocks[0]
+    candidates: list[tuple[str, int, HookInfo]] = []  # (narration, score, hook_meta)
 
-    for attempt in range(1, max_regen + 1):
-        log.info("Hook validation (attempt %d/%d)...", attempt, max_regen)
+    for attempt in range(1, max_attempts + 1):
+        log.info("Hook validation (attempt %d/%d)...", attempt, max_attempts)
 
         result = await _validate_intro_hook(
             intro_block.narration, niche, audience, voidai_client, topic=topic
         )
 
-        # Store validation score in hook metadata
         updated_hook = HookInfo(
             type=hook_type,
             formula="context_lean + scroll_stop + snapback",
             validation_score=result.pass_count,
         )
         intro_block = intro_block.model_copy(update={"hook": updated_hook})
+        candidates.append((intro_block.narration, result.pass_count, updated_hook))
 
-        # Override passed status for v3 if meets lower threshold
         is_passed = result.passed or (result.pass_count >= hook_pass_threshold)
 
         if is_passed:
             log.info(
-                "Hook validation PASSED (%d/4 criteria, threshold=%d: %s)",
+                "Hook validation PASSED (%d/4 criteria, threshold=%d): %s",
                 result.pass_count, hook_pass_threshold,
                 [k for k, v in result.criteria.items() if v.get("pass", False)],
             )
@@ -1019,9 +1024,38 @@ async def _generate_one_variant(
             result.failed_criteria,
         )
 
-        # Regenerate the hook using the same production model (not nano).
-        # nano's suggested_rewrite is a generic fallback — using the same model (e.g. Opus)
-        # with targeted feedback produces dramatically better results.
+        # After round 1 (attempt 5): check if any candidate meets ≥3/4 threshold
+        if attempt == HOOK_ROUND_SIZE:
+            best_narr, best_score, best_hook = max(candidates, key=lambda x: x[1])
+            if best_score >= round1_threshold:
+                log.info(
+                    "Round 1 complete — best candidate %d/4 meets ≥%d threshold. Using it.",
+                    best_score, round1_threshold,
+                )
+                intro_block = intro_block.model_copy(
+                    update={"narration": best_narr, "hook": best_hook}
+                )
+                break
+            log.info(
+                "Round 1 complete — best is only %d/4 (below %d). Starting round 2.",
+                best_score, round1_threshold,
+            )
+
+        # After max attempts: use best available
+        if attempt == max_attempts:
+            best_narr, best_score, best_hook = max(candidates, key=lambda x: x[1])
+            log.warning(
+                "Max attempts (%d) reached — using best available (%d/4).",
+                max_attempts, best_score,
+            )
+            intro_block = intro_block.model_copy(
+                update={"narration": best_narr, "hook": best_hook}
+            )
+            break
+
+        # Regenerate the hook using the same production model with targeted feedback.
+        # Using production model (e.g. Opus) produces dramatically better results than
+        # nano's generic suggested_rewrite.
         failed_feedback = "\n".join(
             f"  - {k.upper()}: {v.get('feedback', '')}"
             for k, v in result.criteria.items()
@@ -1055,13 +1089,17 @@ async def _generate_one_variant(
                 update={"narration": new_hook_text, "hook": updated_hook}
             )
             log.info(
-                "Hook regenerated by %s (%d chars): %.120s...",
-                model, len(new_hook_text), new_hook_text.replace("\n", " "),
+                "Hook regenerated (attempt %d) by %s (%d chars): %.120s...",
+                attempt, model, len(new_hook_text), new_hook_text.replace("\n", " "),
             )
         except Exception as exc:
             log.warning(
-                "Hook regeneration call failed (%s: %s) — keeping original intro",
+                "Hook regeneration failed (%s: %s) — using best candidate so far",
                 type(exc).__name__, exc,
+            )
+            best_narr, best_score, best_hook = max(candidates, key=lambda x: x[1])
+            intro_block = intro_block.model_copy(
+                update={"narration": best_narr, "hook": best_hook}
             )
             break
 

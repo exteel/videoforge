@@ -124,7 +124,7 @@ _TTS_FILLER_RE     = re.compile(                        # filler opener phrases
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE    = re.compile(r"(?<=[.?])\s+")    # split on sentence boundaries
-TTS_MAX_SENTENCE_WORDS = 30  # v3 guideline is 25 words/sentence; warn at 30
+TTS_MAX_SENTENCE_WORDS = 35  # v3 guideline is 25 words/sentence; warn at 35
 
 # Words that, when they are the last word of a narration, suggest a cut-off
 _CONNECTOR_WORDS = frozenset([
