@@ -177,6 +177,48 @@ Block completion rule:
   End by transitioning from "why it happens" to "how it shows up in your life."
   This sets up Block 4 recognition patterns.
 
+⚠️ EARLY CTA (~26% of video): Place [CTA_SUBSCRIBE_MID] immediately AFTER Block 3 is complete.
+  Rationale: peak viewer engagement is 20–35% into the video. Comment + subscribe here
+  while comprehension is highest and the "aha moment" from Root Cause is still fresh.
+
+[CTA_SUBSCRIBE_MID]
+─────────────────────────────────────────────────────────────────
+CTA TYPE: COMMENT + SUBSCRIBE — early mid-roll, after root cause reveal (~26%)
+Tone: Energized but grounded. The viewer just understood WHY. Channel that momentum.
+Structure: Comment question → why their answer matters → subscribe ask
+─────────────────────────────────────────────────────────────────
+WRITE THE CTA_MID IN EXACTLY THIS STRUCTURE:
+
+PART 1 — THE COMMENT QUESTION (1–2 sentences):
+  Ask a specific question tied directly to what was just revealed in Block 3.
+  A question only someone who has heard the root cause explanation can meaningfully answer.
+  Frame it so the viewer wants to write the answer — it should feel like a release, not homework.
+
+  Formula options (adapt to the specific root cause just described):
+    "Tell me in the comments: which of [the mechanisms/patterns from Block 3] do you
+     recognize most clearly in your own life — and how long has it been running?"
+    "Leave a comment: what was the moment you first felt [the core tension] — even if
+     you could not name it until now?"
+    "Write below: if you had to name the one [root cause concept] that explains the most
+     about how your life has gone — what would it be?"
+
+  Follow with ONE sentence that makes leaving a comment feel meaningful:
+    "Write it below. You do not have to have it figured out. Just name it."
+    "Leave it in the comments. Naming it is already the beginning."
+    "Put it below. Your answer may be exactly what someone else needed to read today."
+
+PART 2 — THE SUBSCRIBE ASK (1–2 sentences, short and declarative):
+  "Subscribe if you want to keep going. What comes next matters even more."
+  "If this is the kind of understanding you want more of — subscribe."
+  "Subscribe. There is more of this waiting."
+
+⚠️ RULES:
+- Maximum 5 sentences total
+- No exclamation marks
+- The comment question must be SPECIFIC to this video's root cause — never generic
+- The subscribe ask is SHORT — the comment question carries the weight here
+─────────────────────────────────────────────────────────────────
+
 ─────────────────────────────────────────────────────────────────
 BLOCK 4 — RECOGNITION
 ─────────────────────────────────────────────────────────────────
@@ -194,42 +236,9 @@ Requirements:
   - DO NOT offer solutions here — this is the diagnosis phase only
   - Typically 3–5 [SECTION N:] markers: one per manifestation, plus an intro and bridge
 
-⚠️ MID-ROLL CTA: Place [CTA_SUBSCRIBE_MID] immediately AFTER Block 4 is complete.
-
 Block completion rule:
   Final sentence completes the diagnosis and opens desire for the answer.
   Example: "And once you see how deeply this runs — the question becomes what to do about it."
-
-[CTA_SUBSCRIBE_MID]
-─────────────────────────────────────────────────────────────────
-CTA TYPE: SUBSCRIBE — mid-roll, after recognition peak
-Tone: Quiet, knowing. The viewer has just seen themselves. Do not shout.
-Structure: Name what they just experienced → make subscribing feel like a choice, not a sales pitch
-─────────────────────────────────────────────────────────────────
-WRITE THE CTA_MID USING THIS FORMULA:
-
-Sentence 1 — Name the moment: Acknowledge exactly what the viewer just experienced
-  (not generic — specific to what was just described in Block 4).
-  "If what you just heard named something you have been carrying for years..."
-  "If you recognized yourself in more than one of those patterns..."
-  "If this is the first time you have heard someone describe what you have been feeling..."
-
-Sentence 2 — Name the person: Who this channel is for, stated as identity, not pitch.
-  "Then you are someone who wants to understand — not just cope."
-  "Then you are exactly the kind of person this channel was built for."
-  "Then you already know this goes deeper than most content ever reaches."
-
-Sentence 3 — The ask: Short. Declarative. No "consider". No "if you want".
-  "Subscribe. There is more of this waiting."
-  "Subscribe. And let's keep going."
-  "Hit subscribe. What comes next matters even more."
-
-⚠️ RULES:
-- Maximum 4 sentences total
-- No exclamation marks
-- No "This channel explores the depths that most content never reaches" — it is banned as generic
-- The CTA must feel like a natural breath in the narration, not a commercial break
-─────────────────────────────────────────────────────────────────
 
 ─────────────────────────────────────────────────────────────────
 BLOCK 5 — CORE FRAMEWORK
@@ -326,72 +335,59 @@ BLOCK 8 — CLOSING + CTA
 Target: [BLOCK WORD TARGETS] Block 8  |  Images: [BLOCK IMAGE TARGETS] Block 8
 
 Purpose:
-  Land the message. Close the arc opened in Block 1. Convert the viewer
-  to subscriber. Prompt meaningful, content-specific engagement.
+  Land the message. Close the arc opened in Block 1. The comment was already
+  collected at 26% — this block's only job is to complete the emotional journey
+  and leave one sentence the viewer will carry with them.
 
 Requirements:
   - Restate the core message in its most distilled, memorable form
   - Reference the opening image or tension from Block 1 — close the circle
   - Final statement: the viewer is capable, worthy, and ready
-  - CTA question must be SPECIFIC to this video's content — never generic
   - Leave the viewer with one sentence they will carry with them
   - Typically 2–3 [SECTION N:] markers within this block
+  - DO NOT ask a comment question here — comment was already prompted at 26%
 
 [CTA_SUBSCRIBE_FINAL]
 ─────────────────────────────────────────────────────────────────
-CTA TYPE: COMMENT + SUBSCRIBE — final, after closing arc
-Tone: Warm, grounded. The viewer has just completed something. Honor that.
-Structure: Comment ask → why it matters → subscribe → final line
+CTA TYPE: SUBSCRIBE + CLOSE — final, after closing arc (~100%)
+Tone: Still. The work is done. The arc is closed. No selling — just landing.
+Note: The comment was already collected at 26% (CTA_MID). Do NOT ask for a comment here again.
+Structure: Subscribe ask → final memorable line → fixed closing
 ─────────────────────────────────────────────────────────────────
 WRITE THE CTA_FINAL IN EXACTLY THIS STRUCTURE:
 
-PART 1 — THE COMMENT ASK (2–3 sentences):
-  Open with a direct, content-specific question. Not "what did you think?"
-  A question only someone who watched THIS video to the end can meaningfully answer.
-  The question must invite genuine self-reflection — something the viewer wants to write.
+PART 1 — THE SUBSCRIBE ASK (1–2 sentences):
+  Frame subscribing as continuing the work, not rewarding the channel.
+  It must feel like a natural next step after the emotional arc just completed.
 
-  Strong comment question formulas:
-    "What is the one [specific concept from this video] you have been avoiding naming in your own life?"
-    "Tell me in the comments: what did you recognize in yourself during [specific part of this video]
-     that you have never said out loud?"
-    "If you could speak to the version of you who was still inside [the core struggle] —
-     what is the one thing you would say?"
-    "What pattern in your life do you now see differently after this — and what would it mean
-     to finally stop repeating it?"
+  Strong formulas (adapt — do not copy literally):
+    "If you want to keep going — subscribe. There is more of this waiting."
+    "Subscribe if this is the kind of thinking you want to keep doing."
+    "If you want to continue — subscribe. We go this deep every time."
 
-  Follow the question with ONE sentence explaining why their answer matters:
-    "Write it in the comments. It does not have to be polished. It just has to be honest."
-    "Leave it below. Your answer may be the one sentence someone else needed to read today."
-    "Put it in the comments. Writing it down is already the first act of changing it."
-
-PART 2 — THE SUBSCRIBE ASK (1–2 sentences):
-  Frame subscribing as a commitment to continue the work — not a reward for the channel.
-  "If this is the kind of thinking you want more of — subscribe."
-  "Subscribe if you want to keep going. There is more of this waiting."
-  "If you want to keep exploring this — subscribe. We go this deep every time."
-
-  BANNED phrases (overused, generic — do not use):
+  BANNED phrases (too generic — do not use):
     "depth over distraction" | "understanding over comfort" | "exactly who this channel was created for"
     "this channel explores the depths" | "if this resonated with you"
 
-PART 3 — THE FINAL LINE (1 sentence):
-  The sentence they carry with them. Distilled. Memorable. Specific to this video's insight.
-  It must be the sharpest version of the core message — not a motivational platitude.
+PART 2 — THE FINAL MEMORABLE LINE (1 sentence only):
+  The sentence they carry with them. Distilled. Specific to THIS video's core insight.
+  It must be the sharpest, most concentrated version of the message — not a motivational platitude.
+  Write it so the viewer could repeat it to someone tomorrow and it would still land.
 
-  Examples of strong final lines (adapt — never copy):
-    "You were never lost. You just had not learned to read the map yet."
+  Examples of the right register (adapt — never copy):
+    "You were never broken. You were just running code that no longer fits."
     "The pattern was not your prison. It was always pointing to the door."
     "Knowing is not the end. It is the moment real work becomes possible."
+    "The life you want is not on the other side of willpower. It is on the other side of understanding."
 
-PART 4 — CLOSING (fixed, always the same):
+PART 3 — CLOSING (fixed, always identical):
   "Thank you for being here. I will see you in the next one."
 
 ⚠️ RULES:
-- Total CTA_FINAL: 8–12 sentences maximum
-- No exclamation marks anywhere
-- The comment question must be answerable in 1–3 sentences — specific enough to invite response,
-  open enough to allow personal variation
-- The final memorable line is SINGULAR — one sentence, no more
+- Total CTA_FINAL: 4–6 sentences maximum (short — the emotional weight was in the closing narration)
+- No exclamation marks
+- No comment question — already asked at 26%
+- The final memorable line is SINGULAR — one sentence, never two
 ─────────────────────────────────────────────────────────────────
 
 ═══════════════════════════════════════════════════════════════════
@@ -598,14 +594,28 @@ Before outputting, verify:
   - Final memorable line is singular and carries weight
 
 □ CTA QUALITY
-  - CTA_MID: Named the specific emotional moment from Block 4 (not generic)
-  - CTA_MID: Subscribe ask is declarative, not passive ("Subscribe." not "consider subscribing")
-  - CTA_MID: Does NOT contain banned phrase "This channel explores the depths..."
-  - LIKE ASK: Present in Block 6 narration as 1–2 inline sentences (no separate marker)
-  - LIKE ASK: Uses conditional "If..." framing, not naked command
-  - CTA_FINAL: Comment question is content-specific — answerable only by someone who watched
-  - CTA_FINAL: Does NOT contain banned phrases ("depth over distraction", "resonated with you")
-  - CTA_FINAL: Final memorable line is a single, distilled sentence — not a platitude
+  Placement check:
+  - [CTA_SUBSCRIBE_MID] appears after Block 3 (~26%) — NOT after Block 4
+  - [CTA_SUBSCRIBE_FINAL] appears at the end of Block 8 (~100%)
+  - LIKE ASK is inline within Block 6 narration — no separate marker
+
+  CTA_MID content (~26%, comment + subscribe):
+  - Comment question is tied to the specific root cause from Block 3 (not generic)
+  - Question is answerable by someone who just heard the root cause explanation
+  - Subscribe ask is short and declarative (not "consider subscribing")
+  - Total: 5 sentences maximum
+
+  LIKE ASK (Block 6, inline):
+  - 1–2 sentences only, then immediately returns to narration
+  - Uses conditional "If..." framing — never a naked command
+  - No exclamation marks
+
+  CTA_FINAL content (~100%, subscribe + close):
+  - Does NOT ask for a comment — comment was already collected at 26%
+  - Subscribe ask is 1–2 sentences, references continuing the work
+  - Does NOT contain banned phrases ("depth over distraction", "resonated with you")
+  - Final memorable line is SINGULAR — one sentence, distilled core insight
+  - Total: 4–6 sentences maximum
   - All CTAs: Zero exclamation marks
 
 ═══════════════════════════════════════════════════════════════════
