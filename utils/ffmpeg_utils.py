@@ -57,8 +57,16 @@ DRAFT_PRESET = "ultrafast"
 # ZOOMPAN_FPS kept for reference only — no longer used in ken_burns().
 ZOOMPAN_FPS = 6
 
+# Zoom scale factor for zoom_in / zoom_out animations.
+# 1.30 = image scales from 100% to 130% (or back). 30% gives more dramatic
+# motion and larger per-frame pixel steps → smoother floating-point rendering.
+ZOOM_SCALE = 1.30
+
 # Ken Burns animation types
-AnimationType = Literal["zoom_in", "zoom_out", "pan_left", "pan_right", "static"]
+AnimationType = Literal[
+    "zoom_in", "zoom_out",
+    "pan_left", "pan_right", "static",
+]
 
 # Crossfade duration in seconds
 CROSSFADE_DURATION = 0.5
@@ -262,69 +270,61 @@ def ken_burns(
             str(out),
         ]
     else:
-        # Zoompan Ken Burns — smooth motion at full fps.
-        #
-        # WHY NOT CROP with dynamic w/h: changing crop dimensions per frame causes
-        # FFmpeg to reinitialize the filter chain mid-stream → "Error reinitializing
-        # filters!" / Error -22 (EINVAL). Only crop x/y can animate; w/h must be fixed.
-        #
-        # ZOOMPAN solution: `fps={fps}` + `-r {fps}` on input ensures one unique
-        # output frame per input frame → `on` counter advances 0,1,2,...N-1.
-        # No frame duplication → perfectly smooth motion at full fps.
-        # (Old bug: zoompan fps=6 → 5× frame duplication to reach 30fps → visible stutter.)
-        #
-        # 2× PRE-SCALE for sub-pixel smooth motion:
-        #   zoompan rounds x,y to integer pixels.  At 1× scale (1920×1080) and 15% zoom
-        #   over 10 s the per-frame x-movement is only ~0.48 px → rounds to 0 or 1 every
-        #   other frame → visible "pixel-jump" stutter.
-        #   Pre-scaling to 2× (3840×2160) doubles the pixel budget: ~0.84 px/frame in the
-        #   3840-px space → rounded to 1 px → only 0.5 px apparent motion in 1080p output
-        #   → smooth, cinema-quality animation at the cost of ~40% extra FFmpeg encode time.
-        #
-        # Seamless within-block chain (zoom_in → zoom_out hard cut):
-        #   zoom_in  last frame:  z≈1.15  →  x = iw/2 - iw/1.15/2
-        #   zoom_out first frame: z=1.15  →  x = iw/2 - iw/1.15/2  ← identical
         total_frames = max(int(duration * fps), 1)
 
-        # Pre-scale to 2× output for sub-pixel smooth zoompan motion.
-        # zoompan output (s=WxH) scales the cropped region back to target resolution.
-        scale_filter = (
-            f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=decrease,"
-            f"pad={w * 2}:{h * 2}:(ow-iw)/2:(oh-ih)/2"
-        )
+        if animation in ("zoom_in", "zoom_out"):
+            # ── Scale+crop Ken Burns (floating-point, no integer rounding) ──────
+            #
+            # zoompan rounds crop boundaries to integer pixels → uneven per-frame
+            # steps → visible stutter. scale+crop evaluates per frame in float →
+            # same approach as CapCut / Premiere Pro → perfectly smooth motion.
+            #
+            # ZOOM_SCALE = 1.30: image scales between 100% and 130%.
+            # 30% range gives ~3.84px/frame change at 30fps/10s → rounds evenly.
+            #
+            # Seamless zoom_in → zoom_out hard-cut chain:
+            #   zoom_in  last frame:  scale=W*ZOOM_SCALE, crop center W×H  ✓
+            #   zoom_out first frame: scale=W*ZOOM_SCALE, crop center W×H  ✓
+            W_zoom = int(round(w * ZOOM_SCALE / 2)) * 2   # e.g. 2496 for 1920
+            H_zoom = int(round(h * ZOOM_SCALE / 2)) * 2   # e.g. 1404 for 1080
 
-        if animation == "zoom_in":
-            # Slow zoom in: z 1.0→1.15 (view window shrinks toward center)
-            z_expr = f"1+0.15*on/{total_frames}"
-            x_expr = "iw/2-(iw/zoom/2)"
-            y_expr = "ih/2-(ih/zoom/2)"
+            w_start = w      if animation == "zoom_in" else W_zoom
+            w_end   = W_zoom if animation == "zoom_in" else w
+            B = w_end - w_start   # +576 for zoom_in, -576 for zoom_out
 
-        elif animation == "zoom_out":
-            # Slow zoom out: z 1.15→1.0 (view window expands to full frame)
-            z_expr = f"1.15-0.15*on/{total_frames}"
-            x_expr = "iw/2-(iw/zoom/2)"
-            y_expr = "ih/2-(ih/zoom/2)"
-
-        elif animation == "pan_left":
-            # Pan right→left at constant zoom 1.15x
-            z_expr = "1.15"
-            x_expr = f"(iw-iw/zoom)*(1-on/{total_frames})"
-            y_expr = "ih/2-(ih/zoom/2)"
-
-        elif animation == "pan_right":
-            # Pan left→right at constant zoom 1.15x
-            z_expr = "1.15"
-            x_expr = f"(iw-iw/zoom)*on/{total_frames}"
-            y_expr = "ih/2-(ih/zoom/2)"
+            # max(w,...) guards against float rounding making scale_w < output size
+            w_expr = f"max({w},trunc(({w_start}+({B})*n/{total_frames})/2)*2)"
+            h_expr = f"max({h},trunc(({w_start}+({B})*n/{total_frames})*{h}/{w}/2)*2)"
+            vf = (
+                f"scale=w='{w_expr}':h='{h_expr}':eval=frame,"
+                f"crop={w}:{h}:(iw-{w})/2:(ih-{h})/2"
+            )
 
         else:
-            raise ValueError(f"Unknown animation type: {animation!r}")
+            # ── Zoompan for pan animations (constant z, smooth lateral motion) ──
+            #   pan_left/pan_right: constant zoom 1.15×, animated x position.
+            #   2× pre-scale to get ≥1.67px/frame → rounds to 1-2px → smooth.
+            scale_filter = (
+                f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=decrease,"
+                f"pad={w * 2}:{h * 2}:(ow-iw)/2:(oh-ih)/2"
+            )
 
-        vf = (
-            f"{scale_filter},"
-            f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
-            f":d=1:fps={fps}:s={w}x{h}"
-        )
+            if animation == "pan_left":
+                z_expr = "1.15"
+                x_expr = f"(iw-iw/zoom)*(1-on/{total_frames})"
+                y_expr = "ih/2-(ih/zoom/2)"
+            elif animation == "pan_right":
+                z_expr = "1.15"
+                x_expr = f"(iw-iw/zoom)*on/{total_frames}"
+                y_expr = "ih/2-(ih/zoom/2)"
+            else:
+                raise ValueError(f"Unknown animation type: {animation!r}")
+
+            vf = (
+                f"{scale_filter},"
+                f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
+                f":d=1:fps={fps}:s={w}x{h}"
+            )
 
         cmd = [
             FFMPEG, "-y",
