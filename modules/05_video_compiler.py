@@ -225,25 +225,33 @@ def _image_for_segment(
     Returns:
         Path to the image that should play during this segment.
     """
-    # If no offset data (v1 script / fallback) — fall back to simple cycling
-    if not word_offsets or len(word_offsets) != len(image_list):
-        return image_list[seg_idx % len(image_list)]
-
-    if total_words <= 0:
+    n = len(image_list)
+    if n == 1:
         return image_list[0]
 
-    # Convert segment index to approximate word position in narration
-    seg_word_pos = int((seg_idx / n_segments) * total_words)
+    # Try word-offset based assignment — compute ALL segment assignments first so we
+    # can verify every image actually appears (LLM sometimes places extra images so
+    # late in the narration that some segments never reach them).
+    if word_offsets and len(word_offsets) == n and total_words > 0:
+        assignments: list[int] = []
+        for s in range(n_segments):
+            wp = int((s / n_segments) * total_words)
+            ci = 0
+            for i, off in enumerate(word_offsets):
+                if off <= wp:
+                    ci = i
+                else:
+                    break
+            assignments.append(ci)
 
-    # Find the last image whose word_offset ≤ seg_word_pos
-    chosen_idx = 0
-    for i, offset in enumerate(word_offsets):
-        if offset <= seg_word_pos:
-            chosen_idx = i
-        else:
-            break
+        # Only use word-offset assignments if EVERY image gets at least one segment.
+        # If any image is missing, fall through to modulo cycling below.
+        if len(set(assignments)) == n:
+            return image_list[assignments[seg_idx]]
 
-    return image_list[chosen_idx]
+    # Fallback: modulo cycling — guaranteed no consecutive duplicates for n ≥ 2
+    # (e.g. 2 imgs × 3 segs → [0,1,0] instead of floor-division [0,0,1])
+    return image_list[seg_idx % n]
 
 
 def _animation_for_block(
@@ -428,6 +436,19 @@ def compile_video(
             except Exception:
                 pass
 
+    def _con(i: int, n: int, label: str = "") -> None:
+        """Write a self-updating progress line directly to stderr (bypasses log level filter)."""
+        elapsed = time.monotonic() - t0
+        pct = i / n * 100 if n else 0
+        filled = int(20 * i / n) if n else 0
+        bar = "█" * filled + "░" * (20 - filled)
+        suffix = f"  {label}" if label else ""
+        sys.stderr.write(f"\r  🎬 [{bar}] {pct:3.0f}%  {i}/{n} блоків  {elapsed:.0f}s{suffix}   ")
+        sys.stderr.flush()
+        if i >= n:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+
     with tempfile.TemporaryDirectory(prefix="vf_compile_") as tmp_str:
         tmp = Path(tmp_str)
 
@@ -449,7 +470,8 @@ def compile_video(
             frames: list[tuple[Path, float]] = []
             for block in voiced_blocks:
                 duration = float(block["audio_duration"])
-                image_path = _get_block_image(block, images_dir, prev_image)
+                imgs = _get_block_images(block, images_dir, prev_image)
+                image_path = imgs[0] if imgs else None
                 if image_path is None:
                     log.warning("Block %s: no image — using black", block["id"])
                     # Reuse previous or skip; ffmpeg concat requires a file
@@ -459,6 +481,7 @@ def compile_video(
                         continue
                 frames.append((image_path, duration))
                 prev_image = image_path
+                _con(len(frames), len(voiced_blocks), "static")
 
             static_res = DRAFT_RESOLUTION if draft else resolution
             static_slideshow(frames, video_raw, resolution=static_res)
@@ -567,6 +590,7 @@ def compile_video(
                     prev_image = image_list[0]   # use primary for continuity fallback
                 elapsed_video_time += duration
                 _emit_progress(i / n_blocks * 75.0, f"Block {i}/{n_blocks}")
+                _con(i, n_blocks)
 
             if not block_videos:
                 raise RuntimeError("No video clips generated")

@@ -45,6 +45,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         background_music=req.background_music,
         no_ken_burns=req.no_ken_burns,
         skip_thumbnail=req.skip_thumbnail,
+        burn_subtitles=req.burn_subtitles,
         image_style=req.image_style,
         voice_id=req.voice_id,
         master_prompt=req.master_prompt,

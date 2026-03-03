@@ -4,6 +4,101 @@
 
 ---
 
+## 2026-03-03 — Fix duplicate images + subtitles checkbox
+
+### Виконано
+- `modules/05_video_compiler.py` — `_image_for_segment()` повністю перероблено:
+  - Попередній фікс (`seg_idx * n // n_segments`) сам давав consecutive duplicates (n=2, n_segs=3 → [0,0,1])
+  - **Новий підхід:** обчислюємо word_offset assignments для ВСІХ сегментів одразу → якщо кожне зображення з'являється хоча б раз — використовуємо word_offsets; якщо ні — modulo fallback (`seg_idx % n`, гарантує чергування без consecutive duplicates)
+  - Виправлено typo рядок 477: `_get_block_image` → `_get_block_images`
+- Subtitles checkbox (5 файлів): `backend/models.py`, `backend/routes/pipeline.py`, `pipeline.py` (no_subs=not burn_subtitles), `frontend/src/api.ts`, `frontend/src/components/JobList.tsx`
+
+### Рішення
+- word_offsets від LLM часто розміщують другу картинку пізніше середини → floor-division fallback давав [0,0,1] для 3 сегментів
+- modulo (`seg_idx % n`) гарантує [0,1,0] — ніколи немає consecutive duplicates
+
+---
+
+## 2026-03-03 — ROOT CAUSE FIX: Python 3.13 dataclasses + sys.modules
+
+### Причина (знайдено)
+- Python 3.13 змінив `dataclasses._is_type` → `ns = sys.modules.get(cls.__module__).__dict__` без None-guard
+- `_load_module` в pipeline.py завантажував модулі через `importlib.util.exec_module` БЕЗ реєстрації в `sys.modules`
+- При виконанні `@dataclass` декоратора → Python 3.13 шукав модуль в `sys.modules` → `None` → `None.__dict__` → `AttributeError`
+- Виникало при першому ж завантаженні 02b/01b — до будь-якого API виклику
+
+### Виконано
+- **`pipeline.py` `_load_module`**: додано `sys.modules[spec.name] = mod` ДО `spec.loader.exec_module(mod)` + cleanup при exception
+- **`log.warning` → `log.exception`**: лишається — корисно для дебагу
+- **Тест**: 02b на Nietzsche-проекті (30 images) → `total=31, ok=30, skipped=1, regen=0, elapsed=59s` ✓
+
+### Файли
+- `pipeline.py` — _load_module sys.modules fix + log.exception
+
+---
+
+## 2026-03-03 — WaveSpeed "money burned" fix: disable inline validation + global fallback
+
+### Виконано
+- **`pipeline.py`**: додано `validate=False` до виклику `generate_images()` — вимкнено inline validation в `02_image_generator.py`. Тепер генеруємо рівно **1 WaveSpeed запит per block**. Вся валідація + regeneration — тільки через `02b_image_validator.py` після генерації. Було: до 3×/block = до 111 WaveSpeed задач на 37 блоків.
+- **`02_image_generator.py`**: новий параметр `wavespeed_globally_failed: list[bool]` — shared mutable flag між паралельними корутинами. Як тільки будь-який блок отримує WaveSpeed API error → прапор = True → всі наступні блоки одразу переходять на VoidAI **без спроби WaveSpeed**. Запобігає 37 failed tasks при зламаному endpoint (як в першому тесті на скрішоті — всі failed + charged).
+
+### Причина проблеми (WaveSpeed History скрін)
+- Перший тест: 37 WaveSpeed задач — всі "failed", outputs "--", але гроші списались. Endpoint `/wavespeed-ai/z-image/turbo` тепер потребує audio → API приймав задачу, вона падала під час обробки → charge без результату
+- Inline validation у `02_image_generator.py` при fail → ретрай з новим WaveSpeed запитом → ще charge. До 3× per block при зламаному endpoint або поганому MATCH score
+
+### Файли
+- `pipeline.py` — `validate=False` в `generate_images()` call
+- `modules/02_image_generator.py` — `wavespeed_globally_failed` global flag + updated signature
+
+---
+
+## 2026-03-03 — FFmpeg concat fix + image validation UI + WaveSpeed integrity checks
+
+### Виконано
+- **FFmpeg concat path fix** (CRITICAL): `Path.resolve()` повертає backslashes на Windows → concat demuxer падав з exit 4294967294. Виправлено на `.resolve().as_posix()` у двох місцях: `concat_audio` (audio) і `concat_video` fast path (video). Тепер форвард-слеші — FFmpeg їх правильно обробляє.
+- **Image validation UI** (JobCard.tsx): нова секція зі списком `✗ Не пройшли валідацію (N)` — кожен рядок має score badge, block label, reason (видима, не hover), `×N спроб`. Expandable → показує `💡 improved_prompt`. Також секція `⚠ Пропущено`. `02b_image_validator.py` → `to_dict()` тепер включає `improved_prompt`. Колонка "якість" отримала підпис "поріг: 7/10".
+- **WaveSpeed endpoint fix in 02b** (CRITICAL): `02b_image_validator.py` використовував старий `/wavespeed-ai/z-image/turbo` (deprecated, тепер потребує audio). Виправлено на `/wavespeed-ai/flux-dev-ultra-fast` з новим payload (`num_inference_steps: 28, guidance_scale: 3.5, output_format: png, enable_sync_mode: True`). Оновлена логіка sync/async response та download з перевіркою розміру файлу.
+- **Download verification** (`wavespeed_client.py`): після `write_bytes` перевіряємо що файл > 5 KB. Якщо менше — видаляємо і кидаємо RuntimeError щоб caller знав що download фактично провалився (захист від "гроші списані, файл порожній").
+- **Retry best-image tracking** (`02_image_generator.py`): на retry генеруємо до `attempt_path` замість `out_path`. Зберігаємо `best_score/best_path`. Overwrite `out_path` тільки якщо новий score вищий. Це запобігає ситуації "WaveSpeed зарядив за 3 спроби але фінальний файл гірший за перший".
+- **TS type fix** (JobList.tsx): `PFormState` не відповідала `PipelineSettings` через optional fields → додані явні overrides для `channel/quality/template/draft/dry_run/background_music/skip_thumbnail/image_style/voice_id/duration_min/duration_max/master_prompt`.
+
+### Файли
+- `utils/ffmpeg_utils.py` — as_posix() fix (2 рядки)
+- `frontend/src/components/JobCard.tsx` — image validation UI rewrite
+- `frontend/src/components/JobList.tsx` — PFormState TS fix
+- `modules/02b_image_validator.py` — WaveSpeed endpoint fix + to_dict improved_prompt
+- `clients/wavespeed_client.py` — download size verification
+- `modules/02_image_generator.py` — retry best-image tracking
+
+### Рішення
+- FFmpeg concat backslash: `as_posix()` vs `str()` — стандартне рішення для Windows paths у Unix-стилі CLI tools
+- WaveSpeed endpoint: обидва `02_image_generator.py` (via client) і `02b_image_validator.py` (inline HTTP) тепер використовують `flux-dev-ultra-fast`
+
+---
+
+## 2026-03-03 — image_style UI-only + hook detect fix + image count fix
+
+### Виконано
+- **image_style = UI-only** (no channel_config fallback):
+  - `01_script_generator.py`: `generate_scripts/generate_one_variant/_build_user_prompt/_parse_llm_output` — всі приймають `image_style: str = ""` замість `channel_config.get("image_style", "")`
+  - `02_image_generator.py` line 337: `image_style = image_style or ""` (was: channel_config fallback)
+  - `pipeline.py`: валідація `if not (image_style or "").strip(): raise ValueError(...)` + `image_style=image_style or ""` у виклику `generate_scripts`
+  - `JobList.tsx`: `submitPipeline` блокує відправку якщо `pForm.image_style.trim() === ""`
+- **has_hook детектор** (pipeline.py review card): тепер перевіряє `hook.validation_score` зі script.json замість вузького keyword matching — v3 хуки ("You've been told...", "Most people...") тепер правильно детектуються
+- **Image count**: `~N images` → `MINIMUM N images` + новий ⚠️ рядок з total minimum у `_build_user_prompt`
+
+### Файли
+- `modules/01_script_generator.py` — image_style chain + MINIMUM images
+- `modules/02_image_generator.py` — remove channel_config fallback
+- `pipeline.py` — image_style validation + has_hook fix
+- `frontend/src/components/JobList.tsx` — image_style required validation
+
+### Далі
+- Запустити тест з новими параметрами, перевірити hook score в review card
+
+---
+
 ## 2026-03-03 — №45 smooth zoom scale+crop + plan verification
 
 ### Виконано

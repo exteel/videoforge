@@ -91,7 +91,13 @@ _module_cache: dict[str, Any] = {}
 
 
 def _load_module(rel_path: str) -> Any:
-    """Import a module by relative path (handles numeric-prefix filenames)."""
+    """Import a module by relative path (handles numeric-prefix filenames).
+
+    Registers the module in sys.modules BEFORE exec_module so that Python 3.13+
+    dataclasses._is_type can resolve cls.__module__ lookups without getting None.
+    (Python 3.13 changed _is_type to call sys.modules.get(cls.__module__).__dict__
+    without a None guard — omitting sys.modules registration causes AttributeError.)
+    """
     if rel_path in _module_cache:
         return _module_cache[rel_path]
     full = ROOT / rel_path
@@ -99,7 +105,13 @@ def _load_module(rel_path: str) -> Any:
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load module: {full}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    # Register BEFORE exec so @dataclass and other class decorators can find the module
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    except Exception:
+        sys.modules.pop(spec.name, None)  # clean up on failure
+        raise
     _module_cache[rel_path] = mod
     return mod
 
@@ -256,6 +268,7 @@ async def run_pipeline(
     duration_min: int = 8,             # Minimum target video duration in minutes
     duration_max: int = 12,            # Maximum target video duration in minutes
     skip_thumbnail: bool = False,      # Skip thumbnail generation (Step 5)
+    burn_subtitles: bool = True,       # Burn generated subtitles into video (Step 4 must have run)
     music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
 ) -> None:
     """
@@ -287,6 +300,12 @@ async def run_pipeline(
         raise ValueError("Either source_dir or project_dir must be provided")
 
     proj.mkdir(parents=True, exist_ok=True)
+
+    # ── Validate image_style (required — must be set via UI, no channel_config fallback) ──
+    if not (image_style or "").strip():
+        raise ValueError(
+            "image_style is required. Set it in the UI (Image Style field) before running the pipeline."
+        )
 
     # ── Channel config (read once, passed to all validators) ──────────────────
     _chan_cfg: dict[str, Any] = {}
@@ -400,6 +419,7 @@ async def run_pipeline(
             duration_min=duration_min,
             duration_max=duration_max,
             master_prompt_path=master_prompt or None,
+            image_style=image_style or "",
         )
 
         if not dry_run:
@@ -429,7 +449,7 @@ async def run_pipeline(
                     if any("cont" in f.lower() for f in _val_result.fixes_applied):
                         cost.add("Script validator (cut-off)", 0.012)
             except Exception as _vexc:
-                log.warning("Script validation skipped (non-fatal): %s", _vexc)
+                log.exception("Script validation skipped (non-fatal): %s", _vexc)
 
             # Rough cost: ~3000 input + 1500 output tokens; max preset = Opus pricing
             cost.add("Script LLM", 0.035)
@@ -466,13 +486,26 @@ async def run_pipeline(
                 for _b in _blocks
             )
 
-            # Hook detection: check if intro block starts with question or hook words
+            # Hook detection: prefer hook.validation_score from script (set by LLM validator).
+            # Falls back to keyword heuristic only if hook metadata is absent (old scripts).
             _intro_blocks = [_b for _b in _blocks if _b.get("type") == "intro"]
             _has_hook = False
             if _intro_blocks:
-                _intro_text = (_intro_blocks[0].get("narration") or "").strip()
-                _hook_signals = ["?", "Що якби", "Уявіть", "Як", "Чому", "Imagine", "What if", "Why"]
-                _has_hook = any(sig in _intro_text[:200] for sig in _hook_signals)
+                _intro = _intro_blocks[0]
+                _hook_meta = _intro.get("hook")
+                if isinstance(_hook_meta, dict):
+                    # LLM-validated: score ≥ 3/4 = passed; score absent = just generated (trust it)
+                    _score = _hook_meta.get("validation_score")
+                    _has_hook = (_score is None or _score >= 3)
+                else:
+                    # Fallback: simple keyword heuristic (older script format)
+                    _intro_text = (_intro.get("narration") or "").strip()
+                    _hook_signals = [
+                        "?", "Що якби", "Уявіть", "Як", "Чому",
+                        "Imagine", "What if", "Why", "You've", "Most ",
+                        "Nobody", "Everyone", "Here's", "The truth",
+                    ]
+                    _has_hook = any(sig in _intro_text[:200] for sig in _hook_signals)
 
             # Per-block summary (compact — title + type + word count + image count)
             _block_summaries = [
@@ -555,6 +588,7 @@ async def run_pipeline(
                 dry_run=dry_run,
                 skip_existing=True,
                 image_style=image_style or None,
+                validate=False,   # Inline validation disabled — 02b handles all validation/regen
                 progress_callback=_img_sub_cb,
             )
             voice_task = generate_voices(
@@ -595,7 +629,7 @@ async def run_pipeline(
                     _img_val.regenerated, _img_val.failed,
                 )
             except Exception as _ivexc:
-                log.warning("Image validation skipped (non-fatal): %s", _ivexc)
+                log.exception("Image validation skipped (non-fatal): %s", _ivexc)
 
             # Review checkpoint after images
             if review_callback is not None:
@@ -737,7 +771,7 @@ async def run_pipeline(
                     channel_config_path,
                     draft=draft,
                     dry_run=dry_run,
-                    no_subs=True,   # subtitles disabled until format is settled
+                    no_subs=not burn_subtitles,
                     no_music=not background_music,
                     no_ken_burns=no_ken_burns,
                     music_volume_override=music_volume,

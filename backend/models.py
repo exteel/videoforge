@@ -24,6 +24,7 @@ class PipelineRunRequest(BaseModel):
     background_music: bool = Field(True, description="Mix royalty-free background music under voice")
     no_ken_burns: bool = Field(False, description="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)")
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
+    burn_subtitles: bool = Field(True, description="Burn generated subtitles into video (Step 4 must have run)")
     image_style: str | None = Field(None, description="Override image generation style prompt")
     voice_id: str | None = Field(None, description="Override voice ID from channel config")
     master_prompt: str | None = Field(None, description="Override master prompt path (e.g. 'prompts/master_script_v2.txt')")

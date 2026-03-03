@@ -100,6 +100,7 @@ export interface PipelineRunRequest {
   background_music?: boolean
   no_ken_burns?: boolean
   skip_thumbnail?: boolean
+  burn_subtitles?: boolean
   image_style?: string | null
   voice_id?: string | null
   master_prompt?: string | null
@@ -377,6 +378,7 @@ export interface TranscribeRequest {
   master_prompt?: string | null
   duration_min?: number | null
   duration_max?: number | null
+  music_volume?: number | null
 }
 
 export interface TranscribeJob {

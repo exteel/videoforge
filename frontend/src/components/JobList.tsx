@@ -85,12 +85,19 @@ const LS_SOURCE_DIR = 'vf_last_source_dir'
 const LS_INPUT_DIR  = 'vf_last_input_dir'
 
 type PFormState = PipelineRunRequest & {
-  background_music: boolean
-  skip_thumbnail: boolean
-  image_style: string
-  voice_id: string
-  duration_min: number
-  duration_max: number
+  channel: string           // override optional → required
+  quality: string           // override optional → required
+  template: string          // override optional → required
+  draft: boolean            // override optional → required
+  dry_run: boolean          // override optional → required
+  background_music: boolean // override optional → required
+  skip_thumbnail: boolean   // override optional → required
+  burn_subtitles: boolean   // override optional → required
+  image_style: string       // override optional → required
+  voice_id: string          // override optional → required
+  duration_min: number      // override optional → required
+  duration_max: number      // override optional → required
+  master_prompt: string | null  // override optional → string | null
   music_volume: number | null
 }
 
@@ -112,6 +119,7 @@ export function JobList() {
     to_step:          6,
     background_music: true,
     skip_thumbnail:   false,
+    burn_subtitles:   true,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
@@ -214,10 +222,15 @@ export function JobList() {
   async function submitPipeline(e: React.FormEvent) {
     e.preventDefault()
     setFormError('')
+    // Image style is required — no channel_config fallback
+    if (!pForm.image_style.trim()) {
+      setFormError('⚠ Image Style is required. Paste a reference image above or type a style description.')
+      return
+    }
     setSubmitting(true)
     try {
       const payload: Record<string, unknown> = { ...pForm }
-      if (!payload.image_style)         delete payload.image_style
+      // image_style is always sent (required field)
       if (!payload.voice_id)            delete payload.voice_id
       if (payload.music_volume == null) delete payload.music_volume
       await api.pipeline.run(payload as unknown as PipelineRunRequest)
@@ -256,7 +269,7 @@ export function JobList() {
   return (
     <div className="space-y-6">
       {/* Transcriber integration */}
-      <TranscriberPanel onSelectDir={handleTranscriberSelect} />
+      <TranscriberPanel onSelectDir={handleTranscriberSelect} pipelineSettings={pForm} />
 
       {/* Launch form */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
@@ -593,6 +606,13 @@ export function JobList() {
                   className="accent-blue-500" />
                 <span>Skip thumbnail</span>
                 <Tip text="Пропустити генерацію thumbnail (Step 5). Корисно коли thumbnail вже є або потрібно швидко отримати відео." />
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={pForm.burn_subtitles}
+                  onChange={(e) => setPForm({ ...pForm, burn_subtitles: e.target.checked })}
+                  className="accent-blue-500" />
+                <span>Burn subtitles</span>
+                <Tip text="Записати субтитри у відео (крок 4 повинен бути виконаний). Вимкніть для відео без субтитрів." />
               </label>
             </div>
 
