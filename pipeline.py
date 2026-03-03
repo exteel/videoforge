@@ -707,19 +707,14 @@ async def run_pipeline(
         else:
             generate_subtitles = _fn("modules/04_subtitle_generator.py", "generate_subtitles")
 
-            # Transcriber SRT for word-level timing (optional)
-            transcript_srt: Path | None = None
-            if source_dir:
-                candidate = source_dir / "transcript.srt"
-                if candidate.exists():
-                    transcript_srt = candidate
-                    log.info("Using Transcriber SRT for word-level timing: %s", candidate.name)
-
+            # Always use block audio_duration timing (TTS-accurate).
+            # from_transcript (original video's transcript.srt) is intentionally NOT used here:
+            # it contains the source video's text & timing, not the new AI-generated narration,
+            # so it would show wrong text at wrong timestamps.
             # Primary language subtitles
             srt_path, ass_path = generate_subtitles(
                 s_path,
                 channel_config_path,
-                from_transcript=transcript_srt,
             )
 
             # Additional language subtitles

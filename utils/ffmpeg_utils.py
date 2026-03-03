@@ -452,7 +452,7 @@ def concat_videos(
         # Fast path: concat demuxer (no re-encode)
         list_file = out.parent / "_concat_list.txt"
         list_file.write_text(
-            "\n".join(f"file '{Path(p).resolve()}'" for p in video_paths),
+            "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in video_paths),
             encoding="utf-8",
         )
         cmd = [
@@ -506,6 +506,50 @@ def concat_videos(
         _run(cmd)
 
     log.info("Concat %d clips → %s", len(video_paths), out.name)
+    return out
+
+
+# ─── Video padding ────────────────────────────────────────────────────────────
+
+def pad_video_end(
+    video_path: str | Path,
+    output_path: str | Path,
+    pad_seconds: float,
+) -> Path:
+    """
+    Extend a video by cloning (freezing) the last frame for `pad_seconds`.
+
+    Used to compensate for xfade crossfade transitions: each transition between
+    N blocks reduces the total video duration by (N-1) * crossfade_duration.
+    Padding restores the video to match the full narration audio duration so
+    that ``add_audio(..., shortest=True)`` does not cut off the last words.
+
+    Args:
+        video_path: Source video file.
+        output_path: Padded output file.
+        pad_seconds: Duration to add (clone last frame).
+
+    Returns:
+        Path to padded output.
+    """
+    if pad_seconds <= 0:
+        import shutil
+        shutil.copy2(video_path, output_path)
+        return Path(output_path)
+
+    inp, out = Path(video_path), Path(output_path)
+    _ensure_parent(out)
+    cmd = [
+        FFMPEG, "-y",
+        "-i", str(inp),
+        "-vf", f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}",
+        "-c:v", DEFAULT_VIDEO_CODEC,
+        "-preset", DEFAULT_PRESET,
+        "-pix_fmt", "yuv420p",
+        str(out),
+    ]
+    _run(cmd)
+    log.info("pad_video_end %s +%.3fs → %s", inp.name, pad_seconds, out.name)
     return out
 
 
@@ -691,7 +735,7 @@ def concat_audio(
 
     list_file = out.parent / "_audio_concat_list.txt"
     list_file.write_text(
-        "\n".join(f"file '{Path(p).resolve()}'" for p in audio_paths),
+        "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in audio_paths),
         encoding="utf-8",
     )
 

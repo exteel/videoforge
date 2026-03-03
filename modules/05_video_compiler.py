@@ -48,6 +48,7 @@ from utils.ffmpeg_utils import (
     concat_videos,
     ken_burns,
     mix_audio,
+    pad_video_end,
     prepend_outro_video,
     resize,
     static_slideshow,
@@ -615,6 +616,18 @@ def compile_video(
                 crossfade_duration=crossfade_dur,
             )
             _emit_progress(82.0, "Concat done")
+
+            # Crossfade shortens total video by (N-1) * crossfade_dur seconds.
+            # Pad the last frame to restore sync with full narration audio.
+            if use_crossfade and len(block_videos) > 1:
+                _pad_s = (len(block_videos) - 1) * crossfade_dur
+                video_padded = tmp / "video_padded.mp4"
+                pad_video_end(video_raw, video_padded, _pad_s)
+                video_raw = video_padded
+                log.info(
+                    "Padded video by %.2fs (%d crossfades × %.1fs) to restore audio sync",
+                    _pad_s, len(block_videos) - 1, crossfade_dur,
+                )
 
         # ── Step 2: Mix audio (narration + background music) ──
         step = 2
