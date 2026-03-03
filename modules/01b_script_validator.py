@@ -7,6 +7,7 @@ Detection (structural, no API cost):
   cut_off         — block ends mid-sentence / connector word (ALL blocks, not just last)
   missing_cta     — no outro/CTA block at end
   bad_prompt      — image_prompt is empty, too short, or matches generic patterns (expanded list)
+  sparse_images   — image_prompts list < 1 per 150 narration words for blocks ≥200w
   duplicate       — same image concept repeated verbatim
   wrong_language  — narration Cyrillic ratio < 40% for declared Cyrillic-script language
   missing_field   — block missing required 'id' or 'type'
@@ -15,6 +16,7 @@ Detection (structural, no API cost):
 Auto-fix (LLM):
   cut_off + missing_cta → claude-sonnet-4-5: generates continuation blocks + CTA
   bad_prompt            → gpt-4.1-mini: rewrites flagged image_prompts in one batch
+  sparse_images         → gpt-4.1-mini: generates additional prompts for sparse blocks
   (duplicate prompts are logged but not auto-fixed — content is likely intentional)
 
 Saves fixed script.json in-place. Returns ValidationResult.
@@ -475,6 +477,33 @@ def _structural_checks(
             else:
                 seen_prompts[key] = bid
 
+    # ── Sparse image_prompts check ─────────────────────────────────────────────
+    # For sizeable section/intro blocks, verify image_prompts list has enough entries.
+    # `image_prompt` (single) may be non-empty while `image_prompts` (list) is nearly empty.
+    # Threshold: at least 1 image per 150 narration words (lower than actual targets but
+    # catches critical shortfalls without false-flagging tier-4 low-density blocks).
+    for block in blocks:
+        btype = block.get("type", "")
+        if btype in ("cta", "outro"):
+            continue
+        narr = (block.get("narration") or "").strip()
+        nw = len(narr.split())
+        if nw < 200:
+            continue   # short blocks (transition sentences, mid-CTA) don't need many images
+        actual_imgs = len(block.get("image_prompts") or [])
+        min_expected = max(1, nw // 150)
+        if actual_imgs < min_expected:
+            issues.append(ScriptIssue(
+                type="sparse_images",
+                block_id=block.get("id", ""),
+                severity="warning",
+                reason=(
+                    f"Too few image prompts: {actual_imgs} actual, "
+                    f"~{min_expected} expected for {nw}-word block "
+                    f"(need {min_expected - actual_imgs} more)"
+                ),
+            ))
+
     return issues
 
 
@@ -605,6 +634,50 @@ Rules:
 
 Return ONLY valid JSON: {{"block_id": "new_prompt", ...}}"""
     raw = await _llm(DETECT_MODEL, [{"role": "user", "content": prompt}], max_tokens=1500, json_mode=True)
+    return json.loads(raw)
+
+
+async def _fix_sparse_images(
+    sparse_blocks: list[dict[str, Any]],
+    image_style: str,
+) -> dict[str, list[str]]:
+    """
+    For blocks with too few image prompts, generate additional ones in a batch LLM call.
+
+    Returns dict of {block_id: [new_prompt1, new_prompt2, ...]}.
+    The caller adds these to the existing image_prompts list (not replacing them).
+    """
+    if not sparse_blocks:
+        return {}
+
+    blocks_info = "\n\n".join(
+        f"Block {b['id']} (needs {b['_need']} more):\n"
+        f"  narration: \"{(b.get('narration') or '')[:300]}\"\n"
+        f"  existing prompts: {json.dumps(b.get('image_prompts') or [], ensure_ascii=False)}"
+        for b in sparse_blocks
+    )
+    prompt = f"""Generate ADDITIONAL image prompts for these narration blocks. Each block already has some prompts — add NEW ones that cover different moments in the narration.
+
+{blocks_info}
+
+IMAGE STYLE: {image_style}
+
+Rules:
+- Each new prompt must directly illustrate a SPECIFIC moment in that block's narration
+- 15-50 words per prompt, cinematic and specific
+- No generic phrases ("abstract concept", "dark mood", "philosophical idea")
+- New prompts must NOT duplicate existing prompts for that block
+- Each prompt should cover a different part of the narration text
+
+Return ONLY valid JSON:
+{{"block_001": ["new prompt A", "new prompt B"], "block_002": ["new prompt C"]}}"""
+
+    raw = await _llm(
+        DETECT_MODEL,
+        [{"role": "user", "content": prompt}],
+        max_tokens=2000,
+        json_mode=True,
+    )
     return json.loads(raw)
 
 
@@ -783,6 +856,60 @@ async def validate_and_fix_script(
                 log.info("Fixed %d bad image prompts", len(fixed_prompts))
             except Exception as exc:
                 log.warning("Failed to fix bad_prompts: %s", exc)
+
+    # ── Fix 3: sparse image_prompts (generate additional prompts) ──
+    sparse_issues = [i for i in issues if i.type == "sparse_images" and i.block_id]
+    if sparse_issues:
+        _emit(f"Adding image prompts to {len(sparse_issues)} sparse block(s)…", 75.0)
+        sparse_bid_set = {i.block_id for i in sparse_issues}
+        sparse_blocks_data = []
+        for block in blocks:
+            bid = block.get("id", "")
+            if bid not in sparse_bid_set:
+                continue
+            nw = len((block.get("narration") or "").split())
+            actual = len(block.get("image_prompts") or [])
+            need = max(1, nw // 150) - actual
+            if need <= 0:
+                continue
+            sparse_blocks_data.append({**block, "_need": need})
+
+        if sparse_blocks_data:
+            try:
+                new_prompts_map = await _fix_sparse_images(sparse_blocks_data, image_style)
+                added_total = 0
+                for block in blocks:
+                    bid = block.get("id", "")
+                    new_prompts = new_prompts_map.get(bid, [])
+                    if not new_prompts:
+                        continue
+                    existing_prompts = list(block.get("image_prompts") or [])
+                    existing_offsets = list(block.get("image_word_offsets") or [])
+                    nw = len((block.get("narration") or "").split())
+
+                    # Assign evenly-distributed word offsets for the new prompts
+                    n_existing = len(existing_prompts)
+                    n_total = n_existing + len(new_prompts)
+                    new_offsets = [
+                        int((n_existing + j + 1) * nw / (n_total + 1))
+                        for j in range(len(new_prompts))
+                    ]
+
+                    block["image_prompts"] = existing_prompts + new_prompts
+                    block["image_word_offsets"] = existing_offsets + new_offsets
+                    if not block.get("image_prompt"):
+                        block["image_prompt"] = new_prompts[0]
+                    added_total += len(new_prompts)
+
+                for iss in issues:
+                    if iss.type == "sparse_images" and iss.block_id in new_prompts_map:
+                        iss.fixed = True
+                script["blocks"] = blocks
+                result.fixes_applied.append(f"Added {added_total} image prompts to sparse blocks")
+                modified = True
+                log.info("Fixed sparse_images: added %d prompts across %d blocks", added_total, len(new_prompts_map))
+            except Exception as exc:
+                log.warning("Failed to fix sparse_images: %s", exc)
 
     # ── Save fixed script ──
     if modified:
