@@ -1029,11 +1029,11 @@ async def _generate_one_variant(
         )
         regen_prompt = (
             f"Rewrite ONLY the HOOK (opening narration block) for this video.\n\n"
-            f"Topic: {topic}\n"
-            f"Niche: {niche}\n\n"
+            f"Video topic (MUST be the subject of the hook): \"{topic}\"\n\n"
             f"The previous hook FAILED on these criteria:\n{failed_feedback}\n\n"
             f"Previous hook:\n\"\"\"\n{intro_block.narration}\n\"\"\"\n\n"
-            f"Write a new 80–120 word hook that fixes every failed criterion.\n"
+            f"Write a new 80–120 word hook STRICTLY about the topic above. "
+            f"Do NOT drift to unrelated subjects even if the channel niche suggests it.\n"
             f"Rules:\n"
             f"- Follow the v3 HOOK formula: Context Lean-In (2-3 sentences) → contrast word "
             f"(But/However/Yet/And yet) → Contrarian Snapback (unexpected insight or reversal)\n"
