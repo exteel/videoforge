@@ -147,21 +147,22 @@ export function JobList() {
     setStyleError('')
   }, [])
 
-  // Global paste listener — captures Ctrl+V anywhere on the page.
-  // Skips paste events that target text inputs / textareas so normal typing is unaffected.
+  // Global paste listener — smart routing:
+  //   clipboard image → style extractor (regardless of which field is focused)
+  //   clipboard text  → normal browser behavior (focused field gets it, no interception)
   useEffect(() => {
     function handleGlobalPaste(e: ClipboardEvent) {
-      const target = e.target as HTMLElement
-      // Don't intercept paste in text fields
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
-      ) return
       const items = Array.from(e.clipboardData?.items ?? [])
-      const item = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
-      const f = item?.getAsFile() ?? null
-      if (f) applyStyleImage(f)
+      const imageItem = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
+      if (imageItem) {
+        // Image in clipboard → always route to style extractor
+        const f = imageItem.getAsFile()
+        if (f) {
+          e.preventDefault()  // prevent any default paste behavior
+          applyStyleImage(f)
+        }
+      }
+      // No image → fall through, browser pastes text into the focused field normally
     }
     document.addEventListener('paste', handleGlobalPaste)
     return () => document.removeEventListener('paste', handleGlobalPaste)
