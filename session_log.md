@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-03-03 — №43 image_style injection in LLM prompt
+
+### Проблема
+`image_style` з channel_config (`oil painting, baroque architecture...`) не передавався у LLM при генерації. Opus генерував промпти зі своїм дефолтом ("cinematic photorealism" з прикладів master prompt). Стиль зберігався у script.json але тільки для downstream modules (image gen, validator).
+
+### Fix — 3 файли
+
+**`modules/01_script_generator.py`** — `_build_user_prompt()`:
+- Додано `image_style_line` що інжектується після `[TARGET WORDS]`:
+  `[IMAGE STYLE] — Apply to EVERY [IMAGE_PROMPT:] tag (replace the 'Style' element):`
+  `{image_style}`
+- Якщо `image_style` порожній — рядок не додається (backward compat)
+
+**`modules/01b_script_validator.py`**:
+- `_fix_bad_prompts()`: додано `image_style` параметр → передається у LLM prompt
+- `validate_and_fix_script()`: `image_style` тепер fallback на `script["channel_config"]["image_style"]`
+  якщо `channel_config` param не переданий (CLI виклик без конфігу)
+
+**`config/channels/history.json`**:
+- `image_style` оновлено до: `"oil painting, epic classical art style, baroque architecture, warm golden amber palette, dramatic cinematic lighting, backlit silhouette, ornate decorative details, grand interior columns, painterly brushstrokes, renaissance fine art, rich warm tones orange and gold, epic scale composition, atmospheric depth, museum quality illustration"`
+
+### Перевірка
+- `_build_user_prompt()` unit test: рядок 7 = `[IMAGE STYLE] — Apply to EVERY...`, рядок 8 = повний стиль ✅
+- `history.json` → `image_style` ≠ "cinematic photorealistic" ✅
+
+### Файли: `modules/01_script_generator.py`, `modules/01b_script_validator.py`, `config/channels/history.json` (commit 2fcd246)
+
+---
+
 ## 2026-03-03 — №42 sparse_images detection + auto-fix in script validator
 
 ### Проблема
