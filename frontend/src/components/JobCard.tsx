@@ -333,12 +333,17 @@ export function JobCard({ job, onRefresh }: Props) {
         const scriptTitle   = d.title as string | undefined
 
         // ── Image data ────────────────────────────────────────────────────
-        type ImgScore = { block_id: string; score: number; ok: boolean; regenerated: boolean; attempts: number; reason: string; skipped: boolean; image_url: string }
-        const validation  = d.validation as { ok: number; total: number; regenerated: number; failed: number; skipped: number; scores: ImgScore[] } | undefined
-        const imgOk       = validation ? validation.ok : 0
-        const imgTotal    = validation ? validation.total : 0
+        type ImgScore = { block_id: string; label: string; score: number; ok: boolean; regenerated: boolean; attempts: number; reason: string; improved_prompt: string; skipped: boolean; skip_reason: string; image_url: string }
+        const _rawVal = d.validation as { ok?: number; total?: number; regenerated?: number; failed?: number; skipped?: number; scores?: ImgScore[] } | undefined
+        // Only treat as valid if total is a real number (not empty {})
+        const validation  = (_rawVal && typeof _rawVal.total === 'number') ? _rawVal as { ok: number; total: number; regenerated: number; failed: number; skipped: number; scores: ImgScore[] } : undefined
+        const imgOk       = validation?.ok ?? 0
+        const imgTotal    = validation?.total ?? 0
+        const imgSkipped  = validation ? (validation.skipped ?? 0) : 0
         const imgOkPct    = imgTotal > 0 ? Math.round((imgOk / imgTotal) * 100) : 0
         const imgSufficient = imgTotal > 0 && imgOk >= Math.ceil(imgTotal * 0.8)
+        const failedScores = validation?.scores?.filter((s) => !s.ok && !s.skipped) ?? []
+        const skippedScores = validation?.scores?.filter((s) => s.skipped) ?? []
 
         return (
           <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-3">
@@ -436,6 +441,11 @@ export function JobCard({ job, onRefresh }: Props) {
             {/* ══════════════════════════════════════════════════════════════
                 IMAGE REVIEW
                 ══════════════════════════════════════════════════════════ */}
+            {liveReviewStage === 'images' && !validation && (
+              <div className="text-xs text-amber-400/70 italic py-1">
+                ⚠ Дані валідації відсутні — 02b_image_validator упав або не запустився (дивись логи)
+              </div>
+            )}
             {liveReviewStage === 'images' && validation && (
               <>
                 {/* ── Summary row ───────────────────────────────────────── */}
@@ -450,7 +460,7 @@ export function JobCard({ job, onRefresh }: Props) {
                   {/* OK % */}
                   <div className="bg-gray-900 rounded p-2 text-center">
                     <div className="text-base font-bold tabular-nums text-white">{imgOkPct}%</div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">якість</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">якість (поріг: 7/10)</div>
                   </div>
                   {/* Regenerated */}
                   <div className="bg-gray-900 rounded p-2 text-center">
@@ -459,36 +469,45 @@ export function JobCard({ job, onRefresh }: Props) {
                     </div>
                     <div className="text-[10px] text-gray-500 mt-0.5">↻ перегенеровано</div>
                   </div>
-                  {/* Failed */}
-                  <div className={`rounded p-2 text-center ${validation.failed > 0 ? 'bg-red-950' : 'bg-gray-900'}`}>
-                    <div className={`text-base font-bold tabular-nums ${validation.failed > 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                      {validation.failed}
+                  {/* Failed + skipped */}
+                  <div className={`rounded p-2 text-center ${(validation.failed + imgSkipped) > 0 ? 'bg-red-950' : 'bg-gray-900'}`}>
+                    <div className={`text-base font-bold tabular-nums ${(validation.failed + imgSkipped) > 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                      {validation.failed}{imgSkipped > 0 ? `+${imgSkipped}` : ''}
                     </div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">✗ провалено</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">✗ провал{imgSkipped > 0 ? '+пропуск' : ''}</div>
                   </div>
                 </div>
 
-                {/* ── Image grid with tooltips ───────────────────────────── */}
+                {/* ── Image grid with inline score labels ───────────────── */}
                 {validation.scores && validation.scores.length > 0 && (
                   <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
-                    {validation.scores.slice(0, 30).map((s) => (
-                      <div key={s.block_id} className="relative group">
-                        <img
-                          src={s.image_url}
-                          alt={s.block_id}
-                          className={`w-full aspect-video object-cover rounded bg-gray-700 ${
-                            !s.ok ? 'ring-2 ring-red-500' : s.regenerated ? 'ring-2 ring-blue-500' : ''
-                          }`}
-                          loading="lazy"
-                        />
+                    {validation.scores.slice(0, 36).map((s) => (
+                      <div key={s.block_id + s.label} className="relative group">
+                        {s.skipped ? (
+                          <div className="w-full aspect-video rounded bg-gray-800 border border-gray-700 flex flex-col items-center justify-center gap-0.5 p-1">
+                            <span className="text-[9px] text-gray-500 font-mono text-center leading-tight">{s.label || s.block_id}</span>
+                            <span className="text-[8px] text-orange-400">пропущено</span>
+                          </div>
+                        ) : (
+                          <img
+                            src={s.image_url}
+                            alt={s.block_id}
+                            className={`w-full aspect-video object-cover rounded bg-gray-700 ${
+                              !s.ok ? 'ring-2 ring-red-500' : s.regenerated ? 'ring-1 ring-blue-500' : ''
+                            }`}
+                            loading="lazy"
+                          />
+                        )}
                         {/* Score badge */}
-                        <div className={`absolute top-0.5 right-0.5 text-[9px] font-bold px-1 py-px rounded leading-tight ${
-                          s.score >= 8 ? 'bg-green-600 text-white' :
-                          s.score >= 7 ? 'bg-yellow-500 text-black' :
-                                         'bg-red-600 text-white'
-                        }`}>
-                          {Number(s.score).toFixed(0)}
-                        </div>
+                        {!s.skipped && (
+                          <div className={`absolute top-0.5 right-0.5 text-[9px] font-bold px-1 py-px rounded leading-tight ${
+                            s.score >= 8 ? 'bg-green-600 text-white' :
+                            s.score >= 7 ? 'bg-yellow-500 text-black' :
+                                           'bg-red-600 text-white'
+                          }`}>
+                            {Number(s.score).toFixed(0)}
+                          </div>
+                        )}
                         {/* Regen indicator */}
                         {s.regenerated && (
                           <div className="absolute top-0.5 left-0.5 text-[9px] bg-blue-600 text-white px-0.5 rounded leading-tight">↻</div>
@@ -500,13 +519,58 @@ export function JobCard({ job, onRefresh }: Props) {
                           </div>
                         )}
                         {/* Reason tooltip on hover */}
-                        {s.reason && (
+                        {(s.reason || s.skip_reason) && (
                           <div className="absolute inset-x-0 bottom-full mb-1 hidden group-hover:flex z-10 justify-center px-1">
                             <div className="bg-gray-900 border border-gray-600 text-[10px] text-gray-200 rounded px-2 py-1 shadow-lg max-w-[160px] text-center leading-snug">
-                              {s.reason}
+                              {s.reason || s.skip_reason}
                             </div>
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Failed images detail list ──────────────────────────── */}
+                {failedScores.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-red-400 font-semibold uppercase tracking-wide">
+                      ✗ Не пройшли валідацію ({failedScores.length})
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1">
+                      {failedScores.map((s) => (
+                        <details key={s.block_id + s.label} className="group">
+                          <summary className="flex items-center gap-2 text-xs cursor-pointer select-none hover:bg-gray-700/40 rounded px-1 py-0.5 list-none">
+                            <span className="shrink-0 bg-red-900 text-red-300 text-[10px] font-bold px-1.5 py-px rounded tabular-nums">
+                              {Number(s.score).toFixed(0)}/10
+                            </span>
+                            <span className="font-mono text-gray-400 text-[10px] shrink-0">{s.label || s.block_id}</span>
+                            <span className="flex-1 text-gray-400 truncate text-[10px]">{s.reason}</span>
+                            {(s.attempts ?? 1) > 1 && (
+                              <span className="shrink-0 text-[9px] text-blue-400">×{s.attempts} спроб</span>
+                            )}
+                          </summary>
+                          {s.improved_prompt && (
+                            <div className="text-[10px] text-blue-300 pl-8 pr-2 pb-1 pt-0.5 leading-relaxed italic">
+                              💡 {s.improved_prompt}
+                            </div>
+                          )}
+                        </details>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Skipped images list ────────────────────────────────── */}
+                {skippedScores.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="text-[10px] text-orange-400 font-semibold uppercase tracking-wide">
+                      ⚠ Пропущено ({skippedScores.length})
+                    </div>
+                    {skippedScores.map((s) => (
+                      <div key={s.block_id + s.label} className="flex items-center gap-2 text-[10px] text-gray-500 px-1">
+                        <span className="font-mono shrink-0">{s.label || s.block_id}</span>
+                        <span className="truncate">{s.skip_reason || 'невідома причина'}</span>
                       </div>
                     ))}
                   </div>
@@ -531,6 +595,30 @@ export function JobCard({ job, onRefresh }: Props) {
           <span className="text-gray-500">DB #{job.db_video_id}</span>
         )}
       </div>
+
+      {/* Folder shortcuts */}
+      {(job.source_dir || job.project_dir) && (
+        <div className="flex gap-2 flex-wrap">
+          {job.source_dir && (
+            <button
+              onClick={() => api.fs.open(job.source_dir)}
+              className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+              title={job.source_dir}
+            >
+              📁 Транскрибація
+            </button>
+          )}
+          {job.project_dir && (
+            <button
+              onClick={() => api.fs.open(job.project_dir)}
+              className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+              title={job.project_dir}
+            >
+              🎬 Відео
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Error */}
       {job.error && (

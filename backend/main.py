@@ -71,6 +71,8 @@ from backend.routes import videos as videos_router
 from backend.routes import ws as ws_router
 from backend.routes import style as style_router
 from backend.routes import youtube as youtube_router
+from backend.routes import fs as fs_router
+from backend.routes import music as music_router
 
 app.include_router(pipeline_router.router, prefix="/api")
 app.include_router(script_router.router, prefix="/api")
@@ -79,6 +81,8 @@ app.include_router(channels_router.router, prefix="/api")
 app.include_router(youtube_router.router, prefix="/api")
 app.include_router(transcriber_router.router, prefix="/api")
 app.include_router(style_router.router, prefix="/api")
+app.include_router(fs_router.router, prefix="/api")
+app.include_router(music_router.router, prefix="/api")
 app.include_router(ws_router.router)
 
 

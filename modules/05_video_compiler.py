@@ -285,6 +285,7 @@ def compile_video(
     no_ken_burns: bool = False,
     dry_run: bool = False,
     music_volume_override: float | None = None,
+    music_track_override: str | None = None,  # explicit track path; overrides channel config
     progress_callback: Any | None = None,
 ) -> Path:
     """
@@ -379,19 +380,30 @@ def compile_video(
     # ── Find background music ──
     music_track: Path | None = None
     if not no_music:
-        music_cfg = channel_config.get("background_music", {})
-        if music_cfg:
-            tracks_dir = music_cfg.get("tracks_dir", "")
-            random_pick = music_cfg.get("random", True)
-            if tracks_dir:
-                p = Path(tracks_dir)
-                if not p.is_absolute():
-                    p = ROOT / p
-                music_track = _find_music_track(p, random_pick)
-                if music_track:
-                    log.info("Background music: %s", music_track.name)
-                else:
-                    log.info("No music tracks found in %s", tracks_dir)
+        if music_track_override:
+            # Explicit track chosen by the user in the UI
+            p = Path(music_track_override)
+            if p.exists():
+                music_track = p
+                log.info("Background music (override): %s", p.name)
+            else:
+                log.warning("music_track_override not found: %s — falling back to channel config", p)
+
+        if music_track is None:
+            # Default: pick from channel config tracks_dir
+            music_cfg = channel_config.get("background_music", {})
+            if music_cfg:
+                tracks_dir = music_cfg.get("tracks_dir", "")
+                random_pick = music_cfg.get("random", True)
+                if tracks_dir:
+                    p = Path(tracks_dir)
+                    if not p.is_absolute():
+                        p = ROOT / p
+                    music_track = _find_music_track(p, random_pick)
+                    if music_track:
+                        log.info("Background music: %s", music_track.name)
+                    else:
+                        log.info("No music tracks found in %s", tracks_dir)
 
     # ── Intro / Outro ──
     intro_video: Path | None = None

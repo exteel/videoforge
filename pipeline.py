@@ -42,6 +42,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
@@ -270,6 +271,7 @@ async def run_pipeline(
     skip_thumbnail: bool = False,      # Skip thumbnail generation (Step 5)
     burn_subtitles: bool = True,       # Burn generated subtitles into video (Step 4 must have run)
     music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
+    music_track: str | None = None,    # Explicit music file path; None = channel config random pick
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -616,9 +618,13 @@ async def run_pipeline(
                 )
                 _img_val_data = _img_val.to_dict()
                 # Add image URLs for frontend preview (/projects is a static mount)
+                # URL-encode the project name (may contain spaces, em-dashes, apostrophes, etc.)
                 _src_name = proj.name
+                _enc_name = _url_quote(_src_name, safe="")
                 for _sc in _img_val_data.get("scores", []):
-                    _sc["image_url"] = f"/projects/{_src_name}/images/{_sc['block_id']}.png"
+                    _idx = _sc.get("image_index", 0)
+                    _fname = f"{_sc['block_id']}.png" if _idx == 0 else f"{_sc['block_id']}_{_idx}.png"
+                    _sc["image_url"] = f"/projects/{_enc_name}/images/{_fname}"
                 # Track scoring + regen costs
                 cost.add("Image validator (scoring)", _img_val.total * 0.003)
                 if _img_val.regenerated > 0:
@@ -775,6 +781,7 @@ async def run_pipeline(
                     no_music=not background_music,
                     no_ken_burns=no_ken_burns,
                     music_volume_override=music_volume,
+                    music_track_override=music_track,
                     progress_callback=_video_sub_cb,
                 ),
             )

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { type Job, type PipelineRunRequest, type BatchRunRequest, type PromptMeta, api } from '../api'
+import { type Job, type PipelineRunRequest, type BatchRunRequest, type PromptMeta, type MusicTrack, api } from '../api'
 import { JobCard } from './JobCard'
 import { TranscriberPanel } from './TranscriberPanel'
 
@@ -107,6 +107,7 @@ export function JobList() {
   const [tab, setTab]         = useState<'pipeline' | 'batch'>('pipeline')
   const [voices, setVoices]   = useState<{ id: string; name: string }[]>([])
   const [prompts, setPrompts] = useState<PromptMeta[]>([])
+  const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([])
 
   const [pForm, setPForm] = useState<PFormState>({
     source_dir:       localStorage.getItem(LS_SOURCE_DIR) ?? '',
@@ -126,6 +127,7 @@ export function JobList() {
     duration_min:     8,
     duration_max:     12,
     music_volume:     null,
+    music_track:      null,
   })
 
   const [bForm, setBForm] = useState<BatchRunRequest>({
@@ -195,6 +197,7 @@ export function JobList() {
   useEffect(() => {
     api.voices.list().then(setVoices).catch(() => {})
     api.prompts.list().then(setPrompts).catch(() => {})
+    api.music.list().then(setMusicTracks).catch(() => {})
   }, [])
 
   async function loadJobs() {
@@ -583,21 +586,44 @@ export function JobList() {
                 <Tip text="Додає royalty-free фонову музику під голос. Гучність регулюється нижче." />
               </label>
               {pForm.background_music && (
-                <div className="flex items-center gap-2 ml-1">
-                  <span className="text-xs text-gray-400 shrink-0">Гучність БГМ:</span>
-                  <input
-                    type="number" min={-60} max={-10} step={1}
-                    value={pForm.music_volume ?? -28}
-                    onChange={(e) =>
-                      setPForm((f) => ({
-                        ...f,
-                        music_volume: e.target.value === '' ? null : Number(e.target.value),
-                      }))
-                    }
-                    className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white text-center focus:outline-none focus:border-blue-500"
-                  />
-                  <span className="text-xs text-gray-500">dB</span>
-                  <Tip text="-28 = тихо (рекомендовано), -20 = стандарт. Менше число = тихіше." />
+                <div className="space-y-1.5 ml-1">
+                  {/* Volume */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 shrink-0">Гучність БГМ:</span>
+                    <input
+                      type="number" min={-60} max={-10} step={1}
+                      value={pForm.music_volume ?? -28}
+                      onChange={(e) =>
+                        setPForm((f) => ({
+                          ...f,
+                          music_volume: e.target.value === '' ? null : Number(e.target.value),
+                        }))
+                      }
+                      className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white text-center focus:outline-none focus:border-blue-500"
+                    />
+                    <span className="text-xs text-gray-500">dB</span>
+                    <Tip text="-28 = тихо (рекомендовано), -20 = стандарт. Менше число = тихіше." />
+                  </div>
+                  {/* Track selector */}
+                  {musicTracks.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400 shrink-0">Трек:</span>
+                      <select
+                        value={pForm.music_track ?? ''}
+                        onChange={(e) =>
+                          setPForm((f) => ({ ...f, music_track: e.target.value || null }))
+                        }
+                        className="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="">Авто (з налаштувань каналу)</option>
+                        {musicTracks.map((t) => (
+                          <option key={t.path} value={t.path}>
+                            {t.rel_path} ({t.size_mb} MB)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
               <label className="flex items-center gap-2 cursor-pointer">

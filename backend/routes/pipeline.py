@@ -52,6 +52,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         duration_min=req.duration_min if req.duration_min is not None else 8,
         duration_max=req.duration_max if req.duration_max is not None else 12,
         music_volume=req.music_volume,
+        music_track=req.music_track,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 

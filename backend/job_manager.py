@@ -30,6 +30,7 @@ class Job:
     kind: str          # "pipeline" | "batch"
     status: str        # "queued" | "running" | "waiting_review" | "done" | "failed" | "cancelled"
     source: str        # source_dir.name or input_dir.name
+    source_dir: str    # full absolute path to transcriber output dir
     channel: str
     quality: str
     created_at: str = field(default_factory=_now)
@@ -82,6 +83,8 @@ class Job:
             "kind": self.kind,
             "status": self.status,
             "source": self.source,
+            "source_dir": self.source_dir,
+            "project_dir": str(ROOT / "projects" / self.source) if self.source else "",
             "channel": self.channel,
             "quality": self.quality,
             "created_at": self.created_at,
@@ -144,6 +147,7 @@ class JobManager:
             kind="pipeline",
             status="queued",
             source=source_dir.name,
+            source_dir=str(source_dir),
             channel=channel_config_path.stem,
             quality=kwargs.get("quality", "max"),
         )
@@ -276,6 +280,7 @@ class JobManager:
             kind="batch",
             status="queued",
             source=input_dir.name,
+            source_dir=str(input_dir),
             channel=channel_config_path.stem,
             quality=kwargs.get("quality", "bulk"),
         )

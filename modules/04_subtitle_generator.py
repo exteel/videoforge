@@ -46,11 +46,11 @@ DEFAULT_ASS_STYLE = {
     "outline_color": "#000000",   # black outline
     "outline_width": 3,
     "position":      "bottom",
-    "margin_v":      60,
+    "margin_v":      130,         # ~10% higher than default 60 (720p: 60+72=132)
 }
 
-# Characters per subtitle line before wrapping
-MAX_CHARS_PER_LINE = 42
+# Characters per subtitle line before wrapping — keep short so entries stay 1 line
+MAX_CHARS_PER_LINE = 32
 
 # Max subtitle duration for very long blocks (split into multiple entries)
 MAX_SUBTITLE_DURATION = 8.0   # seconds
@@ -192,12 +192,13 @@ def _block_to_entries(
     if not sentences:
         return [], start_time
 
-    # If the block is short enough: one entry
-    if duration <= MAX_SUBTITLE_DURATION or len(sentences) == 1:
+    # Single sentence (or very short block): one entry, no split needed
+    if len(sentences) == 1:
         entry = SubEntry(entry_index_start, start_time, end_time, narration)
         return [entry], end_time
 
-    # Split into multiple entries proportional to sentence length
+    # Always split at sentence boundaries — proportional to sentence length.
+    # This keeps subtitles short (≤1 line each) regardless of block duration.
     total_chars = sum(len(s) for s in sentences)
     entries: list[SubEntry] = []
     current_time = start_time

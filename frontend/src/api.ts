@@ -7,6 +7,8 @@ export interface Job {
   kind: 'pipeline' | 'batch'
   status: 'queued' | 'running' | 'waiting_review' | 'done' | 'failed' | 'cancelled'
   source: string
+  source_dir: string   // full path to transcriber output dir
+  project_dir: string  // full path to videoforge project output dir
   channel: string
   quality: string
   created_at: string
@@ -107,6 +109,15 @@ export interface PipelineRunRequest {
   duration_min?: number | null
   duration_max?: number | null
   music_volume?: number | null
+  music_track?: string | null
+}
+
+export interface MusicTrack {
+  name: string      // stem without extension
+  filename: string  // filename.ext
+  rel_path: string  // relative path inside assets/music/
+  path: string      // absolute path — send as music_track
+  size_mb: number
 }
 
 export interface BatchRunRequest {
@@ -267,6 +278,18 @@ export const api = {
       }
       return res.json() as Promise<{ style: string }>
     },
+  },
+
+  music: {
+    list: () => req<MusicTrack[]>('/music'),
+  },
+
+  fs: {
+    open: (path: string) =>
+      req<{ status: string; path: string }>('/fs/open', {
+        method: 'POST',
+        body: JSON.stringify({ path }),
+      }),
   },
 
   youtube: {

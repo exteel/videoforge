@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-03-03 — Fix image preview gray boxes in review UI
+
+### Причина (2 проблеми)
+1. **Vite proxy** не проксував `/projects` на порт 8000 → `<img src="/projects/...">` в dev mode (порт 5173) = 404 сірий блок
+2. **pipeline.py** лінія 622: URL не був закодований (`urllib.parse.quote`) — пробіли, em-dash в назві проекту → Starlette не міг знайти файл. Також для secondary images (index > 0) формувався неправильний filename (`block_001.png` замість `block_001_1.png`)
+
+### Виконано
+- `frontend/vite.config.ts` — додано `'/projects': 'http://localhost:8000'` до proxy
+- `pipeline.py` — `from urllib.parse import quote as _url_quote` + `_enc_name = _url_quote(_src_name, safe="")` + правильний `_fname` для image_index > 0
+
+### Файли
+- `frontend/vite.config.ts`, `pipeline.py`
+
+---
+
 ## 2026-03-03 — Fix duplicate images + subtitles checkbox
 
 ### Виконано

@@ -34,6 +34,10 @@ class PipelineRunRequest(BaseModel):
         None, ge=-60, le=0,
         description="BGM volume override in dB (e.g. -28). None = channel config default (-28).",
     )
+    music_track: str | None = Field(
+        None,
+        description="Explicit music track path (absolute). None = channel config random pick.",
+    )
 
 
 class BatchRunRequest(BaseModel):
@@ -58,6 +62,8 @@ class JobResponse(BaseModel):
     kind: str            # "pipeline" | "batch"
     status: str          # "queued" | "running" | "waiting_review" | "done" | "failed" | "cancelled"
     source: str
+    source_dir: str = ""       # full path to transcriber output dir
+    project_dir: str = ""      # full path to videoforge project output dir
     channel: str
     quality: str
     created_at: str
