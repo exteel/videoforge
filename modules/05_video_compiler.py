@@ -61,9 +61,11 @@ MIN_IMAGE_BYTES = 5_000
 MIN_AUDIO_BYTES = 1_000
 BLOCK_VIDEO_EXT = ".mp4"
 
-# Inter-block animation cycle (applied at block boundaries with crossfade).
-# Only zoom_in/zoom_out — pan_left/pan_right cause visible jerks at transitions.
-_KB_CYCLE = ["zoom_in", "zoom_out"]
+# Inter-block animation cycle for SHORT (single-segment) blocks.
+# pan_left/pan_right — constant linear motion, visually smoothest.
+# Long multi-segment blocks always use _WITHIN_BLOCK_KB_CYCLE (zoom_in/zoom_out)
+# because those chain SEAMLESSLY at hard-cut boundaries (no audio sync loss).
+_KB_CYCLE = ["pan_left", "pan_right"]
 
 # Within-block animation cycle for multi-segment blocks.
 # ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries (zoompan):
