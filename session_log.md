@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-03-03 — №42 sparse_images detection + auto-fix in script validator
+
+### Проблема
+LLM (Opus) тримає щільність зображень у перших 2 блоках, потім "забуває":
+- Block 3 (490w): 1 img замість ~3 | Block 7 (523w): 1 img замість ~3
+- Validator не бачив проблему: `image_prompt` (single) non-empty → OK, але `image_prompts` (list) = 1 елемент
+
+### Fix — `modules/01b_script_validator.py`
+- **`_structural_checks()`**: новий `sparse_images` check
+  - Для блоків type != cta/outro з narration >= 200 слів
+  - `min_expected = max(1, nw // 150)` (1 img per 150w мінімум)
+  - Якщо `actual < min_expected` → ScriptIssue(type="sparse_images", severity="warning")
+- **`_fix_sparse_images()`**: batch LLM call (gpt-4.1-mini)
+  - Отримує список sparse blocks з `_need` (скільки додати)
+  - Генерує нові prompts що покривають різні моменти narration
+  - Не замінює існуючі, а доповнює
+- **`validate_and_fix_script()`**: Fix 3 після bad_prompt
+  - Розраховує evenly-distributed word offsets для нових промптів
+  - Оновлює `image_prompts`, `image_word_offsets`, `image_prompt` (if empty)
+
+### Тест ("Tired" script, після генерації)
+- Виявлено: 3 sparse blocks (490w/1img, 523w/1img, 275w/0img)
+- Авто-виправлено: +5 промптів, 29 → 34 imgs total
+- Всі блоки тепер OK за порогом 1img/150w
+
+### Файли: `modules/01b_script_validator.py` (commit c4ea202)
+
+---
+
 ## 2026-03-03 — №41 Hook regen 5+5 strategy + TTS limit 35 + test on Tired
 
 ### Зміни
