@@ -147,6 +147,26 @@ export function JobList() {
     setStyleError('')
   }, [])
 
+  // Global paste listener — captures Ctrl+V anywhere on the page.
+  // Skips paste events that target text inputs / textareas so normal typing is unaffected.
+  useEffect(() => {
+    function handleGlobalPaste(e: ClipboardEvent) {
+      const target = e.target as HTMLElement
+      // Don't intercept paste in text fields
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) return
+      const items = Array.from(e.clipboardData?.items ?? [])
+      const item = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
+      const f = item?.getAsFile() ?? null
+      if (f) applyStyleImage(f)
+    }
+    document.addEventListener('paste', handleGlobalPaste)
+    return () => document.removeEventListener('paste', handleGlobalPaste)
+  }, [applyStyleImage])
+
   async function analyzeStyle() {
     if (!styleFile) return
     setStyleLoading(true)
@@ -433,20 +453,13 @@ export function JobList() {
 
               {/* Style reference image extractor */}
               <div
-                className="border border-dashed border-gray-600 rounded p-3 space-y-2 cursor-pointer hover:border-gray-400 transition-colors select-none"
-                onPaste={(e) => {
-                  const items = Array.from(e.clipboardData?.items ?? [])
-                  const item = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
-                  const f = item?.getAsFile() ?? null
-                  if (f) applyStyleImage(f)
-                }}
+                className="border border-dashed border-gray-600 rounded p-3 space-y-2 select-none"
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault()
                   const f = e.dataTransfer.files[0]
                   if (f?.type.startsWith('image/')) applyStyleImage(f)
                 }}
-                onClick={() => fileInputRef.current?.click()}
               >
                 <input
                   ref={fileInputRef}
@@ -456,7 +469,7 @@ export function JobList() {
                   onChange={(e) => {
                     const f = e.target.files?.[0]
                     if (f) applyStyleImage(f)
-                    e.target.value = ''  // reset so same file can be re-picked
+                    e.target.value = ''
                   }}
                 />
                 {stylePreview ? (
@@ -468,22 +481,38 @@ export function JobList() {
                     />
                     <div className="flex-1 min-w-0 space-y-1">
                       <p className="text-xs text-gray-400 truncate">{styleFile?.name}</p>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); analyzeStyle() }}
-                        disabled={styleLoading}
-                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs transition-colors"
-                      >
-                        {styleLoading ? 'Аналізую…' : '✦ Аналізувати стиль'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={analyzeStyle}
+                          disabled={styleLoading}
+                          className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs transition-colors"
+                        >
+                          {styleLoading ? 'Аналізую…' : '✦ Аналізувати стиль'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyStyleImage(null)}
+                          className="px-2 py-1 text-gray-500 hover:text-gray-300 rounded text-xs"
+                        >✕</button>
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-500 text-center py-1">
-                    📎 Вставте картинку (Ctrl+V), перетягніть або оберіть файл — отримайте рядок стилю
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-gray-500">
+                      Ctrl+V або перетягніть картинку референс — отримайте рядок стилю
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="shrink-0 px-2 py-1 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-gray-200 rounded text-xs transition-colors"
+                    >
+                      Обрати файл
+                    </button>
+                  </div>
                 )}
-                {styleError && <p className="text-xs text-red-400 mt-1">{styleError}</p>}
+                {styleError && <p className="text-xs text-red-400">{styleError}</p>}
               </div>
 
               <input
