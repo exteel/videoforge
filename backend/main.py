@@ -69,6 +69,7 @@ from backend.routes import script as script_router
 from backend.routes import transcriber as transcriber_router
 from backend.routes import videos as videos_router
 from backend.routes import ws as ws_router
+from backend.routes import style as style_router
 from backend.routes import youtube as youtube_router
 
 app.include_router(pipeline_router.router, prefix="/api")
@@ -77,6 +78,7 @@ app.include_router(videos_router.router, prefix="/api")
 app.include_router(channels_router.router, prefix="/api")
 app.include_router(youtube_router.router, prefix="/api")
 app.include_router(transcriber_router.router, prefix="/api")
+app.include_router(style_router.router, prefix="/api")
 app.include_router(ws_router.router)
 
 

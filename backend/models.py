@@ -21,7 +21,7 @@ class PipelineRunRequest(BaseModel):
     budget: float | None = Field(None, description="Max spend in USD")
     langs: list[str] | None = Field(None, description="Language codes for multilingual output")
     dry_run: bool = Field(False, description="Estimate costs only, no API calls")
-    background_music: bool = Field(True, description="Mix royalty-free background music at -20dB")
+    background_music: bool = Field(True, description="Mix royalty-free background music under voice")
     no_ken_burns: bool = Field(False, description="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)")
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
     image_style: str | None = Field(None, description="Override image generation style prompt")
@@ -29,6 +29,10 @@ class PipelineRunRequest(BaseModel):
     master_prompt: str | None = Field(None, description="Override master prompt path (e.g. 'prompts/master_script_v2.txt')")
     duration_min: int | None = Field(None, ge=1, le=240, description="Minimum target video duration in minutes")
     duration_max: int | None = Field(None, ge=1, le=240, description="Maximum target video duration in minutes")
+    music_volume: float | None = Field(
+        None, ge=-60, le=0,
+        description="BGM volume override in dB (e.g. -28). None = channel config default (-28).",
+    )
 
 
 class BatchRunRequest(BaseModel):

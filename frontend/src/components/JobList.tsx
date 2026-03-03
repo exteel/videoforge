@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { type Job, type PipelineRunRequest, type BatchRunRequest, type PromptMeta, api } from '../api'
 import { JobCard } from './JobCard'
 import { TranscriberPanel } from './TranscriberPanel'
@@ -91,6 +91,7 @@ type PFormState = PipelineRunRequest & {
   voice_id: string
   duration_min: number
   duration_max: number
+  music_volume: number | null
 }
 
 export function JobList() {
@@ -116,6 +117,7 @@ export function JobList() {
     master_prompt:    null,
     duration_min:     8,
     duration_max:     12,
+    music_volume:     null,
   })
 
   const [bForm, setBForm] = useState<BatchRunRequest>({
@@ -129,7 +131,35 @@ export function JobList() {
 
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError]   = useState('')
-  const sourceRef = useRef<HTMLInputElement>(null)
+  const sourceRef    = useRef<HTMLInputElement>(null)
+
+  // ── Style extractor state ──────────────────────────────────────────────────
+  const [styleFile, setStyleFile]       = useState<File | null>(null)
+  const [stylePreview, setStylePreview] = useState<string | null>(null)
+  const [styleLoading, setStyleLoading] = useState(false)
+  const [styleError, setStyleError]     = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const applyStyleImage = useCallback((file: File | null) => {
+    setStylePreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
+    setStyleFile(file)
+    setStylePreview(file ? URL.createObjectURL(file) : null)
+    setStyleError('')
+  }, [])
+
+  async function analyzeStyle() {
+    if (!styleFile) return
+    setStyleLoading(true)
+    setStyleError('')
+    try {
+      const result = await api.style.analyze(styleFile)
+      setPForm((f) => ({ ...f, image_style: result.style }))
+    } catch (err) {
+      setStyleError(String(err))
+    } finally {
+      setStyleLoading(false)
+    }
+  }
 
   // Load voices + prompts
   useEffect(() => {
@@ -165,8 +195,9 @@ export function JobList() {
     setSubmitting(true)
     try {
       const payload: Record<string, unknown> = { ...pForm }
-      if (!payload.image_style) delete payload.image_style
-      if (!payload.voice_id)    delete payload.voice_id
+      if (!payload.image_style)         delete payload.image_style
+      if (!payload.voice_id)            delete payload.voice_id
+      if (payload.music_volume == null) delete payload.music_volume
       await api.pipeline.run(payload as unknown as PipelineRunRequest)
       await loadJobs()
     } catch (err) {
@@ -394,18 +425,74 @@ export function JobList() {
             )}
 
             {/* Image style */}
-            <label className="space-y-1 block">
+            <div className="space-y-1">
               <span className="text-xs text-gray-400">
                 Image style
-                <Tip text="Стиль візуалу для генерації картинок. Залиш порожнім — береться з налаштувань каналу. Приклад: 'oil painting, vintage, warm tones, 4k'" />
+                <Tip text="Стиль візуалу для генерації картинок. Залиш порожнім — береться з налаштувань каналу. Вставте картинку нижче щоб отримати стиль автоматично." />
               </span>
+
+              {/* Style reference image extractor */}
+              <div
+                className="border border-dashed border-gray-600 rounded p-3 space-y-2 cursor-pointer hover:border-gray-400 transition-colors select-none"
+                onPaste={(e) => {
+                  const items = Array.from(e.clipboardData?.items ?? [])
+                  const item = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
+                  const f = item?.getAsFile() ?? null
+                  if (f) applyStyleImage(f)
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const f = e.dataTransfer.files[0]
+                  if (f?.type.startsWith('image/')) applyStyleImage(f)
+                }}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) applyStyleImage(f)
+                    e.target.value = ''  // reset so same file can be re-picked
+                  }}
+                />
+                {stylePreview ? (
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={stylePreview}
+                      className="h-16 w-24 object-cover rounded border border-gray-700 shrink-0"
+                      alt="ref"
+                    />
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <p className="text-xs text-gray-400 truncate">{styleFile?.name}</p>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); analyzeStyle() }}
+                        disabled={styleLoading}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs transition-colors"
+                      >
+                        {styleLoading ? 'Аналізую…' : '✦ Аналізувати стиль'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500 text-center py-1">
+                    📎 Вставте картинку (Ctrl+V), перетягніть або оберіть файл — отримайте рядок стилю
+                  </p>
+                )}
+                {styleError && <p className="text-xs text-red-400 mt-1">{styleError}</p>}
+              </div>
+
               <input
                 value={pForm.image_style}
                 onChange={(e) => setPForm({ ...pForm, image_style: e.target.value })}
                 placeholder="cinematic, photorealistic, 8k… (з каналу якщо порожньо)"
                 className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
               />
-            </label>
+            </div>
 
             {/* Budget */}
             <label className="space-y-1 block">
@@ -438,8 +525,26 @@ export function JobList() {
                   onChange={(e) => setPForm({ ...pForm, background_music: e.target.checked })}
                   className="accent-blue-500" />
                 <span>Background music</span>
-                <Tip text="Додає royalty-free фонову музику на -20dB під голос." />
+                <Tip text="Додає royalty-free фонову музику під голос. Гучність регулюється нижче." />
               </label>
+              {pForm.background_music && (
+                <div className="flex items-center gap-2 ml-1">
+                  <span className="text-xs text-gray-400 shrink-0">Гучність БГМ:</span>
+                  <input
+                    type="number" min={-60} max={-10} step={1}
+                    value={pForm.music_volume ?? -28}
+                    onChange={(e) =>
+                      setPForm((f) => ({
+                        ...f,
+                        music_volume: e.target.value === '' ? null : Number(e.target.value),
+                      }))
+                    }
+                    className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white text-center focus:outline-none focus:border-blue-500"
+                  />
+                  <span className="text-xs text-gray-500">dB</span>
+                  <Tip text="-28 = тихо (рекомендовано), -20 = стандарт. Менше число = тихіше." />
+                </div>
+              )}
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={pForm.skip_thumbnail}
                   onChange={(e) => setPForm({ ...pForm, skip_thumbnail: e.target.checked })}

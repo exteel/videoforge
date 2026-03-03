@@ -105,6 +105,7 @@ export interface PipelineRunRequest {
   master_prompt?: string | null
   duration_min?: number | null
   duration_max?: number | null
+  music_volume?: number | null
 }
 
 export interface BatchRunRequest {
@@ -248,6 +249,23 @@ export const api = {
       req<TranscribeJob>(`/transcribe/${jobId}`),
     list: () =>
       req<TranscribeJob[]>('/transcribe'),
+  },
+
+  style: {
+    /**
+     * Analyze a reference image and return a compact image_style descriptor string.
+     * Uses multipart/form-data — do NOT use the req() helper (it sets JSON Content-Type).
+     */
+    analyze: async (image: File): Promise<{ style: string }> => {
+      const form = new FormData()
+      form.append('image', image)
+      const res = await fetch(BASE + '/style/analyze', { method: 'POST', body: form })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`${res.status}: ${text.slice(0, 200)}`)
+      }
+      return res.json() as Promise<{ style: string }>
+    },
   },
 
   youtube: {

@@ -276,6 +276,7 @@ def compile_video(
     crossfade: bool = True,
     no_ken_burns: bool = False,
     dry_run: bool = False,
+    music_volume_override: float | None = None,
     progress_callback: Any | None = None,
 ) -> Path:
     """
@@ -291,6 +292,8 @@ def compile_video(
         no_intro_outro: Skip intro/outro templates.
         crossfade: Enable 0.5s crossfade between blocks (ignored in draft mode).
         dry_run: Validate inputs and log plan without running FFmpeg.
+        music_volume_override: BGM volume in dB (e.g. -28). Overrides channel config.
+            None = use channel_config["background_music"]["volume_db"] (default -28).
         progress_callback: Optional callable({type, pct, message}) for real-time
             sub-step progress (pct in 0–100 within this step).
 
@@ -581,10 +584,13 @@ def compile_video(
         step = 2
         final_audio = narration_audio
         if music_track:
-            log.info("Step %d: Mixing background music at -20dB...", step)
-            music_volume = float(
-                channel_config.get("background_music", {}).get("volume_db", -20)
-            )
+            if music_volume_override is not None:
+                music_volume = float(music_volume_override)
+            else:
+                music_volume = float(
+                    channel_config.get("background_music", {}).get("volume_db", -28)
+                )
+            log.info("Step %d: Mixing background music at %.0fdB...", step, music_volume)
             mixed_audio = tmp / "audio_mixed.mp3"
             _emit_progress(84.0, "Mixing music…")
             mix_audio(narration_audio, music_track, mixed_audio, music_volume=music_volume)

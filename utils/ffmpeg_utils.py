@@ -615,7 +615,7 @@ def mix_audio(
     music_path: str | Path,
     output_path: str | Path,
     *,
-    music_volume: float = -20.0,  # dB relative (negative = quieter)
+    music_volume: float = -28.0,  # dB relative (negative = quieter)
 ) -> Path:
     """
     Mix voice narration with background music track.
@@ -627,7 +627,7 @@ def mix_audio(
         voice_path: Primary voice narration audio.
         music_path: Background music file.
         output_path: Mixed output audio.
-        music_volume: Music level in dB relative to voice (default -20dB).
+        music_volume: Music level in dB relative to voice (default -28dB).
 
     Returns:
         Path to mixed audio file.

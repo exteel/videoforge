@@ -248,14 +248,15 @@ async def run_pipeline(
     db_video_id: int | None = None,  # Pre-created video row id (passed by batch_runner)
     progress_callback: Any | None = None,  # Callable({type, step, ...}) for real-time updates
     review_callback: Any | None = None,    # async callable(stage, data) → None; WebSocket review
-    background_music: bool = True,   # Mix background music (False = no_music in compile_video)
-    image_style: str | None = None,  # Override image style from channel config
-    voice_id: str | None = None,     # Override voice ID from channel config
+    background_music: bool = True,     # Mix background music (False = no_music in compile_video)
+    image_style: str | None = None,    # Override image style from channel config
+    voice_id: str | None = None,       # Override voice ID from channel config
     master_prompt: str | None = None,  # Override master prompt path
-    no_ken_burns: bool = False,      # Skip Ken Burns — static slideshow (1 FFmpeg call, much faster)
-    duration_min: int = 8,           # Minimum target video duration in minutes
-    duration_max: int = 12,          # Maximum target video duration in minutes
-    skip_thumbnail: bool = False,    # Skip thumbnail generation (Step 5)
+    no_ken_burns: bool = False,        # Skip Ken Burns — static slideshow (1 FFmpeg call, much faster)
+    duration_min: int = 8,             # Minimum target video duration in minutes
+    duration_max: int = 12,            # Maximum target video duration in minutes
+    skip_thumbnail: bool = False,      # Skip thumbnail generation (Step 5)
+    music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -739,6 +740,7 @@ async def run_pipeline(
                     no_subs=True,   # subtitles disabled until format is settled
                     no_music=not background_music,
                     no_ken_burns=no_ken_burns,
+                    music_volume_override=music_volume,
                     progress_callback=_video_sub_cb,
                 ),
             )
