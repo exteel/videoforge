@@ -150,15 +150,16 @@ export function JobList() {
   // Global paste listener — smart routing:
   //   clipboard image → style extractor (regardless of which field is focused)
   //   clipboard text  → normal browser behavior (focused field gets it, no interception)
+  // Guard: if already handled by an element's own onPaste (e.defaultPrevented), skip.
   useEffect(() => {
     function handleGlobalPaste(e: ClipboardEvent) {
+      if (e.defaultPrevented) return  // already handled by onPaste on a child element
       const items = Array.from(e.clipboardData?.items ?? [])
       const imageItem = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
       if (imageItem) {
-        // Image in clipboard → always route to style extractor
         const f = imageItem.getAsFile()
         if (f) {
-          e.preventDefault()  // prevent any default paste behavior
+          e.preventDefault()
           applyStyleImage(f)
         }
       }
@@ -519,7 +520,18 @@ export function JobList() {
               <input
                 value={pForm.image_style}
                 onChange={(e) => setPForm({ ...pForm, image_style: e.target.value })}
-                placeholder="cinematic, photorealistic, 8k… (з каналу якщо порожньо)"
+                onPaste={(e) => {
+                  // If clipboard contains an image — load it into style extractor instead of pasting text
+                  const items = Array.from(e.clipboardData?.items ?? [])
+                  const imageItem = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'))
+                  if (imageItem) {
+                    e.preventDefault()
+                    const f = imageItem.getAsFile()
+                    if (f) applyStyleImage(f)
+                  }
+                  // Text paste falls through to normal input behavior
+                }}
+                placeholder="cinematic, photorealistic, 8k… або вставте картинку (Ctrl+V)"
                 className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
               />
             </div>
