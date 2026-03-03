@@ -69,6 +69,16 @@ WS_POLL_INTERVAL = 2.0   # seconds between WaveSpeed polls
 WS_POLL_MAX      = 90    # max polls (3 minutes)
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _img_path_for(images_dir: Path, bid: str, idx: int) -> Path:
+    """Return the file path for image index `idx` of block `bid`.
+    idx=0 → bid.png  (primary)
+    idx>0 → bid_N.png (secondary, matching 02_image_generator.py naming)
+    """
+    return images_dir / (f"{bid}.png" if idx == 0 else f"{bid}_{idx}.png")
+
+
 # ─── Result types ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -76,12 +86,18 @@ class ImageScore:
     block_id: str
     score: float
     ok: bool
+    image_index: int = 0        # 0 = primary (bid.png), N = secondary (bid_N.png)
     reason: str = ""
     improved_prompt: str = ""
     regenerated: bool = False
     attempts: int = 0
     skipped: bool = False       # True if image was missing/corrupted or scoring API failed
     skip_reason: str = ""       # human-readable reason for skip
+
+    @property
+    def image_label(self) -> str:
+        """Human-readable label: 'block_001' or 'block_001[2]'."""
+        return self.block_id if self.image_index == 0 else f"{self.block_id}[{self.image_index}]"
 
 
 @dataclass
@@ -105,6 +121,8 @@ class ImageValidationResult:
             "scores": [
                 {
                     "block_id": s.block_id,
+                    "image_index": s.image_index,
+                    "label": s.image_label,
                     "score": s.score,
                     "ok": s.ok,
                     "reason": s.reason,
@@ -351,11 +369,13 @@ async def validate_and_fix_images(
     script     = json.loads(script_path.read_text(encoding="utf-8"))
     all_blocks = script.get("blocks", [])
 
-    # ── Pre-flight: detect missing / corrupted images ─────────────────────────
+    # ── Pre-flight: detect missing / corrupted PRIMARY images ────────────────
+    # Checks only bid.png (index 0). Secondary images (bid_1.png, bid_2.png…)
+    # are checked per-image inside _score_one and handled as skip if missing.
     # Three buckets:
-    #   blocks_to_score    — image exists and is valid → score normally
-    #   blocks_to_preregen — image missing/corrupted BUT has a prompt → regenerate first
-    #   pre_skipped        — image missing AND no prompt (or CTA with no prompt) → skip
+    #   blocks_to_score    — primary image exists and is valid → score all images
+    #   blocks_to_preregen — primary image missing/corrupted BUT has a prompt → regen first
+    #   pre_skipped        — primary image missing AND no prompt → skip block
     pre_skipped: list[ImageScore]    = []
     blocks_to_score: list[dict]      = []
     blocks_to_preregen: list[dict]   = []
@@ -439,46 +459,81 @@ async def validate_and_fix_images(
     result.skipped = len(pre_skipped)
     result.scores  = list(pre_skipped)  # pre-populate with skipped entries
 
-    log.info(
-        "Image validation: scoring %d images (threshold=%.0f/10, model=%s, skipped=%d)",
-        len(blocks_to_score), threshold, SCORE_MODEL, len(pre_skipped),
+    # Count total images across all blocks_to_score
+    _total_images = sum(
+        max(len(b.get("image_prompts") or []), 1 if (b.get("image_prompt") or "").strip() else 0)
+        for b in blocks_to_score
     )
-    _emit(f"Scoring {len(blocks_to_score)} images…", 15.0)
+    log.info(
+        "Image validation: scoring %d images across %d blocks (threshold=%.0f/10, model=%s, skipped=%d)",
+        _total_images, len(blocks_to_score), threshold, SCORE_MODEL, len(pre_skipped),
+    )
+    _emit(f"Scoring {_total_images} images across {len(blocks_to_score)} blocks…", 15.0)
 
-    # ── Score all valid images concurrently ──────────────────────────────────
-    async def _score_one(block: dict) -> ImageScore:
+    # ── Score all valid images concurrently (ALL image_prompts per block) ────
+    async def _score_one(block: dict) -> list[ImageScore]:
+        """Score every image in a block (primary + all secondaries).
+
+        Returns a list — one ImageScore per image_prompt entry.
+        """
         bid_      = block["id"]
         btype_    = block.get("type", "section")
-        img_path_ = images_dir / f"{bid_}.png"
         narration = (block.get("narration") or "")[:400]
-        prompt_   = (block.get("image_prompt") or "")
         eff_threshold = threshold - 0.5 if btype_ in ATMOSPHERIC_TYPES else threshold
-        try:
-            score, reason, improved = await _score_image(
-                bid_, img_path_, narration, prompt_, voidai_key, score_sem,
-            )
-        except Exception as exc:
-            log.warning("Failed to score %s: %s — marking as skipped", bid_, exc)
-            # [FIXED] Scoring failure → skipped (was: fake score=10.0 treated as OK)
-            # We don't know if image is good or bad, so we skip rather than regen blindly.
-            return ImageScore(
-                block_id=bid_, score=0.0, ok=False,
-                skipped=True,
-                skip_reason=f"Vision API error: {exc}",
-            )
 
-        ok = score >= eff_threshold
-        log.info(
-            "  %s [%s]: score=%.0f (thresh=%.1f) %s",
-            bid_, btype_, score, eff_threshold, "✓" if ok else "✗ regen",
-        )
-        return ImageScore(
-            block_id=bid_, score=score, ok=ok,
-            reason=reason, improved_prompt=improved,
-        )
+        # Collect all (index, prompt) pairs for this block.
+        # image_prompts[0] == image_prompt (primary); image_prompts[N] → bid_N.png
+        raw_prompts: list[str] = block.get("image_prompts") or []
+        if not raw_prompts:
+            primary = (block.get("image_prompt") or "").strip()
+            raw_prompts = [primary] if primary else []
+        if not raw_prompts:
+            return []  # CTA/outro block with no images — nothing to score
 
-    scored_list = await asyncio.gather(*[_score_one(b) for b in blocks_to_score])
+        block_scores: list[ImageScore] = []
+        for idx, prompt_ in enumerate(raw_prompts):
+            img_path_ = _img_path_for(images_dir, bid_, idx)
+
+            if not img_path_.exists() or img_path_.stat().st_size < MIN_IMAGE_BYTES:
+                label = f"{bid_}[{idx}]" if idx > 0 else bid_
+                log.warning("Missing/corrupted image: %s — marked as skipped", img_path_.name)
+                block_scores.append(ImageScore(
+                    block_id=bid_, image_index=idx, score=0.0, ok=False,
+                    skipped=True, skip_reason=f"Image file missing or corrupted",
+                ))
+                continue
+
+            try:
+                score, reason, improved = await _score_image(
+                    bid_, img_path_, narration, prompt_, voidai_key, score_sem,
+                )
+            except Exception as exc:
+                log.warning("Failed to score %s: %s — marking as skipped", img_path_.name, exc)
+                block_scores.append(ImageScore(
+                    block_id=bid_, image_index=idx, score=0.0, ok=False,
+                    skipped=True, skip_reason=f"Vision API error: {exc}",
+                ))
+                continue
+
+            ok    = score >= eff_threshold
+            label = f"{bid_}[{idx}]" if idx > 0 else bid_
+            log.info(
+                "  %s [%s]: score=%.0f (thresh=%.1f) %s",
+                label, btype_, score, eff_threshold, "✓" if ok else "✗ regen",
+            )
+            block_scores.append(ImageScore(
+                block_id=bid_, image_index=idx, score=score, ok=ok,
+                reason=reason, improved_prompt=improved,
+            ))
+
+        return block_scores
+
+    scored_nested = await asyncio.gather(*[_score_one(b) for b in blocks_to_score])
+    # Flatten list[list[ImageScore]] → list[ImageScore]
+    scored_list: list[ImageScore] = [s for sublist in scored_nested for s in sublist]
     result.scores.extend(scored_list)
+    # Update total to reflect actual image count (not block count)
+    result.total = len(result.scores)
 
     ok_scores  = [s for s in scored_list if s.ok]
     # [FIXED] Exclude skipped from regen queue (scoring API errors ≠ bad images)
@@ -508,26 +563,34 @@ async def validate_and_fix_images(
         return result
 
     # ── Regenerate bad images ─────────────────────────────────────────────────
-    blocks_by_id = {b["id"]: b for b in blocks_to_score}
+    # Use all_blocks (not just blocks_to_score) so secondary image regen has full block data
+    blocks_by_id = {b["id"]: b for b in all_blocks}
 
     async def _regen_one(image_score: ImageScore) -> None:
         """
-        Regenerate a single image up to max_attempts times.
+        Regenerate a single image (identified by block_id + image_index) up to max_attempts.
         [FIXED] Uses loop instead of recursion — clearer and stack-safe.
+        Handles both primary (index=0 → bid.png) and secondary (index=N → bid_N.png) images.
         """
-        bid_      = image_score.block_id
-        block_    = blocks_by_id.get(bid_, {})
-        btype_    = block_.get("type", "section")
-        img_path_ = images_dir / f"{bid_}.png"
+        bid_   = image_score.block_id
+        idx_   = image_score.image_index
+        block_ = blocks_by_id.get(bid_, {})
+        btype_ = block_.get("type", "section")
+
+        # Resolve the specific prompt for this image index
+        prompts_list  = block_.get("image_prompts") or [block_.get("image_prompt", "")]
+        base_prompt   = prompts_list[idx_] if idx_ < len(prompts_list) else block_.get("image_prompt", "")
+
+        img_path_     = _img_path_for(images_dir, bid_, idx_)
         eff_threshold = threshold - 0.5 if btype_ in ATMOSPHERIC_TYPES else threshold
 
         for attempt in range(1, max_attempts + 1):
-            prompt_     = image_score.improved_prompt or block_.get("image_prompt", "")
+            prompt_     = image_score.improved_prompt or base_prompt
             full_prompt = f"{prompt_}, {image_style}"
 
             log.info(
                 "  Regenerating %s (score=%.0f, attempt=%d/%d): %s…",
-                bid_, image_score.score, attempt, max_attempts, prompt_[:50],
+                image_score.image_label, image_score.score, attempt, max_attempts, prompt_[:50],
             )
 
             # Try WaveSpeed first; fall back to VoidAI if WaveSpeed fails or key missing
@@ -537,21 +600,21 @@ async def validate_and_fix_images(
                 if not success:
                     log.warning(
                         "  WaveSpeed failed for %s (attempt %d) — trying VoidAI fallback",
-                        bid_, attempt,
+                        image_score.image_label, attempt,
                     )
             if not success and voidai_key:
                 success = await _voidai_generate(full_prompt, img_path_, voidai_key)
                 if success:
-                    log.info("  VoidAI fallback succeeded for %s", bid_)
+                    log.info("  VoidAI fallback succeeded for %s", image_score.image_label)
 
             image_score.attempts = attempt
 
             if not success:
                 log.warning(
                     "  All generation methods exhausted for %s (attempt %d) — keeping old image",
-                    bid_, attempt,
+                    image_score.image_label, attempt,
                 )
-                break  # Can't generate — stop trying
+                break
 
             # Re-score the new image
             narration = (block_.get("narration") or "")[:400]
@@ -559,7 +622,10 @@ async def validate_and_fix_images(
                 new_score, new_reason, new_improved = await _score_image(
                     bid_, img_path_, narration, prompt_, voidai_key, score_sem,
                 )
-                log.info("  %s: rescore=%.0f (was %.0f)", bid_, new_score, image_score.score)
+                log.info(
+                    "  %s: rescore=%.0f (was %.0f)",
+                    image_score.image_label, new_score, image_score.score,
+                )
                 image_score.score           = new_score
                 image_score.reason          = new_reason
                 image_score.improved_prompt = new_improved
@@ -567,19 +633,21 @@ async def validate_and_fix_images(
                 image_score.regenerated     = True
 
                 if image_score.ok:
-                    log.info("  %s: score acceptable after attempt %d ✓", bid_, attempt)
-                    break  # Good enough — stop
+                    log.info("  %s: score acceptable after attempt %d ✓", image_score.image_label, attempt)
+                    break
                 elif attempt < max_attempts:
                     log.info(
                         "  %s: score still below threshold (%.0f < %.1f) — attempt %d next",
-                        bid_, new_score, eff_threshold, attempt + 1,
+                        image_score.image_label, new_score, eff_threshold, attempt + 1,
                     )
-                # else: loop ends naturally after max_attempts, keeping best result
 
             except Exception as exc:
-                log.warning("  Re-score failed for %s: %s — keeping regenerated image", bid_, exc)
+                log.warning(
+                    "  Re-score failed for %s: %s — keeping regenerated image",
+                    image_score.image_label, exc,
+                )
                 image_score.regenerated = True
-                break  # Can't score — assume regen was good enough, stop
+                break
 
     regen_tasks = [
         _regen_one(s)
@@ -595,13 +663,24 @@ async def validate_and_fix_images(
             result.failed += 1
 
     # ── Save improved_prompt back to script.json (helps future regenerations) ──
+    # Updates both image_prompts[idx] (for the specific image) and image_prompt (primary only)
     prompt_updates = 0
     blocks_in_script = {b["id"]: b for b in script.get("blocks", [])}
     for s in result.scores:
         if s.skipped or not s.improved_prompt:
             continue
         block = blocks_in_script.get(s.block_id)
-        if block and s.improved_prompt != block.get("image_prompt", ""):
+        if not block:
+            continue
+        prompts_list = block.get("image_prompts") or []
+        if s.image_index < len(prompts_list):
+            if s.improved_prompt != prompts_list[s.image_index]:
+                prompts_list[s.image_index] = s.improved_prompt
+                block["image_prompts"] = prompts_list
+                if s.image_index == 0:
+                    block["image_prompt"] = s.improved_prompt
+                prompt_updates += 1
+        elif s.image_index == 0 and s.improved_prompt != block.get("image_prompt", ""):
             block["image_prompt"] = s.improved_prompt
             prompt_updates += 1
     if prompt_updates:
