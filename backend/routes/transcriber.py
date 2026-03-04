@@ -62,6 +62,8 @@ class TranscribeRequest(BaseModel):
     master_prompt:  str | None = None
     duration_min:   int | None = None      # min video duration in minutes
     duration_max:   int | None = None      # max video duration in minutes
+    music_volume:   float | None = None    # BGM volume in dB (None = channel config default)
+    custom_topic:   str | None = None      # override topic for new script (replaces reference video title)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -157,6 +159,7 @@ async def start_transcribe(req: TranscribeRequest) -> dict[str, Any]:
                 "skip_thumbnail":   req.skip_thumbnail,
                 "duration_min":     req.duration_min if req.duration_min is not None else 8,
                 "duration_max":     req.duration_max if req.duration_max is not None else 12,
+                "music_volume":     req.music_volume,
             }
             if req.image_style:
                 pipeline_kwargs["image_style"] = req.image_style
@@ -164,6 +167,8 @@ async def start_transcribe(req: TranscribeRequest) -> dict[str, Any]:
                 pipeline_kwargs["voice_id"] = req.voice_id
             if req.master_prompt:
                 pipeline_kwargs["master_prompt"] = req.master_prompt
+            if req.custom_topic:
+                pipeline_kwargs["custom_topic"] = req.custom_topic
 
             out_dir = await transcribe_url(
                 req.url,

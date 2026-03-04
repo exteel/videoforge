@@ -17,6 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 
+# ── Dev mode toggle ───────────────────────────────────────────────────────────
+# True  → завжди Vite dev server (HMR — зміни без перезапуску)
+# False → serve frontend/dist якщо існує (production build)
+DEV_MODE = True
+
 # Приховати консоль підпроцесів на Windows
 _NO_WIN = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 _BACKEND_PORT  = 8000
@@ -25,6 +30,28 @@ _FRONTEND_PORT = 5173
 
 def _health_url() -> str:
     return f"http://localhost:{_BACKEND_PORT}/api/health"
+
+
+def _kill_port(port: int) -> None:
+    """Вбиває процес що слухає на порту — щоб не множились вікна при повторному запуску."""
+    if sys.platform != "win32":
+        return
+    try:
+        result = subprocess.run(
+            ["netstat", "-aon"],
+            capture_output=True, text=True, creationflags=_NO_WIN,
+        )
+        for line in result.stdout.splitlines():
+            if f":{port} " in line and "LISTENING" in line:
+                parts = line.split()
+                pid = int(parts[-1])
+                if pid > 4:  # не чіпаємо системні процеси (PID 0/4)
+                    subprocess.run(
+                        ["taskkill", "/f", "/pid", str(pid)],
+                        capture_output=True, creationflags=_NO_WIN,
+                    )
+    except Exception:
+        pass
 
 
 def _wait_ready(url: str, timeout: int = 40) -> bool:
@@ -59,8 +86,14 @@ def _build_frontend() -> bool:
 
 def main() -> None:
     python   = sys.executable
-    is_prod  = (ROOT / "frontend" / "dist").exists()
+    is_prod  = not DEV_MODE and (ROOT / "frontend" / "dist").exists()
     env      = {**os.environ, "PYTHONUNBUFFERED": "1"}
+
+    # ── 0. Вбиваємо старі процеси на наших портах ────────────────────────────
+    _kill_port(_BACKEND_PORT)
+    if not is_prod:
+        _kill_port(_FRONTEND_PORT)
+    time.sleep(0.5)  # даємо OS час звільнити порти
 
     # ── 1. Start Backend ──────────────────────────────────────────────────────
     backend = subprocess.Popen(
@@ -70,10 +103,11 @@ def main() -> None:
             "--host", "0.0.0.0",
             "--port", str(_BACKEND_PORT),
             "--log-level", "warning",
+            "--reload",
         ],
         cwd=str(ROOT),
         env=env,
-        creationflags=_NO_WIN,
+        creationflags=0,  # Тимчасово: показуємо логи бекенду під час тестування
     )
 
     frontend_proc = None

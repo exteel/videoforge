@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import importlib.util
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -272,6 +273,7 @@ async def run_pipeline(
     burn_subtitles: bool = True,       # Burn generated subtitles into video (Step 4 must have run)
     music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
     music_track: str | None = None,    # Explicit music file path; None = channel config random pick
+    custom_topic: str | None = None,   # Override topic for new script (replaces reference video title)
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -297,7 +299,13 @@ async def run_pipeline(
     if project_dir:
         proj = project_dir
     elif source_dir:
-        proj = ROOT / "projects" / source_dir.name
+        # Use custom_topic as folder name if provided, otherwise use reference video name
+        if custom_topic and custom_topic.strip():
+            _safe_topic = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200].strip(". ")
+            folder_name = _safe_topic or source_dir.name
+        else:
+            folder_name = source_dir.name
+        proj = ROOT / "projects" / folder_name
     else:
         raise ValueError("Either source_dir or project_dir must be provided")
 
@@ -422,6 +430,7 @@ async def run_pipeline(
             duration_max=duration_max,
             master_prompt_path=master_prompt or None,
             image_style=image_style or "",
+            custom_topic=custom_topic or "",
         )
 
         if not dry_run:

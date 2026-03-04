@@ -52,7 +52,7 @@ log = setup_logging("image_validator")
 
 VOIDAI_BASE    = "https://api.voidai.app/v1"
 WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3"
-WS_T2I_PATH    = "/wavespeed-ai/z-image/turbo"
+WS_T2I_PATH    = "/wavespeed-ai/flux-dev-ultra-fast"  # z-image/turbo deprecated
 
 SCORE_MODEL      = "gpt-4.1"        # vision model
 VOIDAI_IMG_MODEL = "gpt-image-1.5"  # fallback image gen when WaveSpeed fails
@@ -126,6 +126,7 @@ class ImageValidationResult:
                     "score": s.score,
                     "ok": s.ok,
                     "reason": s.reason,
+                    "improved_prompt": s.improved_prompt,
                     "regenerated": s.regenerated,
                     "attempts": s.attempts,
                     "skipped": s.skipped,
@@ -230,53 +231,88 @@ async def _wavespeed_generate(
 
     Returns True on success.
     """
-    # ── Hold semaphore only for POST (task initiation) ──
+    img_url: str | None = None
+    task_id: str | None = None
+
+    # ── POST to flux-dev-ultra-fast (with sync mode — result may arrive immediately) ──
     try:
         async with sem:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     f"{WAVESPEED_BASE}{WS_T2I_PATH}",
                     headers={
                         "Authorization": f"Bearer {ws_key}",
                         "Content-Type": "application/json",
                     },
-                    json={"prompt": prompt, "size": "1024x576", "num_images": 1},
+                    json={
+                        "prompt": prompt,
+                        "size": "1024x576",
+                        "num_inference_steps": 28,
+                        "guidance_scale": 3.5,
+                        "output_format": "png",
+                        "enable_sync_mode": True,
+                    },
                 )
                 resp.raise_for_status()
-                task_id = resp.json()["data"]["id"]
+                rdata = resp.json()
+                # Sync mode: outputs may be in direct response
+                data    = rdata.get("data", {})
+                outputs = data.get("outputs") or rdata.get("outputs", [])
+                if outputs:
+                    img_url = outputs[0]
+                    log.debug("WaveSpeed regen: sync response received")
+                else:
+                    task_id = data.get("id") or data.get("task_id") or rdata.get("id")
     except Exception as exc:
-        log.warning("WaveSpeed POST failed: %s", exc)
+        log.warning("WaveSpeed regen POST failed: %s", exc)
         return False
 
-    # ── Poll OUTSIDE semaphore — doesn't consume API slots while waiting ──
+    # ── Poll if task is async (fallback) ──
+    if img_url is None and task_id:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                for _ in range(WS_POLL_MAX):
+                    await asyncio.sleep(WS_POLL_INTERVAL)
+                    poll = await client.get(
+                        f"{WAVESPEED_BASE}/predictions/{task_id}/result",
+                        headers={"Authorization": f"Bearer {ws_key}"},
+                    )
+                    poll.raise_for_status()
+                    pdata  = poll.json().get("data", {})
+                    status = pdata.get("status", "")
+                    if status == "completed":
+                        outs = pdata.get("outputs", [])
+                        if outs:
+                            img_url = outs[0]
+                        break
+                    if status in ("failed", "error"):
+                        log.warning("WaveSpeed regen task %s %s: %s", task_id, status, pdata)
+                        return False
+        except Exception as exc:
+            log.warning("WaveSpeed regen poll failed (task=%s): %s", task_id, exc)
+            return False
+
+    if not img_url:
+        log.warning("WaveSpeed regen: no image URL obtained (task=%s)", task_id)
+        return False
+
+    # ── Download and verify ──
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            for _ in range(WS_POLL_MAX):
-                await asyncio.sleep(WS_POLL_INTERVAL)
-                poll = await client.get(
-                    f"{WAVESPEED_BASE}/predictions/{task_id}/result",
-                    headers={"Authorization": f"Bearer {ws_key}"},
-                )
-                poll.raise_for_status()
-                pdata  = poll.json()["data"]
-                status = pdata.get("status", "")
-
-                if status == "completed":
-                    img_url = pdata["outputs"][0]
-                    dl = await client.get(img_url, timeout=60)
-                    dl.raise_for_status()
-                    output_path.write_bytes(dl.content)
-                    return True
-
-                if status in ("failed", "error"):
-                    log.warning("WaveSpeed task %s failed: %s", task_id, pdata)
-                    return False
+        async with httpx.AsyncClient(timeout=60) as dl:
+            dresp = await dl.get(img_url)
+            dresp.raise_for_status()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(dresp.content)
+        saved_size = output_path.stat().st_size
+        if saved_size < MIN_IMAGE_BYTES:
+            log.warning("WaveSpeed regen download too small (%d bytes) — discarding", saved_size)
+            output_path.unlink(missing_ok=True)
+            return False
+        log.debug("WaveSpeed regen saved: %s (%d bytes)", output_path.name, saved_size)
+        return True
     except Exception as exc:
-        log.warning("WaveSpeed poll/download failed (task=%s): %s", task_id, exc)
+        log.warning("WaveSpeed regen download failed: %s", exc)
         return False
-
-    log.warning("WaveSpeed task %s timed out after %d polls", task_id, WS_POLL_MAX)
-    return False  # timeout
 
 
 async def _voidai_generate(
@@ -383,7 +419,7 @@ async def validate_and_fix_images(
     for b in all_blocks:
         bid        = b.get("id", "")
         btype      = b.get("type", "section")
-        has_prompt = bool((b.get("image_prompt") or "").strip())
+        has_prompt = bool((b.get("image_prompt") or "").strip()) or bool(b.get("image_prompts"))
         img_path   = images_dir / f"{bid}.png"
 
         # CTA blocks with no image prompt are expected — skip silently
@@ -419,9 +455,13 @@ async def validate_and_fix_images(
         )
 
         async def _preregen_one(block: dict) -> bool:
-            """Generate image for a block using its original image_prompt."""
+            """Generate image for a block using its original image_prompt (or first of image_prompts)."""
             bid_        = block.get("id", "")
+            # Use image_prompt (singular) first; fall back to first entry of image_prompts (plural)
             prompt_     = (block.get("image_prompt") or "").strip()
+            if not prompt_:
+                _prompts_list = block.get("image_prompts") or []
+                prompt_ = (_prompts_list[0] or "").strip() if _prompts_list else ""
             full_prompt = f"{prompt_}, {image_style}"
             img_path_   = images_dir / f"{bid_}.png"
             if ws_key:
@@ -528,7 +568,22 @@ async def validate_and_fix_images(
 
         return block_scores
 
-    scored_nested = await asyncio.gather(*[_score_one(b) for b in blocks_to_score])
+    scored_nested_raw = await asyncio.gather(
+        *[_score_one(b) for b in blocks_to_score],
+        return_exceptions=True,
+    )
+    # Handle per-block exceptions gracefully — mark whole block as skipped
+    scored_nested: list[list[ImageScore]] = []
+    for _b, _res in zip(blocks_to_score, scored_nested_raw):
+        if isinstance(_res, BaseException):
+            _bid = _b.get("id", "?")
+            log.warning("_score_one(%s) raised unexpectedly: %s — block skipped", _bid, _res)
+            scored_nested.append([ImageScore(
+                block_id=_bid, score=0.0, ok=False,
+                skipped=True, skip_reason=f"Unexpected scoring error: {_res}",
+            )])
+        else:
+            scored_nested.append(_res)
     # Flatten list[list[ImageScore]] → list[ImageScore]
     scored_list: list[ImageScore] = [s for sublist in scored_nested for s in sublist]
     result.scores.extend(scored_list)

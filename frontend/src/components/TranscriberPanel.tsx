@@ -3,8 +3,10 @@
  *
  * Основний flow:
  *   1. Вставити YouTube URL (або кілька)
- *   2. Вибрати опції (мова, якість, auto-pipeline)
+ *   2. Вибрати мову (опційно) та Auto-pipeline
  *   3. Натиснути Start — VideoForge сам качає, транскрибує, запускає пайплайн
+ *      Всі налаштування пайплайну (якість, тривалість, стиль тощо)
+ *      беруться з Pipeline форми нижче.
  *
  * Альтернативний flow (зовнішній Transcriber):
  *   - Кнопка "Open Transcriber" → відкриває окреме вікно Transcriber GUI
@@ -18,15 +20,27 @@ import {
   type TranscriberOutput,
 } from '../api'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Pipeline settings type (subset of PipelineRunRequest) ─────────────────────
 
-const QUALITY_OPTS = [
-  { value: 'max',      label: 'Max',      desc: 'claude-opus-4-6' },
-  { value: 'high',     label: 'High',     desc: 'claude-sonnet-4-5' },
-  { value: 'balanced', label: 'Balanced', desc: 'gpt-5.2' },
-  { value: 'bulk',     label: 'Bulk',     desc: 'deepseek-v3.1' },
-  { value: 'test',     label: 'Test',     desc: 'mistral-small' },
-]
+export interface PipelineSettings {
+  channel: string
+  quality: string
+  template: string
+  draft: boolean
+  dry_run: boolean
+  background_music: boolean
+  skip_thumbnail: boolean
+  image_style: string
+  voice_id: string
+  master_prompt: string | null
+  duration_min: number
+  duration_max: number
+  music_volume: number | null
+  no_ken_burns?: boolean
+  custom_topic?: string
+}
+
+// ── Status colors ─────────────────────────────────────────────────────────────
 
 const STATUS_COLOR: Record<string, string> = {
   queued:  'bg-yellow-900 text-yellow-300',
@@ -116,18 +130,14 @@ function JobCard({
 
 interface Props {
   onSelectDir: (dir: string) => void
+  pipelineSettings: PipelineSettings
 }
 
-export function TranscriberPanel({ onSelectDir }: Props) {
-  // Form
+export function TranscriberPanel({ onSelectDir, pipelineSettings }: Props) {
+  // Form — тільки те що унікально для транскрибатора
   const [urls, setUrls]             = useState('')
   const [language, setLanguage]     = useState('')
-  const [quality, setQuality]       = useState('max')
-  const [channel, setChannel]       = useState('config/channels/history.json')
   const [autoPipeline, setAutoPipeline] = useState(false)
-  const [skipThumbnail, setSkipThumbnail] = useState(false)
-  const [durationMin, setDurationMin] = useState(8)
-  const [durationMax, setDurationMax] = useState(12)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError]   = useState('')
 
@@ -154,13 +164,23 @@ export function TranscriberPanel({ onSelectDir }: Props) {
       for (const url of lines) {
         const res = await api.transcribe.start({
           url,
-          language:       language || undefined,
-          auto_pipeline:  autoPipeline,
-          channel,
-          quality,
-          duration_min:   durationMin,
-          duration_max:   durationMax,
-          skip_thumbnail: skipThumbnail,
+          language:         language || undefined,
+          auto_pipeline:    autoPipeline,
+          // Pipeline settings — всі беруться з Pipeline форми
+          channel:          pipelineSettings.channel,
+          quality:          pipelineSettings.quality,
+          template:         pipelineSettings.template,
+          draft:            pipelineSettings.draft,
+          dry_run:          pipelineSettings.dry_run,
+          background_music: pipelineSettings.background_music,
+          skip_thumbnail:   pipelineSettings.skip_thumbnail,
+          image_style:      pipelineSettings.image_style || undefined,
+          voice_id:         pipelineSettings.voice_id || undefined,
+          master_prompt:    pipelineSettings.master_prompt || undefined,
+          duration_min:     pipelineSettings.duration_min,
+          duration_max:     pipelineSettings.duration_max,
+          music_volume:     pipelineSettings.music_volume,
+          custom_topic:     pipelineSettings.custom_topic || undefined,
         })
         newJobs.push({
           job_id: res.job_id,
@@ -187,8 +207,8 @@ export function TranscriberPanel({ onSelectDir }: Props) {
   }
 
   function handleJobDone(dir: string) {
-    // If auto_pipeline is off — fill Jobs form source_dir
-    if (!autoPipeline) onSelectDir(dir)
+    // Always fill Source Dir — user sees project path regardless of auto_pipeline
+    onSelectDir(dir)
   }
 
   return (
@@ -227,7 +247,7 @@ export function TranscriberPanel({ onSelectDir }: Props) {
               />
             </label>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="flex flex-wrap items-end gap-4">
               {/* Language */}
               <label className="space-y-1">
                 <span className="text-xs text-gray-400">Мова (auto якщо порожньо)</span>
@@ -235,38 +255,12 @@ export function TranscriberPanel({ onSelectDir }: Props) {
                   value={language}
                   onChange={e => setLanguage(e.target.value)}
                   placeholder="uk / en / de…"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
-                />
-              </label>
-
-              {/* Quality */}
-              <label className="space-y-1">
-                <span className="text-xs text-gray-400">Якість LLM</span>
-                <select
-                  value={quality}
-                  onChange={e => setQuality(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
-                >
-                  {QUALITY_OPTS.map(o => (
-                    <option key={o.value} value={o.value}>
-                      {o.label} — {o.desc}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {/* Channel */}
-              <label className="space-y-1">
-                <span className="text-xs text-gray-400">Channel config</span>
-                <input
-                  value={channel}
-                  onChange={e => setChannel(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                  className="w-36 bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
                 />
               </label>
 
               {/* Auto-pipeline toggle */}
-              <div className="flex flex-col justify-end gap-1 pb-0.5">
+              <div className="flex flex-col gap-1 pb-0.5">
                 <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                   <input
                     type="checkbox"
@@ -278,56 +272,11 @@ export function TranscriberPanel({ onSelectDir }: Props) {
                 </label>
                 <span className="text-xs text-gray-500 leading-tight">
                   {autoPipeline
-                    ? 'Запускає пайплайн одразу після транскрипції'
-                    : 'Підставляє шлях у форму Jobs вручну'}
+                    ? `Запустить пайплайн одразу (${pipelineSettings.quality}, ${pipelineSettings.duration_min}–${pipelineSettings.duration_max} хв)`
+                    : 'Підставить шлях у Pipeline форму'}
                 </span>
               </div>
             </div>
-
-            {/* Skip thumbnail — visible only when auto-pipeline is ON */}
-            {autoPipeline && (
-              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={skipThumbnail}
-                  onChange={e => setSkipThumbnail(e.target.checked)}
-                  className="accent-blue-500"
-                />
-                <span>Skip thumbnail</span>
-                <span className="text-xs text-gray-500">Пропустити генерацію thumbnail (Step 5)</span>
-              </label>
-            )}
-
-            {/* Duration range — visible only when auto-pipeline is ON */}
-            {autoPipeline && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 shrink-0">Тривалість (хв):</span>
-                <span className="text-xs text-gray-500 shrink-0">від</span>
-                <input
-                  type="number" min="1" max="240" step="1"
-                  value={durationMin}
-                  onChange={e => {
-                    const v = Math.max(1, parseInt(e.target.value) || 1)
-                    setDurationMin(v)
-                    setDurationMax(prev => Math.max(prev, v))
-                  }}
-                  className="w-16 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
-                />
-                <span className="text-xs text-gray-500 shrink-0">до</span>
-                <input
-                  type="number" min="1" max="240" step="1"
-                  value={durationMax}
-                  onChange={e => {
-                    const v = Math.max(durationMin, parseInt(e.target.value) || durationMin)
-                    setDurationMax(v)
-                  }}
-                  className="w-16 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500 text-center"
-                />
-                <span className="text-xs text-gray-500">
-                  ≈ {durationMin * 140}–{durationMax * 150} слів
-                </span>
-              </div>
-            )}
 
             {formError && (
               <div className="text-xs text-red-300 bg-red-950 rounded p-2">{formError}</div>

@@ -250,9 +250,9 @@ def _image_for_segment(
         if len(set(assignments)) == n:
             return image_list[assignments[seg_idx]]
 
-    # Fallback: modulo cycling — guaranteed no consecutive duplicates for n ≥ 2
-    # (e.g. 2 imgs × 3 segs → [0,1,0] instead of floor-division [0,0,1])
-    return image_list[seg_idx % n]
+    # Fallback: even distribution — each image gets a contiguous block of segments.
+    # (e.g. 2 imgs × 6 segs → [0,0,0,1,1,1] instead of alternating [0,1,0,1,0,1])
+    return image_list[seg_idx * n // n_segments]
 
 
 def _animation_for_block(

@@ -21,6 +21,7 @@ CLI:
 
 import asyncio
 import json
+import random
 import re
 import sys
 import time
@@ -284,6 +285,7 @@ def _parse_llm_output(
     source_data: dict[str, Any],
     hook_type: str,
     image_style: str = "",
+    custom_topic: str = "",
 ) -> Script:
     """
     Parse LLM narrative output into a Script pydantic model.
@@ -455,6 +457,14 @@ def _parse_llm_output(
                 # Never add raw tag text to narration
                 continue
 
+            # Malformed [SECTION marker (no number+colon+title — continuation artifact).
+            # e.g. "[SECTION" alone on a line when LLM was cut off mid-marker.
+            # The proper regex _SECTION_RE already handled the well-formed case above;
+            # this guard prevents the bare tag from leaking into narration text.
+            if re.match(r"^\[SECTION\b", stripped, re.IGNORECASE) and not _SECTION_RE.match(stripped):
+                log.debug("Skipping malformed [SECTION marker line: %r", stripped)
+                continue
+
             narration_lines.append(stripped)
             # Count words accumulated in narration so far (for image offset tracking)
             _narration_word_count += len(stripped.split()) if stripped.strip() else 0
@@ -473,7 +483,9 @@ def _parse_llm_output(
     # Collect metadata
     meta = source_data.get("metadata") or {}
     thumbnail_prompt_src = source_data.get("thumbnail_prompt") or ""
-    video_title = source_data.get("title") or meta.get("title") or "Untitled"
+    ref_title = source_data.get("title") or meta.get("title") or "Untitled"
+    # Use custom_topic as the video title when provided — reference video title only used as fallback
+    video_title = custom_topic.strip() if custom_topic.strip() else ref_title
     video_desc = source_data.get("description") or meta.get("description") or ""
 
     return Script(
@@ -547,6 +559,7 @@ def _build_user_prompt(
     duration_min: int,
     duration_max: int,
     image_style: str = "",
+    custom_topic: str = "",
 ) -> str:
     """Build user message (transcript + topic + special requests)."""
     language = channel_config.get("language", "en")
@@ -579,11 +592,16 @@ def _build_user_prompt(
 
     special = "\n".join(f"- {r}" for r in requests) if requests else "None"
 
-    # Build new topic string
-    new_topic = title
-    if description:
-        desc_short = description[:300].replace("\n", " ").strip()
-        new_topic += f"\n   Context: {desc_short}"
+    # Build new topic string:
+    # custom_topic (from UI) always wins; fall back to reference video title + description.
+    if custom_topic.strip():
+        new_topic = custom_topic.strip()
+        log.info("Custom topic override: %s", new_topic[:120])
+    else:
+        new_topic = title
+        if description:
+            desc_short = description[:300].replace("\n", " ").strip()
+            new_topic += f"\n   Context: {desc_short}"
 
     # Compute target word count range (140-150 wpm speaking pace)
     target_words_min = duration_min * 140
@@ -891,52 +909,80 @@ async def _call_llm(
                 MAX_SCRIPT_CHUNKS, narration_words, len(full_output),
             )
 
-    # ── CTA repair ───────────────────────────────────────────────────────────
-    # If [CTA_SUBSCRIBE_FINAL] marker is present but its text is truncated
-    # (very short or ends without terminal punctuation), do a targeted repair call.
-    # This handles the case where chunk 2 runs out of tokens mid-CTA.
+    # ── CTA repair / dedup ────────────────────────────────────────────────────
+    # [CTA_SUBSCRIBE_FINAL] can appear multiple times when:
+    #   • LLM echoes the marker mid-output then again at the end
+    #   • Chunk boundary splits mid-marker and model restarts it
+    # Strategy:
+    #   1. Collect ALL explicit marker positions (or fallback to regex match).
+    #   2. Check the LAST occurrence — if truncated (< 80 words, no terminal punct):
+    #      a. Complete copy exists earlier → strip truncated tail. No API call.
+    #      b. No complete copy → repair via targeted API call (original behaviour).
     cta_search = _FINAL_CTA_RE.search(full_output)
     if cta_search:
-        cta_pos = full_output.rfind("[CTA_SUBSCRIBE_FINAL]")
-        if cta_pos == -1:
-            # Matched "Thank you for being here" but no explicit marker — still check
-            cta_pos = cta_search.start()
-        cta_tail = full_output[cta_pos:].rstrip()
-        cta_words = len(cta_tail.split())
-        cta_ends_ok = bool(cta_tail) and cta_tail[-1] in ".!?\""
+        _marker = "[CTA_SUBSCRIBE_FINAL]"
+        all_positions = [m.start() for m in re.finditer(re.escape(_marker), full_output)]
 
-        if cta_words < 80 and not cta_ends_ok:
-            log.warning(
-                "CTA appears truncated (%d words, last char=%r) — requesting repair",
-                cta_words, cta_tail[-1] if cta_tail else "",
-            )
-            repair_tail = full_output[-1_500:]
-            repair_instruction = (
-                f"The previous response was cut off during the final CTA (hit token limit). "
-                f"Here is exactly where it ended:\n```\n{repair_tail}\n```\n\n"
-                f"Complete ONLY the [CTA_SUBSCRIBE_FINAL] section — pick up exactly where it was "
-                f"cut and finish it naturally. "
-                f"End the CTA with: 'Thank you for being here. I will see you in the next one.'\n"
-                f"Do NOT repeat any narration that came before the CTA."
-            )
-            try:
-                repair_chunk = await voidai_client.chat_completion(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{user_prompt}\n\n{repair_instruction}"},
-                    ],
-                    temperature=temperature,
-                    max_tokens=500,
-                )
-                # Replace the truncated CTA section with the repaired version
-                full_output = full_output[:cta_pos].rstrip() + "\n\n" + repair_chunk.strip()
+        if not all_positions:
+            # "Thank you for being here" matched but no explicit marker
+            all_positions = [cta_search.start()]
+
+        last_pos  = all_positions[-1]
+        last_tail = full_output[last_pos:].rstrip()
+        last_words    = len(last_tail.split())
+        last_ends_ok  = bool(last_tail) and last_tail[-1] in ".!?\""
+
+        if last_words < 80 and not last_ends_ok:
+            # Last CTA section looks truncated.
+            # Check whether a complete CTA section exists at an earlier position.
+            earlier_complete: int | None = None
+            for pos in reversed(all_positions[:-1]):   # all positions except the last
+                tail = full_output[pos:].rstrip()
+                if len(tail.split()) >= 80 or (tail and tail[-1] in ".!?\""):
+                    earlier_complete = pos
+                    break
+
+            if earlier_complete is not None:
+                # A complete CTA already exists — just strip the truncated duplicate tail.
                 log.info(
-                    "CTA repaired: %d chars added (total output now %d words)",
-                    len(repair_chunk), len(full_output.split()),
+                    "CTA last occurrence truncated (%d words, last=%r) — "
+                    "complete copy found at earlier position; stripping duplicate tail",
+                    last_words, last_tail[-1] if last_tail else "",
                 )
-            except Exception as exc:
-                log.warning("CTA repair call failed (%s: %s) — keeping truncated CTA", type(exc).__name__, exc)
+                full_output = full_output[:last_pos].rstrip()
+            else:
+                # Only one (truncated) CTA — do targeted repair via API.
+                log.warning(
+                    "CTA appears truncated (%d words, last char=%r) — requesting repair",
+                    last_words, last_tail[-1] if last_tail else "",
+                )
+                repair_tail = full_output[-1_500:]
+                repair_instruction = (
+                    f"The previous response was cut off during the final CTA (hit token limit). "
+                    f"Here is exactly where it ended:\n```\n{repair_tail}\n```\n\n"
+                    f"Complete ONLY the [CTA_SUBSCRIBE_FINAL] section — pick up exactly where it was "
+                    f"cut and finish it naturally. "
+                    f"End the CTA with: 'Thank you for being here. I will see you in the next one.'\n"
+                    f"Do NOT repeat any narration that came before the CTA."
+                )
+                try:
+                    repair_chunk = await voidai_client.chat_completion(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"{user_prompt}\n\n{repair_instruction}"},
+                        ],
+                        temperature=temperature,
+                        max_tokens=500,
+                    )
+                    # Replace the truncated CTA section with the repaired version
+                    full_output = full_output[:last_pos].rstrip() + "\n\n" + repair_chunk.strip()
+                    log.info(
+                        "CTA repaired: %d chars added (total output now %d words)",
+                        len(repair_chunk), len(full_output.split()),
+                    )
+                except Exception as exc:
+                    log.warning("CTA repair call failed (%s: %s) — keeping truncated CTA", type(exc).__name__, exc)
 
     final_words = len(full_output.split())
     log.info(
@@ -958,12 +1004,14 @@ async def _generate_one_variant(
     do_validate: bool = True,
     temperature: float = 0.7,
     image_style: str = "",
+    custom_topic: str = "",
 ) -> Script:
     """Generate and optionally validate a single script variant."""
     system_prompt = _build_system_prompt(channel_config)
     user_prompt = _build_user_prompt(
         source_data, channel_config, template, hook_type, duration_min, duration_max,
         image_style=image_style,
+        custom_topic=custom_topic,
     )
 
     log.info(
@@ -987,7 +1035,7 @@ async def _generate_one_variant(
     except Exception:
         pass
 
-    script = _parse_llm_output(raw, channel_config, source_data, hook_type, image_style=image_style)
+    script = _parse_llm_output(raw, channel_config, source_data, hook_type, image_style=image_style, custom_topic=custom_topic)
     # Store target duration range in script metadata
     script = script.model_copy(update={"duration_min": duration_min, "duration_max": duration_max})
     log.info("Parsed %d blocks from LLM output", len(script.blocks))
@@ -1006,8 +1054,9 @@ async def _generate_one_variant(
     niche = channel_config.get("niche", "")
     audience = channel_config.get("target_audience", "")
     # Pass the actual video topic so validator evaluates CLARITY against the specific
-    # content, not just the channel niche (e.g. niche="history" but topic="Carl Jung shadow work")
-    topic = source_data.get("title", "")
+    # content, not just the channel niche (e.g. niche="history" but topic="Carl Jung shadow work").
+    # custom_topic wins over reference title when provided.
+    topic = custom_topic.strip() if custom_topic.strip() else source_data.get("title", "")
 
     # Hook pass threshold: 4/4 criteria required.
     # CLARITY allows Context Lean-In (topic clear by sentence 4-5, not sentence 1-2).
@@ -1153,6 +1202,7 @@ async def generate_scripts(
     no_validate: bool = False,
     master_prompt_path: str | None = None,
     image_style: str = "",
+    custom_topic: str = "",
 ) -> list[Path]:
     """
     Generate script(s) from Transcriber output.
@@ -1192,9 +1242,11 @@ async def generate_scripts(
     # Resolve hook type
     if hook_type == "auto":
         hooks_cfg = channel_config.get("hooks", {})
-        per_template = hooks_cfg.get("per_template", HOOK_PER_TEMPLATE)
-        hook_type = per_template.get(template, "curiosity")
-    log.info("Hook type: %s", hook_type)
+        allowed = hooks_cfg.get("allowed_types", list(HOOK_INSTRUCTIONS.keys()))
+        hook_type = random.choice(allowed)
+        log.info("Hook type: %s (randomly selected from %s)", hook_type, allowed)
+    else:
+        log.info("Hook type: %s (explicit)", hook_type)
 
     # Resolve LLM model
     llm_preset = get_llm_preset(channel_config, preset)
@@ -1222,8 +1274,8 @@ async def generate_scripts(
 
     async with VoidAIClient() as voidai:
         for i in range(compare):
-            # Slightly vary temperature for multiple variants
-            temperature = 0.7 + (i * 0.05)
+            # Higher base temperature for hook creativity + slight variance per variant
+            temperature = 0.9 + (i * 0.05)
 
             log.info(
                 "Generating variant %d/%d (temperature=%.2f)...", i + 1, compare, temperature
@@ -1241,6 +1293,7 @@ async def generate_scripts(
                 do_validate=not no_validate,
                 temperature=temperature,
                 image_style=image_style,
+                custom_topic=custom_topic,
             )
 
             # Determine output filename
@@ -1366,6 +1419,12 @@ Examples:
         action="store_true",
         help="Skip hook validation (faster, but no intro quality check)",
     )
+    parser.add_argument(
+        "--custom-topic",
+        default="",
+        dest="custom_topic",
+        help="Override video topic for the script (reference video used as structural template only)",
+    )
 
     args = parser.parse_args()
 
@@ -1396,6 +1455,7 @@ Examples:
         duration_min=resolved_min,
         duration_max=resolved_max,
         no_validate=args.no_validate,
+        custom_topic=args.custom_topic,
     )
 
     elapsed = time.monotonic() - t0

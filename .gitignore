@@ -1,5 +1,11 @@
 .env
 *.env.local
+config/oauth2/
+config/client_secrets.json
+data/
+nul
+.claude/settings.local.json
+.claude/launch.json
 projects/
 __pycache__/
 *.py[cod]

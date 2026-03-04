@@ -32,7 +32,7 @@ log = setup_logging("wavespeed")
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://api.wavespeed.ai/api/v3"
-T2I_ENDPOINT = "/wavespeed-ai/z-image/turbo"
+T2I_ENDPOINT = "/wavespeed-ai/flux-dev-ultra-fast"          # z-image/turbo deprecated (requires image+audio now)
 I2I_ENDPOINT = "/wavespeed-ai/z-image-turbo/image-to-image"
 UPLOAD_ENDPOINT = "/media/upload/binary"
 POLL_ENDPOINT = "/predictions/{task_id}/result"
@@ -251,16 +251,22 @@ class WaveSpeedClient:
     # ─── Image download ───────────────────────────────────────────────────────
 
     async def _download(self, image_url: str, output_path: Path) -> Path:
-        """Download an image URL to a local file."""
+        """Download an image URL to a local file and verify it is non-empty."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
         async with httpx.AsyncClient(timeout=60.0) as dl:
             resp = await dl.get(image_url)
             resp.raise_for_status()
             output_path.write_bytes(resp.content)
-        log.debug("Image saved: %s (%d bytes)", output_path, output_path.stat().st_size)
+        saved_size = output_path.stat().st_size
+        if saved_size < 5_000:  # 5 KB minimum — image gen should always produce >50 KB
+            output_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Downloaded image too small ({saved_size} bytes) — likely an error response, not an image"
+            )
+        log.debug("Image saved: %s (%d bytes)", output_path, saved_size)
         return output_path
 
-    def _track(self, model: str = "z-image/turbo") -> None:
+    def _track(self, model: str = "flux-dev-ultra-fast") -> None:
         self._session_cost += COST_PER_IMAGE
         self._session_images += 1
         log.info(
@@ -276,8 +282,8 @@ class WaveSpeedClient:
         *,
         size: str = DEFAULT_SIZE,
         seed: int | None = None,
-        num_inference_steps: int = 4,
-        guidance_scale: float = 1.0,
+        num_inference_steps: int = 28,   # flux-dev-ultra-fast optimal (was 4 for z-image/turbo)
+        guidance_scale: float = 3.5,     # flux-dev-ultra-fast optimal (was 1.0 for z-image/turbo)
         output_path: str | Path | None = None,
     ) -> str:
         """
@@ -297,12 +303,14 @@ class WaveSpeedClient:
         if size not in VALID_SIZES:
             log.warning("Size '%s' may not be supported. Supported: %s", size, VALID_SIZES)
 
+        # flux-dev-ultra-fast payload (confirmed working from Thumbnail Analyzer)
         payload: dict[str, Any] = {
             "prompt": prompt,
             "size": size,
             "num_inference_steps": num_inference_steps,
             "guidance_scale": guidance_scale,
-            "enable_safety_checker": False,
+            "output_format": "png",
+            "enable_sync_mode": True,
         }
         if seed is not None:
             payload["seed"] = seed

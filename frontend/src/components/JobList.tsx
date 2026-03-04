@@ -99,6 +99,7 @@ type PFormState = PipelineRunRequest & {
   duration_max: number      // override optional → required
   master_prompt: string | null  // override optional → string | null
   music_volume: number | null
+  custom_topic: string      // topic override for script generation
 }
 
 export function JobList() {
@@ -128,6 +129,7 @@ export function JobList() {
     duration_max:     12,
     music_volume:     null,
     music_track:      null,
+    custom_topic:     '',
   })
 
   const [bForm, setBForm] = useState<BatchRunRequest>({
@@ -236,6 +238,7 @@ export function JobList() {
       // image_style is always sent (required field)
       if (!payload.voice_id)            delete payload.voice_id
       if (payload.music_volume == null) delete payload.music_volume
+      if (!payload.custom_topic)        delete payload.custom_topic
       await api.pipeline.run(payload as unknown as PipelineRunRequest)
       await loadJobs()
     } catch (err) {
@@ -307,6 +310,20 @@ export function JobList() {
                   updateSourceDir(e.clipboardData.getData('text').trim())
                 }}
                 placeholder="D:/transscript batch/output/output/Video Title"
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
+              />
+            </label>
+
+            {/* Video topic */}
+            <label className="space-y-1 block">
+              <span className="text-xs text-gray-400">
+                Тема відео
+                <Tip text="Тема нового відео. Якщо вказано — LLM пише сценарій на цю тему, використовуючи референс тільки як структурний зразок. Порожньо = тема береться з назви референс-відео." />
+              </span>
+              <input
+                value={pForm.custom_topic}
+                onChange={(e) => setPForm({ ...pForm, custom_topic: e.target.value })}
+                placeholder="Наприклад: Як Стоїцизм рятує від тривоги"
                 className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
               />
             </label>

@@ -4,6 +4,141 @@
 
 ---
 
+## 2026-03-04 — YouTube Channel Branding API (08c_channel_setup.py)
+
+### Питання
+Що можна автоматично налаштувати на YouTube каналі через API?
+
+### Відповідь (YouTube Data API v3)
+| Параметр | API | Метод |
+|----------|-----|-------|
+| Назва каналу | ❌ Тільки Studio | — |
+| Аватарка | ❌ Тільки Studio | — |
+| Опис | ✅ | `channels.update` → `brandingSettings.channel.description` |
+| Теги/ключові слова | ✅ | `channels.update` → `brandingSettings.channel.keywords` |
+| Країна | ✅ | `channels.update` → `brandingSettings.channel.country` |
+| Банер | ✅ | `channelBanners.insert` → URL → `channels.update` |
+| Трейлер | ✅ | `channels.update` → `brandingSettings.channel.unsubscribedTrailer` |
+
+### Виконано
+- **`modules/08c_channel_setup.py`** — новий модуль:
+  - Зчитує `branding` секцію з channel_config.json (або CLI overrides)
+  - `_format_keywords()` — multi-word теги автоматично цитуються (world history → "world history")
+  - `_upload_banner()` — розмір/формат валідація + `channelBanners.insert`
+  - `apply_branding()` — один `channels.update` call (description + keywords + country + trailer + banner URL)
+  - `--dry-run` — preview без API calls ✅
+- **`config/channels/history.json`** — додано `branding` секцію з description/keywords/country/banner_path/trailer_video_id
+- Dry-run тест: channel ID = UCwqSQyUBCocTpV0SPKwNuIg, всі поля відображаються коректно ✅
+
+### Файли
+- `modules/08c_channel_setup.py` (новий)
+- `config/channels/history.json` (+branding секція)
+
+### CLI
+```
+python modules/08c_channel_setup.py --channel config/channels/history.json --channel-name main
+python modules/08c_channel_setup.py --channel config/channels/history.json --channel-name main --dry-run
+```
+
+---
+
+## 2026-03-04 — Research: YouTube Data API v3 Python upload (web search)
+
+### Запит
+Веб-пошук + GitHub-аналіз рішень для модуля YouTube upload (module 08).
+
+### Ключові результати
+- **Quota cost**: `videos.insert` = **100 units** (знижено з 1600); default 10K units/day → ~100 uploads/day
+- **Unverified app (post-2020)**: відео стають `private` автоматично → потрібен API Compliance Audit або Production mode
+- **OAuth refresh token**: expires 7 days якщо app у "Testing" mode → fix: змінити на "In production" в Google Console
+- **Service accounts**: НЕ працюють з YouTube API → тільки OAuth per-channel
+- **Multi-channel**: один `credentials.json` + окремий `token_{channel}.pickle` per channel
+- **Async**: `google-api-python-client` не підтримує httpx/async нативно → для async треба реалізувати resumable upload вручну через httpx
+- **Scheduling**: `publishAt` ISO8601 UTC + `privacyStatus="private"` → відео публікується автоматично
+
+### Топ бібліотеки
+- [tokland/youtube-upload](https://github.com/tokland/youtube-upload) — 2.2K stars, CLI, `--credentials-file` multi-channel, не підтримується з 2020
+- [pillargg/youtube-upload](https://github.com/pillargg/youtube-upload) — 108 stars, archived 2023, token-based auth
+- [youtube/api-samples](https://github.com/youtube/api-samples) — офіційний Google sample, Python 2.x (застарілий)
+- `google-api-python-client` — офіційна lib, sync, достатньо для CLI
+
+### Наступні кроки
+- Модуль 08 вже написаний (`modules/08_youtube_uploader.py`) — перевірити що використовує `google-api-python-client` + `InstalledAppFlow` + per-channel token.json
+- Перевірити: чи app у "In production" в Google Console (щоб refresh token не вмирав через 7 днів)
+
+---
+
+## 2026-03-04 — Дебаг custom_topic: title fix + папка проекту
+
+### Дебаг live генерації (job a757a478)
+- Запущено pipeline step 1 через API з custom_topic='7 Signs a Man Has Reached the Sophia Stage (The Most DANGEROUS Divine Masculine)'
+- Знайдено: `__NEW TOPIC__` ПРАВИЛЬНО потрапляє в промпт LLM (`_build_user_prompt` working)
+- Проблема 1: script.json title = назва референс-відео → root cause: `_parse_llm_output()` завжди брав `source_data.get("title")`
+- Проблема 2: вміст не "7 Signs" структура → template='auto'→'documentary'; для listicle треба template='listicle'
+
+### Виконано
+- `modules/01_script_generator.py` — `_parse_llm_output()` додано `custom_topic: str = ""` параметр; `video_title = custom_topic.strip() if custom_topic.strip() else ref_title`; виклик передає `custom_topic=custom_topic`
+- Демо: WITHOUT → title=reference video title, WITH → title='7 Signs a Man Has Reached the Sophia Stage...' ✅
+- `pipeline.py` + `backend/job_manager.py` — fix назви папки проекту (набуде сили після рестарту)
+
+### Важливо
+- `_module_cache` в pipeline.py кешує 01_script_generator.py → потрібен рестарт сервера
+- Правильний endpoint для поллінгу: `/api/jobs/{job_id}` (не `/api/pipeline/{job_id}`)
+
+### Наступні кроки
+- Рестарт backend сервера → тест Step 1, custom_topic='7 Signs...', template='listicle'
+- git commit
+
+---
+
+## 2026-03-04 — Відповіді на 3 питання + fix папки custom_topic
+
+### Питання користувача
+1. **Чому не зупинилось на генерації сценарію?** — Transcriber auto-pipeline завжди запускає всі 6 кроків (to_step дефолт=6). Щоб зупинитись на кроці 1 — треба використати Single Video форму і вибрати Steps "1 Script" (from=1, to=1). В Transcriber панелі step range поки відсутній.
+2. **Чому назва папки ≠ темі відео?** — `project_dir = ROOT/"projects"/source_dir.name` завжди використовував назву референс-відео. custom_topic впливав тільки на промпт LLM. ВИПРАВЛЕНО (нижче).
+3. **На яку тему останній сценарій?** — "The Illusion of Free Will - Carl Jung's Darkest Truth" (тема референс-відео). custom_topic поле ВІДСУТНЄ в script.json → пайплайн запустився через Transcriber auto-pipeline до того як фікс був задеплоєний.
+
+### Fix: назва папки = custom_topic (якщо вказано)
+- `pipeline.py` — додано `import re`; блок "Resolve project directory": якщо `custom_topic.strip()` → `folder_name = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200]`, інакше `folder_name = source_dir.name`
+- `backend/job_manager.py` — додано `import re`; в `_run_pipeline_job` DB tracking: аналогічна логіка для `project_dir=ROOT / "projects" / _folder`
+
+### Підтверджено що вже реалізовано (план з попередньої сесії)
+- `_image_for_segment()` fix — вже в 05_video_compiler.py (pre-compute all assignments + modulo fallback)
+- Subtitles checkbox — вже в усіх 5 файлах (models.py, routes/pipeline.py, pipeline.py, api.ts, JobList.tsx)
+
+### Файли
+- `pipeline.py`, `backend/job_manager.py`
+
+### Наступні кроки
+- git commit
+- Тест: запустити з custom_topic → перевірити що папка `projects/7 Signs a Man...` створилась
+
+---
+
+## 2026-03-04 — SILENT ANALYSIS audit + custom_topic field
+
+### Аналіз SILENT ANALYSIS FRAMEWORK
+- Фреймворк в master_script_v3.txt добре покриває все що LLM може бачити з тексту (hook mechanics, emotional triggers, retention, audience psychology)
+- Gap: LLM не знає чи відео справді зайшло (немає view count). Виправляти не треба — архітектура правильна (8-Block = success framework сам по собі)
+- Рекомендація: за бажанням передавати `[VIDEO CONTEXT]: ~{view_count} views` в промпт (потребує yt-dlp fetch)
+
+### custom_topic — UI поле для теми нового відео
+- Поле `Тема відео` в UI: якщо заповнене → LLM пише сценарій на нову тему, référence = структурний зразок
+- Порожньо → стара поведінка (тема = назва референс-відео + description)
+- Зміни в 6 файлах:
+  - `modules/01_script_generator.py` — `custom_topic: str = ""` у `_build_user_prompt()`, `_generate_one_variant()`, `generate_scripts()`; hook validation topic = custom_topic ?? source_data.title
+  - `pipeline.py` — `custom_topic: str | None = None` в `run_pipeline()`; передається до `generate_scripts()`
+  - `backend/models.py` — `custom_topic: str | None = Field(None, ...)`
+  - `backend/routes/pipeline.py` — `custom_topic=req.custom_topic` в `manager.start_pipeline()`
+  - `frontend/src/api.ts` — `custom_topic?: string | null` в `PipelineRunRequest`
+  - `frontend/src/components/JobList.tsx` — `custom_topic: string` в PFormState + UI input після Source dir + payload cleanup
+
+### Наступні кроки
+- git commit
+- Тест: запустити pipeline з заповненим полем "Тема відео" → перевірити що `__NEW TOPIC__` в промпті = custom_topic (а не title з metadata.json)
+
+---
+
 ## 2026-03-03 — Fix image preview gray boxes in review UI
 
 ### Причина (2 проблеми)

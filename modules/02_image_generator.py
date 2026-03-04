@@ -44,7 +44,7 @@ log = setup_logging("image_gen")
 VISION_VALIDATOR_MODEL = "gpt-4.1-mini"   # Cheap vision model for quality check
 FALLBACK_IMAGE_MODEL   = "gpt-image-1.5"  # VoidAI fallback if WaveSpeed fails
 DEFAULT_SIZE           = "1280*720"        # WaveSpeed 16:9
-FALLBACK_SIZE          = "1792x1024"       # VoidAI 16:9 (x not *)
+FALLBACK_SIZE          = "1536x1024"       # VoidAI 16:9 — valid size (1792x1024 not supported)
 MAX_VALIDATION_RETRIES = 2                 # Extra attempts if validation fails
 MIN_FILE_SIZE_BYTES    = 5_000            # Files smaller than this are considered corrupt
 
@@ -164,6 +164,7 @@ async def _generate_one(
     skip_existing: bool,
     max_retries: int,
     idx: int = 0,  # image index: 0=primary ({block_id}.png), 1+= additional ({block_id}_N.png)
+    wavespeed_globally_failed: list[bool] | None = None,  # shared mutable flag across coroutines
 ) -> ImageResult:
     """
     Generate one image for a script block.
@@ -175,6 +176,8 @@ async def _generate_one(
     - Attempt 1:   WaveSpeed, seed=42  → validate
     - Attempt 2+:  WaveSpeed, seed=None (random) → validate
     - Any WaveSpeed exception → switch to VoidAI fallback for all remaining attempts
+    - wavespeed_globally_failed: once ANY block hits a WaveSpeed API error, all subsequent
+      blocks skip WaveSpeed entirely and go straight to VoidAI — prevents mass failed charges.
     - After max_retries+1 attempts: accept image regardless of validation score
     """
     block_id = block["id"]
@@ -192,8 +195,9 @@ async def _generate_one(
         log.debug("Block %s[%d]: no image_prompt — skip", block_id, idx)
         return ImageResult(block_id=block_id, order=order, path=None, prompt="", skipped=True)
 
-    # Full prompt = block prompt + channel style suffix
-    full_prompt = f"{raw_prompt}, {image_style}".strip(", ") if image_style else raw_prompt
+    # image_style is already embedded in raw_prompt by the script generator (Step 1 LLM).
+    # Do NOT append it again — single source, UI-provided only.
+    full_prompt = raw_prompt
     out_path = images_dir / _image_output_name(block_id, idx)
 
     # Cache hit
@@ -202,12 +206,25 @@ async def _generate_one(
         return ImageResult(block_id=block_id, order=order, path=str(out_path), prompt=raw_prompt, skipped=True)
 
     result = ImageResult(block_id=block_id, order=order, path=None, prompt=raw_prompt)
-    wavespeed_failed = False
+    # Inherit global failure state — if WaveSpeed is broken for ANY block, skip it for ALL
+    wavespeed_failed = bool(wavespeed_globally_failed and wavespeed_globally_failed[0])
+    if wavespeed_failed:
+        result.fallback_used = True
+        log.debug("Block %s: WaveSpeed globally failed — using VoidAI directly", block_id)
 
     max_attempts = max_retries + 1  # Initial + retries
 
+    # Track the best image across attempts (score + path) so we never discard a
+    # better image when a retry produces something worse — WaveSpeed already
+    # charged for each generation, so we want to keep the best result.
+    best_score: int = -1
+    best_path:  Path | None = None
+
     for attempt in range(1, max_attempts + 1):
         result.attempts = attempt
+
+        # On retries, generate to a temp path so we can compare before overwriting
+        attempt_path = out_path if attempt == 1 else out_path.with_suffix(f".attempt{attempt}.png")
 
         # ── Generate ──
         gen_ok = False
@@ -218,7 +235,7 @@ async def _generate_one(
                     full_prompt,
                     size=size,
                     seed=seed,
-                    output_path=out_path,
+                    output_path=attempt_path,
                 )
                 gen_ok = True
             except Exception as exc:
@@ -228,6 +245,10 @@ async def _generate_one(
                 )
                 wavespeed_failed = True
                 result.fallback_used = True
+                # Mark globally so other concurrent blocks skip WaveSpeed immediately
+                if wavespeed_globally_failed is not None:
+                    wavespeed_globally_failed[0] = True
+                    log.warning("WaveSpeed marked as globally failed — remaining blocks → VoidAI")
 
         if wavespeed_failed:
             try:
@@ -235,13 +256,19 @@ async def _generate_one(
                     full_prompt,
                     model=FALLBACK_IMAGE_MODEL,
                     size=FALLBACK_SIZE,
-                    output_path=out_path,
+                    output_path=attempt_path,
                 )
                 gen_ok = True
             except Exception as exc:
                 log.error("Block %s: VoidAI fallback error (attempt %d): %s", block_id, attempt, exc)
                 if attempt >= max_attempts:
                     result.error = str(exc)
+                    # Keep the best image we have, even if generation failed this attempt
+                    if best_path and best_path.exists():
+                        if best_path != out_path:
+                            import shutil
+                            shutil.move(str(best_path), str(out_path))
+                        result.path = str(out_path)
                     return result
                 continue
 
@@ -249,12 +276,24 @@ async def _generate_one(
             continue
 
         # ── Validate ──
-        if validate and out_path.exists() and out_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
-            ok, issues, score = await _validate_image(out_path, raw_prompt, voidai)
+        if validate and attempt_path.exists() and attempt_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
+            ok, issues, score = await _validate_image(attempt_path, raw_prompt, voidai)
             result.validation_score = score
+
+            # Keep track of the best image seen so far
+            if score > best_score:
+                best_score = score
+                # If this is a retry path, we need to copy/move it as the best candidate
+                if best_path and best_path.exists() and best_path != attempt_path:
+                    best_path.unlink(missing_ok=True)
+                best_path = attempt_path
 
             if ok:
                 log.info("Block %s: OK (score=%d/3, attempt=%d)", block_id, score, attempt)
+                # Move best image to final path if needed
+                if best_path != out_path:
+                    import shutil
+                    shutil.move(str(best_path), str(out_path))
                 result.path = str(out_path)
                 return result
 
@@ -265,25 +304,39 @@ async def _generate_one(
                 )
                 continue
             else:
-                # Last attempt — accept despite failed validation
+                # Last attempt — use the best image we have
                 log.warning(
-                    "Block %s: accepting image despite validation fail (score=%d/3)",
-                    block_id, score,
+                    "Block %s: accepting best image (score=%d/3) after %d attempts",
+                    block_id, best_score, attempt,
                 )
-                result.path = str(out_path)
+                if best_path and best_path.exists():
+                    if best_path != out_path:
+                        import shutil
+                        shutil.move(str(best_path), str(out_path))
+                    result.path = str(out_path)
+                else:
+                    result.error = "all attempts failed validation"
                 return result
         else:
-            # No validation
-            if out_path.exists() and out_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
+            # No validation — accept the generated image as-is
+            if attempt_path.exists() and attempt_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
                 log.info("Block %s: generated (attempt=%d)", block_id, attempt)
+                if attempt_path != out_path:
+                    import shutil
+                    shutil.move(str(attempt_path), str(out_path))
                 result.path = str(out_path)
             else:
                 log.error("Block %s: output file missing or too small after generation", block_id)
                 result.error = "output file missing"
             return result
 
-    # Exhausted all attempts
-    if out_path.exists() and out_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
+    # Exhausted all attempts — use the best image we have
+    if best_path and best_path.exists():
+        if best_path != out_path:
+            import shutil
+            shutil.move(str(best_path), str(out_path))
+        result.path = str(out_path)
+    elif out_path.exists() and out_path.stat().st_size >= MIN_FILE_SIZE_BYTES:
         result.path = str(out_path)
     else:
         result.error = "all attempts exhausted"
@@ -334,7 +387,7 @@ async def generate_images(
 
     blocks: list[dict[str, Any]] = script.get("blocks", [])
     # image_style param overrides channel_config value when provided
-    image_style = image_style if image_style is not None else channel_config.get("image_style", "")
+    image_style = image_style or ""  # UI-provided only; no channel_config fallback
     image_size = size or DEFAULT_SIZE
 
     # Output directory
@@ -403,6 +456,11 @@ async def generate_images(
 
     results: list[ImageResult] = []
 
+    # Shared mutable flag: set to True the moment any WaveSpeed call fails.
+    # All other concurrent coroutines check this and skip WaveSpeed immediately,
+    # preventing a cascade of failed API charges when the endpoint is broken.
+    _ws_global_failed: list[bool] = [False]
+
     async with WaveSpeedClient() as wavespeed, VoidAIClient() as voidai:
         coros = [
             _generate_one(
@@ -416,6 +474,7 @@ async def generate_images(
                 skip_existing=skip_existing,
                 max_retries=max_retries,
                 idx=idx,
+                wavespeed_globally_failed=_ws_global_failed,
             )
             for b, idx in all_jobs
         ]

@@ -8,6 +8,7 @@ progress events to WebSocket subscribers via per-job asyncio.Queues.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -184,6 +185,12 @@ class JobManager:
         db_tracker: VideoTracker | None = None
         db_video_id: int | None = None
         if not dry_run:
+            custom_topic = kwargs.get("custom_topic", "") or ""
+            if custom_topic.strip():
+                _safe = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200].strip(". ")
+                _folder = _safe or source_dir.name
+            else:
+                _folder = source_dir.name
             db_tracker = VideoTracker()
             db_video_id = db_tracker.create_video(
                 source_dir=source_dir,
@@ -191,7 +198,7 @@ class JobManager:
                 quality_preset=kwargs.get("quality", "max"),
                 template=kwargs.get("template", "auto"),
                 from_step=kwargs.get("from_step", 1),
-                project_dir=ROOT / "projects" / source_dir.name,
+                project_dir=ROOT / "projects" / _folder,
             )
             job.db_video_id = db_video_id
 

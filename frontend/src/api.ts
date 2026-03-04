@@ -110,6 +110,7 @@ export interface PipelineRunRequest {
   duration_max?: number | null
   music_volume?: number | null
   music_track?: string | null
+  custom_topic?: string | null
 }
 
 export interface MusicTrack {
@@ -138,6 +139,42 @@ export interface ChannelMeta {
   channel_name: string
   niche: string
   language: string
+  auth_connected: boolean
+  proxy: string
+}
+
+export interface ChannelAuthStatus {
+  channel: string
+  connected: boolean
+  token_file: string | null
+}
+
+export interface BrandingRequest {
+  description?: string | null
+  keywords?: string[] | null
+  country?: string | null
+  banner_path?: string | null
+}
+
+export interface BrandingJob {
+  job_id: string
+  status: 'running' | 'done' | 'failed'
+  channel: string
+  error: string
+}
+
+export interface CompetitorResult {
+  description: string
+  keywords: string[]
+  analysis: string
+  competitors_found: number
+  competitors_failed: number
+}
+
+export interface SecretsStatus {
+  exists: boolean
+  path: string
+  client_id_preview: string
 }
 
 export interface PromptMeta {
@@ -225,6 +262,35 @@ export const api = {
       }),
     delete: (name: string) =>
       req<{ deleted: boolean }>(`/channels/${name}`, { method: 'DELETE' }),
+    // OAuth per-channel
+    authStatus: (name: string) =>
+      req<ChannelAuthStatus>(`/channels/${name}/auth`),
+    authConnect: (name: string) =>
+      req<{ status: string; message: string }>(`/channels/${name}/auth`, { method: 'POST' }),
+    authRevoke: (name: string) =>
+      req<{ status: string }>(`/channels/${name}/auth`, { method: 'DELETE' }),
+    // Branding
+    applyBranding: (name: string, body: BrandingRequest) =>
+      req<BrandingJob>(`/channels/${name}/branding`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    brandingStatus: (name: string, jobId: string) =>
+      req<BrandingJob>(`/channels/${name}/branding/${jobId}`),
+    // Competitor analysis
+    analyzeCompetitors: (name: string, urls: string[]) =>
+      req<CompetitorResult>(`/channels/${name}/analyze-competitors`, {
+        method: 'POST',
+        body: JSON.stringify({ urls }),
+      }),
+    // Shared client_secrets.json
+    secretsStatus: () =>
+      req<SecretsStatus>('/channels/secrets-status'),
+    saveSecrets: (content: string) =>
+      req<{ saved: boolean }>('/channels/secrets', {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      }),
   },
 
   prompts: {
@@ -402,6 +468,7 @@ export interface TranscribeRequest {
   duration_min?: number | null
   duration_max?: number | null
   music_volume?: number | null
+  custom_topic?: string | null
 }
 
 export interface TranscribeJob {

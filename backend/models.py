@@ -38,6 +38,11 @@ class PipelineRunRequest(BaseModel):
         None,
         description="Explicit music track path (absolute). None = channel config random pick.",
     )
+    custom_topic: str | None = Field(
+        None,
+        description="Override topic for the new script (replaces reference video title). "
+                    "Leave empty to use the reference video's title as the topic.",
+    )
 
 
 class BatchRunRequest(BaseModel):

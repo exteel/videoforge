@@ -4,14 +4,15 @@ VideoForge — Module 08: YouTube Uploader.
 output/final.mp4 + output/thumbnail.png + output/metadata.json → YouTube.
 
 OAuth2 flow:
-  - Credentials from env: YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET
-  - Token cached at config/oauth2/token.json (browser auth on first run)
+  - Per-channel tokens stored at config/oauth2/{channel_name}_token.pickle
+  - Shared credentials: config/client_secrets.json (Desktop app OAuth2 client)
+  - First run: browser consent → token saved; subsequent runs: auto-refresh
   - Scopes: youtube.upload + youtube (for thumbnail)
 
 Upload:
   - Resumable upload (handles large video files safely)
   - Thumbnail set after video upload
-  - Immediate: privacyStatus = "public"
+  - Default: privacyStatus = "private" (set publish date manually in Studio)
   - Scheduled: privacyStatus = "private" + publishAt (ISO 8601 UTC)
 
 Scheduling:
@@ -26,16 +27,19 @@ Auto-schedule state stored at: config/oauth2/{channel_name}_schedule.json
 CLI:
     python modules/08_youtube_uploader.py \\
         --script projects/my_video/script.json \\
-        --channel config/channels/history.json
+        --channel config/channels/history.json \\
+        --channel-name main
 
     python modules/08_youtube_uploader.py \\
         --script projects/my_video/script.json \\
         --channel config/channels/history.json \\
+        --channel-name main \\
         --schedule "2026-03-05 18:00"
 
     python modules/08_youtube_uploader.py \\
         --script projects/my_video/script.json \\
         --channel config/channels/history.json \\
+        --channel-name main \\
         --auto-schedule --dry-run
 """
 
@@ -49,25 +53,21 @@ from typing import Any
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from modules.common import load_channel_config, load_env, require_env, setup_logging
+from clients.youtube_auth import get_youtube_service_from_config
+from modules.common import load_channel_config, load_env, setup_logging
 
 log = setup_logging("yt_uploader")
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 OAUTH2_DIR       = ROOT / "config" / "oauth2"
-TOKEN_FILE       = OAUTH2_DIR / "token.json"
-SCOPES           = [
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube",
-]
 CHUNK_SIZE       = 8 * 1024 * 1024   # 8 MB resumable upload chunk
 MAX_RETRIES      = 5
 UPLOAD_RESULT    = "upload_result.json"
 
 # YouTube video resource defaults
 DEFAULT_CATEGORY = "27"              # Education
-DEFAULT_PRIVACY  = "public"
+DEFAULT_PRIVACY  = "private"         # Always upload private; set publish date in Studio
 
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
@@ -105,97 +105,27 @@ class UploadResult:
         }
 
 
-# ─── OAuth2 helpers ───────────────────────────────────────────────────────────
+# ─── Auth helper ──────────────────────────────────────────────────────────────
 
-def _build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
-    """Build Google OAuth2 installed-app client config from credentials."""
-    return {
-        "installed": {
-            "client_id":                   client_id,
-            "client_secret":               client_secret,
-            "auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":                   "https://oauth2.googleapis.com/token",
-            "redirect_uris":               ["http://localhost"],
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        }
-    }
-
-
-def _get_credentials():
+def _build_youtube_service(channel_name: str, channel_config: dict):
     """
-    Load or create OAuth2 credentials.
+    Return an authenticated YouTube Data API v3 service for the given channel.
 
-    On first run: opens browser for user consent, saves token to TOKEN_FILE.
-    On subsequent runs: loads and refreshes token from TOKEN_FILE.
+    Reads proxy from channel_config["proxy"] (optional).
+    Delegates token storage and OAuth flow to clients.youtube_auth.
 
-    Returns:
-        google.oauth2.credentials.Credentials instance.
-
-    Raises:
-        ImportError: If google-auth-oauthlib is not installed.
-        RuntimeError: If YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET not set.
+    Args:
+        channel_name:   Logical channel name (e.g. "main", "philosophy").
+        channel_config: Loaded channel config dict (may contain "proxy" key).
     """
-    try:
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
-    except ImportError as exc:
-        raise ImportError(
-            "Google API libraries not installed. Run:\n"
-            "  pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
-        ) from exc
-
-    client_id     = require_env("YOUTUBE_CLIENT_ID")
-    client_secret = require_env("YOUTUBE_CLIENT_SECRET")
-    OAUTH2_DIR.mkdir(parents=True, exist_ok=True)
-
-    creds: Credentials | None = None
-
-    # Load cached token
-    if TOKEN_FILE.exists():
-        try:
-            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-            log.info("Loaded OAuth2 token from %s", TOKEN_FILE)
-        except Exception as exc:
-            log.warning("Could not load token file: %s — re-authenticating", exc)
-            creds = None
-
-    # Refresh if expired
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-            log.info("OAuth2 token refreshed")
-        except Exception as exc:
-            log.warning("Token refresh failed: %s — re-authenticating", exc)
-            creds = None
-
-    # First-time browser auth
-    if not creds or not creds.valid:
-        client_config = _build_client_config(client_id, client_secret)
-        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-        log.info("Opening browser for YouTube OAuth2 consent...")
-        creds = flow.run_local_server(port=0, open_browser=True)
-        log.info("OAuth2 consent granted")
-
-    # Cache token
-    TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
-    log.debug("Token saved to %s", TOKEN_FILE)
-    return creds
-
-
-def _build_youtube_service():
-    """Build and return authenticated YouTube Data API v3 service."""
-    try:
-        from googleapiclient.discovery import build
-    except ImportError as exc:
-        raise ImportError(
-            "google-api-python-client not installed. "
-            "Run: pip install google-api-python-client"
-        ) from exc
-
-    creds   = _get_credentials()
-    service = build("youtube", "v3", credentials=creds)
-    log.info("YouTube service ready")
+    proxy = channel_config.get("proxy")
+    if proxy:
+        log.info("Channel '%s' — proxy: ...@%s",
+                 channel_name, proxy.split("@")[-1] if "@" in proxy else proxy)
+    else:
+        log.info("Channel '%s' — no proxy (direct connection)", channel_name)
+    service = get_youtube_service_from_config(channel_name, channel_config)
+    log.info("YouTube service ready for channel '%s'", channel_name)
     return service
 
 
@@ -404,6 +334,7 @@ def upload_video(
     script_path:         str | Path,
     channel_config_path: str | Path,
     *,
+    channel_name:        str | None = None,
     schedule:            str | None = None,
     auto_schedule:       bool = False,
     privacy:             str = DEFAULT_PRIVACY,
@@ -415,9 +346,11 @@ def upload_video(
     Args:
         script_path: Path to script.json (used to locate output/ directory).
         channel_config_path: Path to channel config JSON.
+        channel_name: Logical channel name for OAuth2 token lookup (e.g. "main").
+                      If None, derived from channel_config["channel_name"].
         schedule: Specific publish datetime string "YYYY-MM-DD HH:MM".
         auto_schedule: Compute next upload slot from channel schedule config.
-        privacy: Privacy status if not scheduling ("public", "private", "unlisted").
+        privacy: Privacy status if not scheduling (default: "private").
         dry_run: Show plan without uploading.
 
     Returns:
@@ -445,7 +378,12 @@ def upload_video(
 
     metadata       = json.loads(meta_path.read_text(encoding="utf-8"))
     channel_config = load_channel_config(channel_config_path)
-    channel_name   = channel_config.get("channel_name", "channel").replace(" ", "_").lower()
+    # channel_name: explicit arg takes priority; fallback to config; then "channel"
+    channel_name = (
+        channel_name
+        or channel_config.get("channel_name", "")
+        or "channel"
+    ).replace(" ", "_").lower()
 
     # Resolve publish time
     publish_at: str | None = None
@@ -476,8 +414,8 @@ def upload_video(
             publish_at=publish_at,
         )
 
-    # Build authenticated YouTube service
-    service = _build_youtube_service()
+    # Build authenticated YouTube service (per-channel token + optional proxy)
+    service = _build_youtube_service(channel_name, channel_config)
 
     # Upload video
     video_id = _upload_video(service, video_path, metadata, effective_privacy, publish_at)
@@ -551,6 +489,11 @@ Examples:
     parser.add_argument("--script",  required=True, help="Path to script.json")
     parser.add_argument("--channel", required=True, help="Channel config JSON path")
     parser.add_argument(
+        "--channel-name", default=None,
+        help="Logical channel name for OAuth2 token lookup (e.g. 'main', 'philosophy'). "
+             "Defaults to channel_name from channel config JSON.",
+    )
+    parser.add_argument(
         "--schedule", default=None,
         help="Publish datetime (local time): 'YYYY-MM-DD HH:MM'",
     )
@@ -576,6 +519,7 @@ Examples:
     result = upload_video(
         script_path=args.script,
         channel_config_path=args.channel,
+        channel_name=args.channel_name,
         schedule=args.schedule,
         auto_schedule=args.auto_schedule,
         privacy=args.privacy,

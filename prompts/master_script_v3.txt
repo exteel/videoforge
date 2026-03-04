@@ -177,9 +177,15 @@ Block completion rule:
   End by transitioning from "why it happens" to "how it shows up in your life."
   This sets up Block 4 recognition patterns.
 
-⚠️ EARLY CTA (~26% of video): Place [CTA_SUBSCRIBE_MID] immediately AFTER Block 3 is complete.
-  Rationale: peak viewer engagement is 20–35% into the video. Comment + subscribe here
-  while comprehension is highest and the "aha moment" from Root Cause is still fresh.
+⚠️ MANDATORY CTA PLACEMENT: Place [CTA_SUBSCRIBE_MID] immediately AFTER Block 3 (ROOT CAUSE) is
+  complete — BEFORE you begin Block 4 (RECOGNITION). Do not delay past Block 3.
+  Rationale: peak viewer engagement is 20–35% of the video. The "aha moment" from Root Cause
+  is the highest-comprehension point — channel that momentum into comment + subscribe.
+
+  For long-form videos (20+ min): use the word count as your absolute guide.
+  Write [CTA_SUBSCRIBE_MID] when you have completed approximately 25–28% of your
+  [TARGET WORDS] total — regardless of how many sections you have written.
+  If you reach 30% without having written [CTA_SUBSCRIBE_MID], stop and write it immediately.
 
 [CTA_SUBSCRIBE_MID]
 ─────────────────────────────────────────────────────────────────
@@ -217,6 +223,19 @@ PART 2 — THE SUBSCRIBE ASK (1–2 sentences, short and declarative):
 - No exclamation marks
 - The comment question must be SPECIFIC to this video's root cause — never generic
 - The subscribe ask is SHORT — the comment question carries the weight here
+
+BANNED phrases for CTA_MID (never use):
+  "consider subscribing" | "this channel explores the depths" | "depth over distraction"
+  "resonated with you" | "understanding over comfort" | "exactly who this channel was created for"
+
+✅ CORRECT CTA_MID example (adapt — never copy literally):
+  "Tell me in the comments: which of these patterns have you been living inside the longest?
+   Leave it below. Naming it is already the beginning.
+   Subscribe if you want to keep going. There is more of this coming."
+
+❌ WRONG CTA_MID example (never write like this):
+  "If this resonated with you, consider subscribing. This channel explores the depths
+   that most content never reaches."
 ─────────────────────────────────────────────────────────────────
 
 ─────────────────────────────────────────────────────────────────
@@ -281,8 +300,11 @@ Requirements:
   - Connect the framework directly back to the viewer's specific situation
   - Typically 2–4 [SECTION N:] markers within this block
 
-⚠️ LIKE ASK — embed organically within Block 6 narration (NOT a separate marker):
-  At the emotional peak — the single most resonant moment of the block — weave in
+⚠️ LIKE ASK — embed organically within THE TURN block narration (NOT a separate marker):
+  THE TURN is the emotional peak and reframe block — whichever section number it falls on.
+  Identify it by its narrative role (the moment the viewer's relationship to their struggle
+  fundamentally shifts), not by its position number in the script.
+  At the emotional peak — the single most resonant moment of that block — weave in
   a like request as 1–2 sentences of spoken narration.
   It must feel EARNED. It is not a commercial. It is an extension of the moment.
 
@@ -556,8 +578,10 @@ QUALITY CHECKLIST
 Before outputting, verify:
 
 □ BLOCK STRUCTURE
-  - All 8 blocks present in correct order (Hook → Tension → Root → Recognition →
-    CTA_MID → Framework → Turn → Practice → Closing + CTA_FINAL)
+  - All 8 blocks present in correct order:
+    Hook → Tension → Root → [CTA_MID] → Recognition → Framework →
+    Turn (with [LIKE ASK] inline) → Practice → Closing → [CTA_FINAL]
+  - ⚠️ CTA_MID is placed AFTER Root Cause (Block 3), BEFORE Recognition (Block 4)
   - Block word counts approximately match [BLOCK WORD TARGETS]
   - Total words within [TARGET WORDS] range
   - Each block ends with its stated completion sentence (transition or forward pull)
@@ -565,7 +589,7 @@ Before outputting, verify:
 □ SECTION MARKERS
   - Every section starts with [SECTION N: Title] on its own line
   - Section numbers are sequential from 1
-  - [CTA_SUBSCRIBE_MID] appears after Block 4 completes, before Block 5
+  - [CTA_SUBSCRIBE_MID] appears immediately after Block 3 (ROOT CAUSE) — BEFORE Block 4 (RECOGNITION)
   - [CTA_SUBSCRIBE_FINAL] appears at the end of Block 8
 
 □ HOOK (Block 1)
@@ -628,7 +652,7 @@ Start immediately with [SECTION 1: Hook]. End with [CTA_SUBSCRIBE_FINAL].
 Formatting:
   - [SECTION N: Title] on its own line — required, parser depends on this
   - [IMAGE_PROMPT: ...] on its own line, inline within the narration at word-count intervals
-  - [CTA_SUBSCRIBE_MID] on its own line after Block 4
+  - [CTA_SUBSCRIBE_MID] on its own line immediately after Block 3 (ROOT CAUSE), before Block 4
   - [CTA_SUBSCRIBE_FINAL] on its own line at the end of Block 8
   - Natural paragraph spacing for vocal pacing
 

@@ -53,6 +53,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         duration_max=req.duration_max if req.duration_max is not None else 12,
         music_volume=req.music_volume,
         music_track=req.music_track,
+        custom_topic=req.custom_topic,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 
