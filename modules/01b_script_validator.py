@@ -7,7 +7,7 @@ Detection (structural, no API cost):
   cut_off         — block ends mid-sentence / connector word (ALL blocks, not just last)
   missing_cta     — no outro/CTA block at end
   bad_prompt      — image_prompt is empty, too short, or matches generic patterns (expanded list)
-  sparse_images   — image_prompts list < 1 per 150 narration words for blocks ≥200w
+  sparse_images   — image_prompts list < 1 per 70 narration words for blocks ≥200w
   duplicate       — same image concept repeated verbatim
   wrong_language  — narration Cyrillic ratio < 40% for declared Cyrillic-script language
   missing_field   — block missing required 'id' or 'type'
@@ -61,6 +61,28 @@ _OTHER_TAG_IN_NARRATION_RE = re.compile(
     r"\[(SECTION\s+\d+|CTA_SUBSCRIBE_(?:MID|FINAL)|HOOK\s+TYPE|IMAGE\s+PROMPT)\b",
     re.IGNORECASE,
 )
+
+# LLM meta-commentary phrases that leak into narration (TTS reads them literally)
+# Matches at line-start or after newline; captures full line to strip it.
+_META_TEXT_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:"
+    r"Note[:\s]|I need to|I will |I'll |Let me |"
+    r"Here is the|Here's the|\(Note[:\s]|"
+    r"As an AI|In this block|In this section|"
+    r"This section discusses|This block covers|"
+    r"image style:|narration:"
+    r")[^\n]*",
+    re.IGNORECASE,
+)
+
+# Tags that indicate a generic / wrong tagging strategy
+_GENERIC_TAGS: frozenset[str] = frozenset([
+    "history", "psychology", "philosophy", "education",
+    "motivation", "spirituality", "self-help", "jung",
+])
+
+# Maximum acceptable word gap between consecutive image_word_offsets (~30s at 140 wpm)
+IMAGE_GAP_MAX_WORDS = 70
 
 # Script length thresholds (in total word count across all narrations)
 TOO_LONG_WORDS  = 2500   # >2500 words ≈ >18 min @ 140 wpm → warning
@@ -187,15 +209,18 @@ def _structural_checks(
     duration_min: int | None = None,
     duration_max: int | None = None,
     language: str | None = None,
+    tags: list | None = None,
+    thumbnail_prompt: str | None = None,
 ) -> list[ScriptIssue]:
     """Fast checks that require no API call.
 
     Args:
-        blocks:       Script blocks from script.json.
-        duration_min: Target minimum duration in minutes (used for TOO_SHORT threshold).
-        duration_max: Target maximum duration in minutes (used for TOO_LONG threshold).
-        language:     Declared script language ISO 639-1 (e.g. 'uk', 'en').
-                      Used for language consistency heuristic.
+        blocks:           Script blocks from script.json.
+        duration_min:     Target minimum duration in minutes (used for TOO_SHORT threshold).
+        duration_max:     Target maximum duration in minutes (used for TOO_LONG threshold).
+        language:         Declared script language ISO 639-1 (e.g. 'uk', 'en').
+        tags:             Script tags list for SEO quality check.
+        thumbnail_prompt: Thumbnail prompt string for empty-check (user sets manually).
     """
     issues: list[ScriptIssue] = []
 
@@ -239,13 +264,31 @@ def _structural_checks(
         ))
 
     # ── CTA / outro check ─────────────────────────────────────────────────────
-    has_cta = any(b.get("type") in ("cta", "outro") for b in blocks)
+    cta_blocks = [b for b in blocks if b.get("type") in ("cta", "outro")]
+    has_cta = len(cta_blocks) > 0
     if not has_cta:
         issues.append(ScriptIssue(
             type="missing_cta",
             block_id=blocks[-1].get("id", ""),
             severity="critical",
             reason="No CTA/outro block found in script",
+        ))
+
+    # ── Duplicate CTA detection ───────────────────────────────────────────────
+    if len(cta_blocks) > 1:
+        cta_ids = [b.get("id", "") for b in cta_blocks]
+        issues.append(ScriptIssue(
+            type="duplicate_cta",
+            block_id=", ".join(cta_ids),
+            severity="warning",
+            reason=(
+                f"Multiple CTA/outro blocks found ({len(cta_blocks)}): {cta_ids} "
+                f"— likely duplicated LLM output (mid-roll CTA + final CTA = expected, "
+                f"but 3+ is almost always a bug)"
+            ) if len(cta_blocks) > 2 else (
+                f"Two CTA/outro blocks: {cta_ids} — verify both are intentional "
+                f"(mid-roll CTA_MID + CTA_FINAL is expected; two outros is a bug)"
+            ),
         ))
 
     # ── [IMPROVED] Cut-off check: scan ALL blocks ─────────────────────────────
@@ -293,6 +336,15 @@ def _structural_checks(
             issues.append(ScriptIssue(
                 type="bad_narration", block_id=bid, severity="critical",
                 reason=f"Narration contains raw parser tag '{tag}' — will be read aloud by TTS",
+            ))
+
+        # LLM meta-commentary leaked into narration (TTS reads it literally)
+        meta_m = _META_TEXT_RE.search(narr)
+        if meta_m:
+            snippet = meta_m.group(0).strip()[:70]
+            issues.append(ScriptIssue(
+                type="meta_text", block_id=bid, severity="critical",
+                reason=f"LLM meta-commentary in narration (will be read by TTS): '{snippet}'",
             ))
 
         # [IMPROVED] Too-short narration — now uses dynamic threshold
@@ -442,8 +494,13 @@ def _structural_checks(
         prompt = (block.get("image_prompt") or "").strip()
         narr   = (block.get("narration") or "").strip()
 
-        # CTA blocks don't need images
-        if block.get("type") in ("cta",):
+        # CTA blocks: warn if no image at all (will freeze on last frame for full CTA duration)
+        if block.get("type") in ("cta", "outro"):
+            if not (block.get("image_prompt") or block.get("image_prompts")):
+                issues.append(ScriptIssue(
+                    type="cta_no_image", block_id=bid, severity="warning",
+                    reason="CTA/outro block has no image_prompt — will freeze on previous image for entire CTA duration",
+                ))
             continue
 
         if not prompt and narr:
@@ -480,8 +537,8 @@ def _structural_checks(
     # ── Sparse image_prompts check ─────────────────────────────────────────────
     # For sizeable section/intro blocks, verify image_prompts list has enough entries.
     # `image_prompt` (single) may be non-empty while `image_prompts` (list) is nearly empty.
-    # Threshold: at least 1 image per 150 narration words (lower than actual targets but
-    # catches critical shortfalls without false-flagging tier-4 low-density blocks).
+    # Threshold: at least 1 image per 70 narration words (matches tier-3 target of every 30s).
+    # Using the most lenient tier to avoid false-positives; earlier blocks will have more images.
     for block in blocks:
         btype = block.get("type", "")
         if btype in ("cta", "outro"):
@@ -491,7 +548,7 @@ def _structural_checks(
         if nw < 200:
             continue   # short blocks (transition sentences, mid-CTA) don't need many images
         actual_imgs = len(block.get("image_prompts") or [])
-        min_expected = max(1, nw // 150)
+        min_expected = max(1, nw // 70)
         if actual_imgs < min_expected:
             issues.append(ScriptIssue(
                 type="sparse_images",
@@ -501,6 +558,62 @@ def _structural_checks(
                     f"Too few image prompts: {actual_imgs} actual, "
                     f"~{min_expected} expected for {nw}-word block "
                     f"(need {min_expected - actual_imgs} more)"
+                ),
+            ))
+
+    # ── Tags quality check ────────────────────────────────────────────────────
+    if tags is not None:
+        if not tags:
+            issues.append(ScriptIssue(
+                type="wrong_tags", severity="warning",
+                reason="Tags list is empty — YouTube SEO will suffer",
+            ))
+        elif len(tags) <= 2 and all(t.strip().lower() in _GENERIC_TAGS for t in tags):
+            issues.append(ScriptIssue(
+                type="wrong_tags", severity="warning",
+                reason=f"Tags too generic: {tags} — need specific YouTube SEO keywords (e.g. 'jung shadow work', 'jungian archetypes')",
+            ))
+
+    # ── Thumbnail prompt check ────────────────────────────────────────────────
+    # User sets thumbnail_prompt manually — only warn, never auto-fix.
+    if thumbnail_prompt is not None and not thumbnail_prompt.strip():
+        issues.append(ScriptIssue(
+            type="thumbnail_empty", severity="warning",
+            reason="thumbnail_prompt is empty — remember to set it manually before generating thumbnail",
+        ))
+
+    # ── Image word-offset gap check ───────────────────────────────────────────
+    # Consecutive IMAGE_PROMPT offsets > IMAGE_GAP_MAX_WORDS apart means one image
+    # is shown static for 30+ seconds — breaks visual rhythm.
+    for block in blocks:
+        if block.get("type") in ("cta", "outro"):
+            continue
+        offsets = block.get("image_word_offsets") or []
+        narr_words = len((block.get("narration") or "").split())
+        if narr_words < 150 or not offsets:
+            continue
+        bid = block.get("id", "")
+        warned = False
+        for i in range(len(offsets) - 1):
+            gap = offsets[i + 1] - offsets[i]
+            if gap > IMAGE_GAP_MAX_WORDS:
+                issues.append(ScriptIssue(
+                    type="image_gap", block_id=bid, severity="warning",
+                    reason=(
+                        f"Large image gap: {gap} words between offset {offsets[i]}→{offsets[i+1]} "
+                        f"(~{gap*60//140}s static) — consider adding an image prompt here"
+                    ),
+                ))
+                warned = True
+                break
+        # Tail gap: from last image to end of block narration
+        if not warned and offsets and (narr_words - offsets[-1]) > IMAGE_GAP_MAX_WORDS:
+            tail = narr_words - offsets[-1]
+            issues.append(ScriptIssue(
+                type="image_gap", block_id=bid, severity="warning",
+                reason=(
+                    f"Tail image gap: last image at word {offsets[-1]}, "
+                    f"block ends at {narr_words} ({tail} words, ~{tail*60//140}s static at end)"
                 ),
             ))
 
@@ -683,6 +796,41 @@ Return ONLY valid JSON:
     return json.loads(raw)
 
 
+async def _fix_tags(script: dict[str, Any]) -> list[str]:
+    """Generate specific YouTube SEO tags from title + script content via cheap LLM."""
+    title = script.get("title", "")
+    niche = script.get("niche", "")
+    # Use first 3 blocks' narration as context sample
+    sample = " ".join(
+        (b.get("narration", "") for b in script.get("blocks", [])[:3])
+    )[:600]
+    prompt = (
+        f"Generate 10-12 specific YouTube tags for this video.\n\n"
+        f"Title: {title}\n"
+        f"Niche: {niche}\n"
+        f"Content sample: {sample}\n\n"
+        f"Rules:\n"
+        f"- Specific search terms people actually type (NOT generic: 'history', 'psychology' alone)\n"
+        f"- Mix: specific concepts (2-4 words), related searches, key names/terms from the video\n"
+        f"- At least 3 long-tail keywords (3-4 words each)\n"
+        f"- Include relevant proper nouns if present (e.g. 'carl jung shadow work', 'jungian archetypes')\n"
+        f"- All lowercase, no hashtags\n\n"
+        f"Return ONLY a JSON array: [\"tag one\", \"tag two\", ...]"
+    )
+    raw = await _llm(
+        DETECT_MODEL,
+        [{"role": "user", "content": prompt}],
+        max_tokens=300,
+    )
+    m = re.search(r"\[.*?\]", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
 # ─── Main validator ───────────────────────────────────────────────────────────
 
 async def validate_and_fix_script(
@@ -736,6 +884,8 @@ async def validate_and_fix_script(
         duration_min=script_duration_min,
         duration_max=script_duration_max,
         language=script_language,
+        tags=script.get("tags"),
+        thumbnail_prompt=script.get("thumbnail_prompt"),
     )
     result = ValidationResult(
         ok=not any(i.severity == "critical" for i in issues),
@@ -797,6 +947,52 @@ async def validate_and_fix_script(
             result.fixes_applied.append(f"Cleaned {cleaned} narrations with embedded [IMAGE_PROMPT:] tags")
             modified = True
             log.info("Fixed %d bad_narration blocks (stripped embedded tags)", cleaned)
+
+    # ── Fix A: meta_text — strip LLM self-commentary (no API needed) ─────────
+    meta_issues = [i for i in issues if i.type == "meta_text" and i.block_id]
+    if meta_issues:
+        _emit(f"Stripping meta-commentary from {len(meta_issues)} narration(s)…", 22.0)
+        meta_ids = {i.block_id for i in meta_issues}
+        cleaned_meta = 0
+        for block in blocks:
+            if block.get("id") not in meta_ids:
+                continue
+            narr = block.get("narration", "")
+            cleaned = _META_TEXT_RE.sub("", narr).strip()
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+            if cleaned != narr:
+                block["narration"] = cleaned
+                cleaned_meta += 1
+        if cleaned_meta:
+            script["blocks"] = blocks
+            for iss in meta_issues:
+                iss.fixed = True
+            result.fixes_applied.append(f"Stripped LLM meta-commentary from {cleaned_meta} narration(s)")
+            modified = True
+            log.info("Fixed %d meta_text blocks (stripped LLM commentary)", cleaned_meta)
+
+    # ── Fix B: cta_no_image — insert default closing visual (no API) ──────────
+    cta_img_issues = [i for i in issues if i.type == "cta_no_image" and i.block_id]
+    if cta_img_issues:
+        _emit(f"Adding default image to {len(cta_img_issues)} CTA block(s)…", 25.0)
+        cta_img_ids = {i.block_id for i in cta_img_issues}
+        for block in blocks:
+            if block.get("id") not in cta_img_ids:
+                continue
+            default_prompt = (
+                f"warm golden light fading into soft bokeh, cinematic closing frame, "
+                f"hopeful and still atmosphere, {image_style[:80]}"
+            )
+            block["image_prompt"] = default_prompt
+            block.setdefault("image_prompts", [default_prompt])
+        script["blocks"] = blocks
+        for iss in cta_img_issues:
+            iss.fixed = True
+        result.fixes_applied.append(
+            f"Added default closing image_prompt to {len(cta_img_issues)} CTA block(s)"
+        )
+        modified = True
+        log.info("Fixed %d cta_no_image blocks (inserted default prompt)", len(cta_img_issues))
 
     # ── Fix 1: cut_off (also covers missing_cta since continuation includes CTA) ──
     has_cut_off = any(i.type == "cut_off" and i.severity == "critical" for i in issues)
@@ -874,7 +1070,7 @@ async def validate_and_fix_script(
                 continue
             nw = len((block.get("narration") or "").split())
             actual = len(block.get("image_prompts") or [])
-            need = max(1, nw // 150) - actual
+            need = max(1, nw // 70) - actual
             if need <= 0:
                 continue
             sparse_blocks_data.append({**block, "_need": need})
@@ -916,11 +1112,36 @@ async def validate_and_fix_script(
             except Exception as exc:
                 log.warning("Failed to fix sparse_images: %s", exc)
 
+    # ── Fix C: wrong_tags — generate specific SEO tags via cheap LLM ──────────
+    if any(i.type == "wrong_tags" for i in issues):
+        _emit("Generating SEO tags via LLM…", 87.0)
+        try:
+            new_tags = await _fix_tags(script)
+            if new_tags:
+                script["tags"] = new_tags
+                for iss in issues:
+                    if iss.type == "wrong_tags":
+                        iss.fixed = True
+                result.fixes_applied.append(f"Generated {len(new_tags)} specific SEO tags")
+                modified = True
+                log.info("Fixed wrong_tags: generated %d tags: %s", len(new_tags), new_tags)
+        except Exception as exc:
+            log.warning("Failed to fix wrong_tags: %s", exc)
+
     # ── Save fixed script ──
     if modified:
         _emit("Saving fixed script…", 90.0)
+        # Re-index ALL blocks to guarantee sequential `id` and `order` fields.
+        # This is critical because fix routines (cut_off, missing_cta) add new
+        # blocks with only `id` set — `order` is absent and causes KeyError in
+        # 02_image_generator.py / 03_voice_generator.py at block["order"].
+        _final_blocks = script.get("blocks", [])
+        for _new_ord, _blk in enumerate(_final_blocks, start=1):
+            _blk["id"]    = f"block_{_new_ord:03d}"
+            _blk["order"] = _new_ord
+        script["blocks"] = _final_blocks
         script_path.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
-        log.info("Saved fixed script: %s", script_path)
+        log.info("Saved fixed script: %s (%d blocks, re-indexed)", script_path, len(_final_blocks))
 
         # ── Post-fix re-check: verify fixes actually resolved critical issues ──
         remaining = _structural_checks(

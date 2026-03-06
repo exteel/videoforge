@@ -40,7 +40,7 @@ _NO_WIN: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # Default video encoding settings
 DEFAULT_VIDEO_CODEC = "libx264"
 DEFAULT_CRF = 22          # Good quality for YouTube (they re-encode anyway; 18 was overkill)
-DEFAULT_PRESET = "medium" # Good speed/quality balance ("slow" was 3-4x slower, no visible benefit)
+DEFAULT_PRESET = "veryfast" # 1.7x faster than medium, -21% smaller output, same CRF quality
 DEFAULT_AUDIO_CODEC = "aac"
 DEFAULT_AUDIO_BITRATE = "192k"
 DEFAULT_FPS = 30

@@ -4,6 +4,310 @@
 
 ---
 
+## 2026-03-05 — Full batch run: 8 відео 25-33хв, subtitle fix, no music
+
+### Питання
+Запустити 8 відео від початку до кінця: 25-33 хвилини, без музики, субтитри макс 2 рядки, BetaTest Max якість.
+
+### Виконано
+
+**`modules/04_subtitle_generator.py`** — ліміт 2 рядки на субтитр:
+- `MAX_CHARS_PER_LINE`: 32 → **45** (менше переносів)
+- `MAX_LINES_PER_ENTRY = 2` — нова константа
+- `_split_to_fit()` — рекурсивна функція яка ділить текст при ком/союзах до ≤2 рядків
+- `_block_to_entries()` → замінено `sentences` на `chunks = _split_to_fit(sentence)` для кожного речення
+
+**Генерація 8 відео** (25-33 хв, no music, BetaTest Max):
+- `3941464a` — 6 Dangerous Signs — 26.7хв, 32 img ✅
+- `e5c87f8f` — 8 Things Sophia — 15.5хв ⚠️ (короткий оригінал)
+- `dcb35b1e` — Focus Only Yourself — 27.8хв, 31 img ✅
+- `9a45bc52` — How To Begin Again — 32.4хв, 41 img ✅
+- `3a432ab4` — No Healing (Mother) — 28.6хв, 34 img ✅
+- `2a2c4675` — Psychology Of Men — 36хв, 42 img ✅
+- `84a178bb` — Why Awakened (Love) — 34хв, 43 img ✅
+- `5db2bcb9` — Why Staying Home — 28хв, 28 img ✅
+
+**VoiceAPI баланс**: 444k символів = 22год аудіо. Вартість 30хв відео: ~$0.04
+
+**Проблеми вирішені**:
+- 404 rate limit burst → `parallel=1` для повторного запуску 5 джобів
+- `e5c87f8f` вийшов 15.5хв → потребує перегенерації окремо
+
+### Файли
+- `modules/04_subtitle_generator.py` — subtitle 2-line limit
+
+### Далі
+- Перегенерувати `e5c87f8f` (8 Things Sophia) з більш тривалим контентом
+
+---
+
+## 2026-03-05 — image_backend + vision_model (full stack UI selection)
+
+### Питання
+Додати вибір backend для генерації картинок і моделі для аналізу картинок (UI dropdowns)
+
+### Виконано
+
+**`02_image_generator.py`** — додано `image_backend` param + виправлено broken `_run_coros`:
+- `_backend = (image_backend or "wavespeed").lower()` → роутинг до `PrimaryClient`
+- `betatest` → `BetaImageClient`, `image_size = "16:9"` (BetaImage не підтримує custom size)
+- `voidai` → `PrimaryClient = None`, `_ws_global_failed = [True]`
+- `wavespeed` → `WaveSpeedClient` (default)
+- Backend-aware `async with`: `PrimaryClient() + VoidAIClient()` або тільки `VoidAIClient()`
+- `primary_cost` замість `wavespeed_cost` у GenerationSummary (backward-compatible)
+
+**`02b_image_validator.py`** — додано `vision_model` param:
+- `_score_image(...)` — новий kwarg `vision_model: str | None = None`, `model = vision_model or SCORE_MODEL`
+- `validate_and_fix_images(...)` — новий kwarg `vision_model`, передається до обох `_score_image` calls
+- Log показує ефективну модель (`_eff_model = vision_model or SCORE_MODEL`)
+
+**`backend/models.py`** — `image_backend: str | None` + `vision_model: str | None` в `PipelineRunRequest`
+
+**`backend/routes/pipeline.py`** — передає обидва нових params до `manager.start_pipeline()`
+
+**`pipeline.py`** — `image_backend` + `vision_model` у сигнатурі, передає до `generate_images()` / `validate_and_fix_images()`
+
+**`frontend/src/api.ts`** — `image_backend?: string | null` + `vision_model?: string | null` в `PipelineRunRequest`
+
+**`frontend/src/components/JobList.tsx`** — `PFormState` + initial state + два `<select>` dropdown'и після `burn_subtitles`
+
+### Файли
+- `modules/02_image_generator.py` — backend routing + async with fix
+- `modules/02b_image_validator.py` — vision_model param
+- `backend/models.py` — new fields
+- `backend/routes/pipeline.py` — pass-through
+- `pipeline.py` — pass-through
+- `frontend/src/api.ts` — interface update
+- `frontend/src/components/JobList.tsx` — PFormState + dropdowns
+
+---
+
+## 2026-03-05 — TTS Sanitizer + META_TEXT_CLEANED + Rule 5 TRUNCATED_NARRATION
+
+### Питання
+1. Технічний markup не повинен потрапляти в озвучку, але блоки — не видаляти
+2. META_TEXT: спочатку стрипати мета-префікс, видаляти тільки якщо немає реального контенту
+3. Захист від generation cutoff → truncated sentence у TTS
+
+### Виконано
+
+**`modules/script_validator.py`** — 3 покращення:
+
+`sanitize_narration_for_tts(text)` — нова публічна функція:
+- Стрипає `[IMAGE_PROMPT:]`, `[SECTION N:]`, `[CTA_SUBSCRIBE_*]`, markdown (`**`, `*`, `__`, `#`)
+- НЕ змінює script.json — тільки TTS runtime safety net
+
+Rule 1 META_TEXT — strip-first замість remove-always:
+- `_extract_real_content_after_meta()` знаходить реальний контент після мета-префіксу
+- Якщо ≥30 слів → `META_TEXT_CLEANED` (блок зберігається з cleaned narration)
+- Якщо <30 слів → `META_TEXT_REMOVED` (блок видаляється як раніше)
+
+Rule 5 TRUNCATED_NARRATION (нове):
+- Detects narration що не закінчується на `.!?"'…)`
+- `_last_sentence_end()` знаходить останній sentence boundary
+- Trim incomplete fragment, блок НІКОЛИ не видаляється
+- Захист від: LLM hit max_tokens mid-sentence → TTS озвучує обірване речення
+
+**`modules/03_voice_generator.py`** — 1 рядок:
+- `narration = sanitize_narration_for_tts(...)` замість `.strip()`
+
+### Файли
+- `modules/script_validator.py` — 3 покращення + 1 нова публічна функція
+- `modules/03_voice_generator.py` — sanitize call before TTS
+
+---
+
+## 2026-03-05 — Script Validator + _call_llm Patches (system-level quality fixes)
+
+### Питання
+Виправити 4 баги на системному рівні, щоб більше не повторювались:
+1. Meta-text в continuation chunks ("I need to reassess...")
+2. Double ending (секції після першого outro)
+3. Duplicate CTAs (два однакових CTA блоки)
+4. Duplicate practices (той самий список практик у 2 блоках)
+
+### Виконано
+**`modules/script_validator.py`** — новий модуль (260 рядків):
+- `validate_and_fix(script_dict)` → `(fixed_dict, list[ValidationIssue])`
+- Rule 1 `META_TEXT`: regex з 20+ LLM self-reference phrases → видаляє блок
+- Rule 2 `SECTIONS_AFTER_OUTRO`: зберігає перший outro + CTA, видаляє всі решта типи після нього
+- Rule 3 `DUPLICATE_CTA`: порівнює перші 50 символів narration; лишає останній CTA
+- Rule 4 `DUPLICATE_PRACTICES`: frozenset named practices (Practice One/Two, Shadow Dialogue…); лишає останній блок
+- `_reindex()`: переіменовує block_id + order після видалень
+- Self-test: 7 блоків → 3 виправлення → 4 чистих блоки ✅
+
+**`modules/01_script_generator.py`** — 3 зміни:
+1. `_FINAL_CTA_MARKER_RE` (новий) — тільки `[CTA_SUBSCRIBE_FINAL]`; замінює `_FINAL_CTA_RE` в chunking loop (рядки 900-905) → більше не спрацьовує на "Thank you for being here" в звичайному outro блоці
+2. `_FINAL_CTA_RE` — лишається для post-loop CTA repair/dedup (рядки 930+)
+3. Continuation instruction (рядки 852-864): додано CRITICAL-заборону meta-text ("do NOT write 'I need to reassess'", "Start directly with [SECTION N+1]")
+4. Інтеграція validator у `generate_scripts()`: `validate_and_fix()` між `model_dump()` та `write_text()` — автоматично фіксує і логує проблеми
+
+### Кореневі причини виправлено
+- **Double ending**: `_FINAL_CTA_RE` матчив "Thank you for being here" у regular outro → falsely triggered CTA-strip → continuation → дублікат контент. FIXED: strict marker regex in loop.
+- **Meta-text**: Continuation instruction не забороняв LLM писати meta-commentary. FIXED: explicit CRITICAL instruction.
+- **Duplicate CTA/practices**: Відсутність post-generation validator. FIXED: `validate_and_fix()` called before save.
+
+### Файли
+- `modules/script_validator.py` — NEW
+- `modules/01_script_generator.py` — 4 edits (_FINAL_CTA_MARKER_RE, loop fix, continuation instruction, validator integration)
+
+---
+
+## 2026-03-05 — BetaImage Client + Quality Test (5 images)
+
+### Питання
+Взяти промпти з останнього сценарію, адаптувати під master rules (New AI), згенерувати та глянути якість
+
+### Виконано
+**`clients/betaimage_client.py`** — новий клієнт для csv666.ru image API:
+- `POST /api/v2/image/generate` → poll status → `GET /download?format=png`
+- Semaphore MAX_CONCURRENT=3, fast mode ~8-21s per image
+- Auth: `X-API-Key` (same `VOICEAPI_KEY` env var)
+- Interface сумісний з WaveSpeedClient (`generate_text2img()`)
+- `aspect_ratio="16:9"` → 1360×768 PNG output
+
+**`tools/test_newai_quality.py`** — тест адаптованих промптів:
+- 5 промптів з last script.json (block_001/003/006/008/012)
+- Адаптація під master rules: explicit camera angle (low angle 35mm), механічні деталі, atmospheric effects
+- FINAL = SCENE BLOCK + IMAGE_STYLE (epic sci-fi concept art, crimson/gold, etc.)
+- Паралельна генерація → saved to `test_newai/` в project dir
+
+**Результати генерації:**
+- block_001: Staircase (1354 KB, 14s) — кінематографічний силует знизу вгору ✅
+- block_003: Clock mechanism (1503 KB, 9.7s) — кристальні шестерні, frozen mid-turn ✅
+- block_006: Clockwork opposite gear (1412 KB, 8.1s) — НАЙКРАЩЕ: massive gold+crimson gear ✅
+- block_008: Gravitational center (1132 KB, 15.6s) — sci-fi платформа над crimson void ✅
+- block_012: Shadow retrieval (1475 KB, 21s) — golden threads, 3 figures ✅
+
+**Спостереження про якість:**
+- Стиль: game art / illustrated (не фотореалістичний), але дуже детальний
+- Колір: crimson + gold дотримуються відмінно
+- Композиція: симетрична, кінематографічна, інструкції слухаються добре
+- Механічні елементи: block_006 (clockwork) — просто ідеальний
+- Швидкість: 8-21с (паралельно) vs 30-60с у WaveSpeed
+
+### Далі
+- Інтеграція betaimage_client в 02_image_generator.py як 3-й backend
+- Додати `image_backend` selector в pipeline + UI dropdown
+- Оновити style analyzer з 3 варіантами prompts (generic/wavespeed/newai)
+
+---
+
+## 2026-03-05 — End-to-End Test Run (2×31-min videos) + Bug Fixes
+
+### Питання
+Повний е2е тест: 2 відео 25-30 хв, субтитри, музика -38dB, custom image style
+
+### Виконано
+**Bug fixes (продовження з попередньої сесії):**
+
+**`modules/02b_image_validator.py`** — 3 виправлення:
+1. Видалено `result.total += len(newly_skipped)` (double-count — вже в result.scores)
+2. Замінено `len(ok_scores)` на `_pre_ok_count = len([s for s in scored_list if s.ok and not s.skipped])` (ok_scores була видалена, NameError)
+3. Після regen loop: `result.ok_count = sum(1 for s in result.scores if s.ok and not s.skipped)` — правильний підрахунок після регенерації
+
+**Тест (2 відео):**
+- Video 1: "Why Women With Dark Feminine Energy ALWAYS Succeed Alone | Carl Jung"
+  - Source: `How To Succeed With Zero Support - Carl Jung`
+  - Result: `final.mp4` **530 MB, 31.1 хв** ✅
+  - Pipeline: Script(231s) + Images+Voices(548s) + Subs(0s) + Video(2238s) = **52 хв**
+- Video 2: "6 RARE Things That Make People Mentally Obsessed With You | Carl Jung"
+  - Source: `Make Them Mentally Obsessed With You _ Machiavelli's Dark Psychology`
+  - Result: `final.mp4` **512 MB, 31.2 хв** ✅
+  - Pipeline: Script(240s) + Images+Voices(681s) + Subs(0s) + Video(2181s) = **53 хв**
+
+**Підтверджено:**
+- subtitles.ass + subtitles.srt генеруються та записуються в відео ✅
+- Музика -38dB мікшується ✅
+- 40 і 44 PNGs відповідно ✅
+- image_style прийнятий та використаний ✅
+- Review workflow: auto-approve script → auto-approve images ✅
+
+### Рішення
+- Path з Unicode `'` (U+2019 APOSTROPHE) в імені папки — POST через Python urllib, не curl
+- Backend busy during FFmpeg encode → timeout=30s для polling
+- FFmpeg temp files в sys temp (не в project dir) — перевіряти `tempfile.gettempdir()`
+
+---
+
+## 2026-03-05 — Multi-Topic Batch Queue
+
+### Питання
+Хочу мати можливість запускати кілька відео з різними темами одночасно.
+
+### Виконано
+**5 файлів, нова фіча "Multi-Topic" queue:**
+
+**`backend/models.py`** — 2 нові Pydantic схеми:
+- `MultiTopicItem` — одне відео: `source_dir, channel, custom_topic, quality, image_style`
+- `MultiBatchRequest` — черга: `items[], parallel, image_style, dry_run, draft, from_step, budget_per_video`
+
+**`backend/job_manager.py`** — 2 нові методи:
+- `start_multi_batch(items, parallel)` — створює N Job об'єктів, кожен зі своїм asyncio.Task + семафором
+- `_run_with_semaphore(sem, job, ...)` — чекає слот семафора → запускає `_run_pipeline_job()`
+
+**`backend/routes/pipeline.py`** — новий endpoint:
+- `POST /api/batch/multi` → `list[JobResponse]` (один JobResponse per video)
+- Валідація всіх source_dir перед стартом будь-якого job
+- Per-item style overrides global style
+
+**`frontend/src/api.ts`** — нові типи + метод:
+- `MultiTopicItem`, `MultiBatchRequest` interfaces
+- `api.batch.runMulti(body: MultiBatchRequest) → Job[]`
+
+**`frontend/src/components/JobList.tsx`** — новий таб "Multi-Topic":
+- Таб переключений: `'pipeline' | 'batch' | 'multi'`
+- Динамічна таблиця рядків: Source dir | Topic override | Channel | Quality | ×
+- "+ Додати відео" button + глобальні налаштування: image_style, parallel, dry_run
+- Submit: `🚀 Запустити чергу (N відео)` — фіолетова кнопка
+- Кожне відео → окремий Job card
+
+### Ключові рішення
+- Семафор `asyncio.Semaphore(parallel)` — контроль паралелізму без складних черг
+- Кожне відео = окремий Job (не umbrella job) → повний progress/WS/cancel per video
+- Валідація source_dir перед стартом будь-якого job → fail fast, не половину запустити
+- TypeScript 0 errors, Python syntax OK
+
+---
+
+## 2026-03-05 — Project analysis + image style consistency fix
+
+### Питання
+Аналіз проекту (сильні/слабкі сторони) + виправлення 4 проблем:
+1. Стилістична консистентність між кадрами
+2. Дублікати зображень (відомий баг)
+3. Subtitles hardcoded no_subs=True
+4. Один канал одночасно
+
+### Результат аудиту
+Після перевірки коду виявилось:
+- **Дублікати (#2)** → вже виправлено (CONTEXT.md: "немає" відомих багів)
+- **Субтитри (#3)** → вже виправлено: `pipeline.py:784` `no_subs=not burn_subtitles`, дефолт `burn_subtitles=True`
+- **Batch (#4)** → вже є: `batch_runner.py` + UI вкладка "Batch" + `api.ts BatchRunRequest`
+
+### Виконано
+**Image style consistency — per-video seed** (`modules/02_image_generator.py`):
+- `import hashlib` — стабільний хеш (не PYTHONHASHSEED)
+- `_derive_video_seed(title: str) -> int` — MD5 від заголовку відео → seed в `[0, 2**30)`
+- `generate_images()` — новий параметр `video_seed: int | None = None`
+  - Якщо `None` → авто-деривація з `script["video_title"]`
+  - Логується: `"Image style seed: 123456789 (video: Назва...)"`
+- `_generate_one()` — новий параметр `block_seed: int | None = None`
+  - Замість `seed = 42` → `seed = block_seed` (per-video seed + block_order)
+  - Кожен блок: `block_seed = (video_seed + block["order"]) % 2**30`
+  - Ретрай → `seed=None` (випадковий, щоб уникнути пов'язаних провалів)
+
+### Ефект
+- Те саме відео → ті самі картинки (відтворюваність)
+- Різні відео → різні seed-сім'ї → різна візуальна ідентичність
+- Блоки одного відео → суміжні seed → subtle style consistency
+- `pipeline.py` не потребує змін (авто-деривація всередині `generate_images`)
+
+### Файли
+- `modules/02_image_generator.py` — `_derive_video_seed()` + `video_seed` + `block_seed`
+
+---
+
 ## 2026-03-04 — YouTube Channel Branding API (08c_channel_setup.py)
 
 ### Питання
@@ -1050,6 +1354,28 @@ TranscriberPanel з увімкненим auto-pipeline запускав pipeline
 - **Git:** feat: №7 Image Generator; dev.py next -md → №8
 - **Далі:** №8 Voice Generator
 
+## 2026-03-05 — Topic-only mode + Multi-Topic повні налаштування + localStorage
+
+### Зроблено
+- **Topic-only mode** (source_dir=None): `01_script_generator.py` приймає `None`, будує синтетичний `source_data`; `pipeline.py` — `proj` з `custom_topic` коли немає `source_dir`
+- **backend/models.py**: `MultiBatchRequest` отримав усі поля як у Single Video — `template`, `to_step`, `voice_id`, `music_track`, `no_ken_burns`, `duration_min/max`, `background_music`, `music_volume`, `burn_subtitles`, `skip_thumbnail`, `master_prompt`
+- **backend/routes/pipeline.py**: всі нові kwargs передаються пайплайну
+- **frontend JobList.tsx**: Multi-Topic UI тепер ідентичний Single Video — Template, Steps (preset кнопки + from/to), Duration, Master prompt dropdown, Voice dropdown, Image style, Budget, Draft/Dry run/Music+volume+track/Subtitles/Skip thumb/No Ken Burns
+- **localStorage persistence**: `lsGet`/`lsSet` helpers, `LS_MULTI_ITEMS` + `LS_MULTI_SETTINGS`, `useEffect` auto-save при кожній зміні — після F5 всі поля відновлюються
+- **405 fix**: причина — сталі `.pyc` файли у `__pycache__`. Вирішення: `Remove-Item __pycache__` + kill python + restart
+
+### Файли
+`modules/01_script_generator.py`, `pipeline.py`, `backend/models.py`, `backend/routes/pipeline.py`, `backend/job_manager.py`, `frontend/src/api.ts`, `frontend/src/components/JobList.tsx`
+
+### Рішення
+- WatchFiles не перезавантажував через те що `.pyc` були свіжіші ніж source (Power Shell підтвердив що `pipeline.cpython-313.pyc` та `models.cpython-313.pyc` новіші за source)
+- HMR Vite зберігає React state при зміні файлу — localStorage persistence додавалась без втрати введених даних
+
+### Далі
+- git commit, тест Multi-Topic черги з реальними темами
+
+---
+
 ## 2026-03-01 — №5 FFmpeg utils + №6 Script Generator
 
 - **Зроблено:** utils/ffmpeg_utils.py (808 рядків), modules/01_script_generator.py (847 рядків)
@@ -1064,3 +1390,125 @@ TranscriberPanel з увімкненим auto-pipeline запускав pipeline
 - **VoidAI client:** async httpx, chat/vision/tts/image, smart fallback Opus→Sonnet→GPT, semaphore(10), exponential backoff, cost tracking (MODEL_COSTS table)
 - **GitHub:** repo exteel/videoforge, main branch, 7 комітів запушено, master видалено
 - **Далі:** №3 — WaveSpeed клієнт
+
+---
+
+## 2026-03-05 — Сесія: image_backend/vision_model, BetaTest fix, очищення проектів, cost fix
+
+### Зроблено
+- **02_image_generator.py**: Виправлено `_run_coros()` — замість невизначеної `wavespeed` змінної тепер backend-aware `async with` блок (PrimaryClient → betaimage/wavespeed, або тільки voidai)
+- **02b_image_validator.py**: Додано `vision_model` параметр до `_score_image()` і `validate_and_fix_images()`, pass-through до обох scoring calls
+- **backend/models.py + routes/pipeline.py + api.ts + JobList.tsx**: `image_backend` та `vision_model` додані для Single Video І Multi-Topic (повний full-stack)
+- **clients/betaimage_client.py**: Виправлено `prompt_upsampling` формат (`.lower()` → 500 error; тепер `str(True/False)` без lower); дефолт `mode="quality"`, `prompt_upsampling=True`
+- **Очищення проектів**: Видалено images/, audio/, script.json, llm_raw_output.txt з 9 проектних папок; звільнено 471 MB
+- **Orphaned jobs**: DB UPDATE cancelled 14 orphанних jobs, force kill PID 88676
+- **pipeline.py cost fix**: Голос `n_chars * 0.0002` (ElevenLabs rate) → `n_chars * 0.0000038` (VoiceAPI: $19/5M chars); dry-run estimate теж виправлено
+- **utils/db.py**: Новий метод `cancel_orphaned_jobs()` — UPDATE running/waiting_review/queued → cancelled
+- **backend/main.py**: Lifespan тепер викликає `cancel_orphaned_jobs()` при старті — auto-fix orphaned jobs після перезапуску бекенду
+
+### Файли
+`modules/02_image_generator.py`, `modules/02b_image_validator.py`, `backend/models.py`, `backend/routes/pipeline.py`, `frontend/src/api.ts`, `frontend/src/components/JobList.tsx`, `clients/betaimage_client.py`, `pipeline.py`, `utils/db.py`, `backend/main.py`
+
+### Рішення
+- BetaTest API: `str(False)` = `'False'` (OK) vs `str(False).lower()` = `'false'` (500 error) — API вимагає Python-style True/False
+- Orphaned jobs pattern: backend restart очищує in-memory dict, але DB залишається `running`; тепер виправляється автоматично при наступному старті
+- VoiceAPI реальна ціна 52.6x дешевше ElevenLabs — старий rate давав завищені cost estimates
+
+### Далі
+- Рестарт бекенду (VideoForge.bat)
+- Запустити свіжу генерацію з image_backend=betatest
+- git commit
+
+---
+
+## 2026-03-05 — Bug fix: 'order' KeyError + BetaTest timeouts + cleanup
+
+### Проблема
+- Jobs 65, 66 failed with error `'order'` (KeyError: 'order') в modules/02_image_generator.py:204 і 03_voice_generator.py:130
+- Root cause: `01b_script_validator.py` коли fix `cut_off` або `missing_cta` — додає нові блоки через `blocks.extend(new_blocks)` але НЕ встановлює `order` field
+- При наступному збереженні: нові блоки в script.json без `order` → KeyError на step 2
+
+### Fix: 01b_script_validator.py
+Перед збереженням виправленого script.json (рядок ~920) додано re-indexing:
+```python
+_final_blocks = script.get("blocks", [])
+for _new_ord, _blk in enumerate(_final_blocks, start=1):
+    _blk["id"]    = f"block_{_new_ord:03d}"
+    _blk["order"] = _new_ord
+script["blocks"] = _final_blocks
+```
+Гарантує що ВСІХ блоків є `id` і `order` перед записом на диск.
+
+### Fix: betaimage_client.py timeouts
+- `REQUEST_TIMEOUT`: 30s → 60s (quality mode повільніший при enqueue)  
+- `DOWNLOAD_TIMEOUT`: 60s → 120s
+- `POLL_TIMEOUT`: 120s → 300s (5 хвилин — quality mode може займати 60-90s)
+- `POLL_INTERVAL`: 2s → 3s (менше запитів на сервер)
+- `RETRY_BASE_DELAY`: 3s → 5s
+
+### Cleanup
+- 1564 MB звільнено з усіх project directories
+- DB: jobs 64=failed, 67=done (вже в terminal state, не потребували скасування)
+
+### Файли
+`modules/01b_script_validator.py`, `clients/betaimage_client.py`
+
+### Далі
+- Рестарт бекенду (`VideoForge.bat`)
+- При старті auto-cancel orphaned jobs (нова фіча) 
+- Запуск 8 відео з `image_backend=betatest`, quality=max, steps 1-5
+
+---
+
+## 2026-03-06 — Validator fixes, master_script_v4, 2-tier image density, parallel pipeline test, FFmpeg preset optimization
+
+### Виконано
+
+**01b_script_validator.py — системні фікси:**
+- Додано константи: `_META_TEXT_RE`, `_GENERIC_TAGS`, `IMAGE_GAP_MAX_WORDS = 70`
+- `_structural_checks()`: нові параметри `tags`, `thumbnail_prompt`
+- Нові перевірки: `duplicate_cta`, `meta_text`, `wrong_tags`, `thumbnail_empty`, `image_gap`
+- Fix A: meta_text — regex strip, без API
+- Fix B: cta_no_image — дефолтний image_prompt, без API
+- Fix C: wrong_tags — cheap LLM (_fix_tags)
+- sparse_images threshold: `nw//150` → `nw//70`
+
+**prompts/master_script_v4.txt (новий):**
+- Секція `⛔ ABSOLUTE PROHIBITIONS` (no meta-text, no parser labels, no duplicate sections, output-only)
+- CTA блоки обов'язково мають `[IMAGE_PROMPT:]`
+- 2-tier image density model в промпті
+
+**modules/05_video_compiler.py:**
+- `_DEFAULT_FREQ_TIERS`: 2-tier → 0-10 хв кожні 10с, 10+ хв кожні 30с
+
+**config/channels/history.json:** master_prompt_path v3 → v4
+
+**Паралельний тест (2 відео одночасно):**
+- Ken Burns: "Why Smart People Doubt Themselves" → 19.9 хв, 416 MB, elapsed=2812s
+- no_ken_burns: "When You Listen To The Unconscious - Carl Jung" → 31.5 хв, 161 MB, elapsed=2042s
+- Step 4 compile: Ken Burns=~27 хв, no_ken_burns=~11 хв (2.5x різниця)
+
+**Аналіз реальних витрат:**
+- VoidAI: flat $35/міс, ~190k кредитів/відео 30хв
+- VoiceAPI: $0.0000038/char = $19/5M chars, ~$0.09-0.10/відео 30хв
+- WaveSpeed thumbnails: $0.015 (3 шт × $0.005)
+- Реальна вартість відео 30 хв (betatest): ~$0.16
+- При 3.5M VoidAI credits/day: ~18 відео/день, 460k VoiceAPI chars/день
+
+**utils/ffmpeg_utils.py — FFmpeg preset оптимізація:**
+- `DEFAULT_PRESET`: `"medium"` → `"veryfast"`
+- Benchmark на 11 хв реального відео: 1.5x швидше compile, -27% intermediate, -21% final file size
+- Якість незмінна (CRF=22 контролює якість, preset — тільки швидкість)
+
+### Файли
+- `modules/01b_script_validator.py` — нові checks + auto-fixes
+- `prompts/master_script_v4.txt` — новий master prompt
+- `modules/05_video_compiler.py` — 2-tier freq tiers
+- `config/channels/history.json` — v3 → v4
+- `utils/ffmpeg_utils.py` — DEFAULT_PRESET medium → veryfast
+
+### Рішення
+- LLM ігнорує 2-tier density: промпт каже "10с в першій зоні", LLM усереднює ~35с — потрібні жорсткіші інструкції
+- Ken Burns compile 2.5x повільніше за static при меншому відео — через ~119 окремих FFmpeg сегментів
+- `veryfast` виявився і швидшим і меншим за `medium` для статичного контенту (краща delta-компресія)
+

@@ -82,17 +82,13 @@ _WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
 # This repeats to fill the full block duration regardless of video position or tier.
 ANIM_SEGMENT_DURATION = 10.0
 
-# Default image frequency tiers — used by master_script_v2.txt and test_components.py
+# Default image frequency tiers — used by master_script_v3.txt and test_components.py
 # to describe IMAGE_PROMPT density in the LLM prompt. NOT used for segment splitting.
-#   Tier 1 (0–3 min):  every 10s  → ~25 words → one IMAGE_PROMPT per ~10s of speech
-#   Tier 2 (3–6 min):  every 20s  → ~50 words
-#   Tier 3 (6–15 min): every 60s  → ~150 words
-#   Tier 4 (15+ min):  every 120s → ~280 words
+#   Tier 1 (0–10 min): every 10s  → ~25 words → one IMAGE_PROMPT per ~10s of speech
+#   Tier 2 (10+ min):  every 30s  → ~70 words  (unlimited images: consistent visual rhythm)
 _DEFAULT_FREQ_TIERS: list[dict] = [
-    {"until_seconds": 180,  "interval": 10},   # 0–3 min:  every 10s
-    {"until_seconds": 360,  "interval": 20},   # 3–6 min:  every 20s
-    {"until_seconds": 900,  "interval": 60},   # 6–15 min: every 60s
-    {"until_seconds": None, "interval": 120},  # 15+ min:  every 2 min
+    {"until_seconds": 600,  "interval": 10},   # 0–10 min: every 10s
+    {"until_seconds": None, "interval": 30},   # 10+ min:  every 30s
 ]
 
 

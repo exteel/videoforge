@@ -15,7 +15,7 @@
     "margin_v": 60
   },
   "default_animation": "zoom_in",
-  "master_prompt_path": "prompts/master_script_v3.txt",
+  "master_prompt_path": "prompts/master_script_v4.txt",
   "llm": {
     "default_preset": "max",
     "presets": {
