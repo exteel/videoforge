@@ -123,6 +123,12 @@ def _fn(rel_path: str, fn_name: str) -> Any:
     return getattr(_load_module(rel_path), fn_name)
 
 
+# ─── VoidAI subscription cost rate ───────────────────────────────────────────
+# Plan: $47/month → 8,500,000 tokens/day × 30 days = 255,000,000 tokens/month
+# Rate: $47 / 255,000,000 = $0.000000184/token ≈ $0.184/1M tokens
+# All LLM calls (claude-opus, claude-sonnet, gpt-5.2) share this flat rate.
+VOIDAI_PER_TOKEN = 47 / (8_500_000 * 30)   # ~$0.000000184
+
 # ─── Cost budget tracker ───────────────────────────────────────────────────────
 
 @dataclass
@@ -636,14 +642,14 @@ async def run_pipeline(
                 if _val_result.fixes_applied:
                     _bad_prompt_fixes = sum(1 for f in _val_result.fixes_applied if "prompt" in f.lower())
                     if _bad_prompt_fixes:
-                        cost.add("Script validator (prompts)", _bad_prompt_fixes * 0.001)
+                        cost.add("Script validator (prompts)", _bad_prompt_fixes * round(5_000 * VOIDAI_PER_TOKEN, 6))
                     if any("cont" in f.lower() for f in _val_result.fixes_applied):
-                        cost.add("Script validator (cut-off)", 0.012)
+                        cost.add("Script validator (cut-off)", round(10_000 * VOIDAI_PER_TOKEN, 6))
             except Exception as _vexc:
                 log.exception("Script validation skipped (non-fatal): %s", _vexc)
 
-            # Rough cost: ~3000 input + 1500 output tokens; max preset = Opus pricing
-            cost.add("Script LLM", 0.035)
+            # VoidAI subscription: ~20K input + 8K output tokens (flat rate regardless of model)
+            cost.add("Script LLM", round(28_000 * VOIDAI_PER_TOKEN, 5))
             if cost.over_budget():
                 log.error("Budget exceeded after Script! %s", cost.summary())
                 sys.exit(1)
@@ -663,8 +669,8 @@ async def run_pipeline(
                     image_style=image_style or "",
                     progress_callback=progress_callback,
                 )
-                # Cost estimate: Sonnet, ~40k input + 8k output tokens for a 30-min script
-                cost.add("Image Planner (Art Director)", 0.015)
+                # VoidAI subscription: ~7K input + 10K output tokens (flat rate)
+                cost.add("Image Planner (Art Director)", round(17_000 * VOIDAI_PER_TOKEN, 5))
                 log.info("Image Planner: done")
             except Exception as _iexc:
                 log.exception("Image Planner failed (non-fatal, continuing): %s", _iexc)
@@ -839,7 +845,8 @@ async def run_pipeline(
                     _fname = f"{_sc['block_id']}.png" if _idx == 0 else f"{_sc['block_id']}_{_idx}.png"
                     _sc["image_url"] = f"/projects/{_enc_name}/images/{_fname}"
                 # Track scoring + regen costs
-                cost.add("Image validator (scoring)", _img_val.total * 0.003)
+                # VoidAI vision: ~2K tokens per image scored (flat rate)
+                cost.add("Image validator (scoring)", _img_val.total * round(2_000 * VOIDAI_PER_TOKEN, 6))
                 if _img_val.regenerated > 0:
                     cost.add("Image validator (regen)", _img_val.regenerated * 0.005)
                 log.info(
@@ -1068,8 +1075,8 @@ async def run_pipeline(
         t0 = time.monotonic()
 
         if dry_run and not s_path.exists():
-            log.info("[DRY RUN] Metadata estimate: ~$0.003 (gpt-4.1-mini)")
-            cost.add("Metadata LLM estimate", 0.003)
+            log.info("[DRY RUN] Metadata estimate: ~$0.001 (VoidAI flat rate, ~5K tokens)")
+            cost.add("Metadata LLM estimate", round(5_000 * VOIDAI_PER_TOKEN, 5))
         else:
             generate_metadata = _fn("modules/07_metadata_generator.py", "generate_metadata")
 
@@ -1084,7 +1091,7 @@ async def run_pipeline(
             if not dry_run:
                 _require_files([meta_path], min_bytes=50, step="Metadata")
                 log.info("Metadata: %s  (%.1fs)", meta_path.name, time.monotonic() - t0)
-                cost.add("Metadata LLM", 0.003)
+                cost.add("Metadata LLM", round(5_000 * VOIDAI_PER_TOKEN, 5))
                 if cost.over_budget():
                     log.error("Budget exceeded after Metadata! %s", cost.summary())
                     sys.exit(1)

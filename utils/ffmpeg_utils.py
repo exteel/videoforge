@@ -372,17 +372,17 @@ def static_slideshow(
 
     w, h = resolution.split("x")
 
-    # Build concat input file — FFmpeg concat demuxer format
+    # Build concat input file — FFmpeg concat demuxer format.
+    # Use repr() for paths: produces 'D:\\path\\to\\file.png' with escaped backslashes.
+    # as_posix() (forward slashes) fails on Windows when concat file and images
+    # are on different drives — FFmpeg strips the drive prefix and treats path as relative.
     concat_lines: list[str] = []
     for img, dur in frames:
-        # Use forward slashes; escape single quotes in paths
-        safe_path = str(img.as_posix()).replace("'", "\\'")
-        concat_lines.append(f"file '{safe_path}'")
+        concat_lines.append(f"file {repr(str(img.resolve()))}")
         concat_lines.append(f"duration {dur:.6f}")
     # Repeat last entry without duration — required by concat demuxer
     if frames:
-        safe_path = str(frames[-1][0].as_posix()).replace("'", "\\'")
-        concat_lines.append(f"file '{safe_path}'")
+        concat_lines.append(f"file {repr(str(frames[-1][0].resolve()))}")
 
     concat_txt = out.parent / f"{out.stem}_concat.txt"
     concat_txt.write_text("\n".join(concat_lines), encoding="utf-8")

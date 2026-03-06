@@ -64,7 +64,15 @@
   "outro_video": "assets/outro/history_outro.mp4",
   "branding": {
     "description": "Exploring the most fascinating stories from world history — wars, empires, revolutions, and the people who shaped our world.\n\nNew videos every week.",
-    "keywords": ["history", "world history", "ancient history", "historical events", "empires", "wars", "biography"],
+    "keywords": [
+      "history",
+      "world history",
+      "ancient history",
+      "historical events",
+      "empires",
+      "wars",
+      "biography"
+    ],
     "country": "UA",
     "banner_path": "",
     "trailer_video_id": ""

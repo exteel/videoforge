@@ -234,15 +234,8 @@ async def _call_llm(
     load_env()
     import os
     api_key = os.environ.get("VOIDAI_API_KEY", "")
-    model   = preset.get("model", "claude-sonnet-4-5-20250929")
+    model   = preset.get("script", preset.get("model", "gpt-5.2"))
 
-    # For very large scripts (100+ images), split into chunks to stay within output limits
-    MAX_PER_CALL = 80
-    if expected <= MAX_PER_CALL:
-        return await _call_llm_single(system_prompt, user_message, model, api_key, expected)
-
-    # Chunked mode: call LLM in batches — not needed for typical 25-33 min videos
-    log.warning("Large script (%d images) — using single call anyway", expected)
     return await _call_llm_single(system_prompt, user_message, model, api_key, expected)
 
 
@@ -261,7 +254,7 @@ async def _call_llm_single(
     }
     payload = {
         "model":      model,
-        "max_tokens": max(8192, expected * 150),
+        "max_tokens": max(4096, expected * 120),  # ~120 tokens/prompt, no upper cap to avoid truncation
         "system":     system_prompt,
         "messages":   [{"role": "user", "content": user_message}],
     }
