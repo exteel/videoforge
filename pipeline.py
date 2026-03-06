@@ -590,6 +590,31 @@ async def run_pipeline(
                     _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
                     _emit(progress_callback, type="step_done",  step=STEP_SCRIPT, elapsed=0.0,                        pct=STEP_WEIGHTS[STEP_SCRIPT][1])
                     from_step = STEP_MEDIA  # continue from step 2
+
+                    # 01c catch-up: run Image Planner if image_prompts lists are missing.
+                    # Happens when auto-skip fires on a fresh script that only has
+                    # image_prompt (singular, 1 per block from step 01) but 01c never ran.
+                    _needs_01c = any(
+                        not _b.get("image_prompts")
+                        for _b in _existing["blocks"]
+                    )
+                    if _needs_01c:
+                        try:
+                            _plan_images_catchup = _fn("modules/01c_image_planner.py", "plan_images")
+                            _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                                  pct=17.0, message="Art Director: planning image positions (catch-up)…")
+                            await _plan_images_catchup(
+                                s_path,
+                                _chan_cfg,
+                                preset_name="high",
+                                image_style=image_style or "",
+                                progress_callback=progress_callback,
+                            )
+                            cost.add("Image Planner (Art Director catch-up)", round(17_000 * VOIDAI_PER_TOKEN, 5))
+                            log.info("Image Planner catch-up: done")
+                        except Exception as _iexc:
+                            log.exception("Image Planner catch-up failed (non-fatal): %s", _iexc)
+
                     # Jump to step 2 — fall through to media step below
             except Exception:
                 pass  # corrupt JSON → regenerate normally

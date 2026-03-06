@@ -942,6 +942,48 @@ async def _call_llm(
                 MAX_SCRIPT_CHUNKS, narration_words, len(full_output),
             )
 
+    # ── Post-loop expansion guard ──────────────────────────────────────────────
+    # Catches the case where the LLM ended without [CTA_SUBSCRIBE_FINAL] AND narration
+    # is still below the minimum.  Makes one targeted expansion call to hit the target.
+    _final_narration = _count_narration_words(full_output)
+    if _final_narration < min_words_for_cta and not _FINAL_CTA_MARKER_RE.search(full_output):
+        _shortage = min_words_for_cta - _final_narration
+        log.warning(
+            "Script below minimum after all chunks: %d narration words (need %d, short %d) "
+            "— requesting targeted expansion",
+            _final_narration, min_words_for_cta, _shortage,
+        )
+        _tail = full_output[-2_000:]
+        _expansion_msg = (
+            f"The script is {_shortage} narration words too short "
+            f"(written: {_final_narration}, minimum: {min_words_for_cta} for a "
+            f"{duration_min}-min video). Here is where it ended:\n```\n{_tail}\n```\n\n"
+            f"Continue expanding existing sections with deeper analysis, examples, and "
+            f"psychological insights. Add at least {_shortage + 100} more narration words, "
+            f"then conclude with [CTA_SUBSCRIBE_FINAL] and the full sign-off."
+        )
+        try:
+            _expansion_chunk = await voidai_client.chat_completion(
+                model=model,
+                messages=[
+                    {"role": "system",    "content": system_prompt},
+                    {"role": "user",      "content": user_prompt},
+                    {"role": "assistant", "content": full_output},
+                    {"role": "user",      "content": _expansion_msg},
+                ],
+                temperature=temperature,
+                max_tokens=min(6_000, int(_shortage * 2.5)),
+            )
+            full_output += "\n" + _expansion_chunk
+            log.info(
+                "Expansion added %d narration words (total now: %d / min: %d)",
+                _count_narration_words(_expansion_chunk),
+                _count_narration_words(full_output),
+                min_words_for_cta,
+            )
+        except Exception as _exp_err:
+            log.warning("Expansion call failed (non-fatal): %s", _exp_err)
+
     # ── CTA repair / dedup ────────────────────────────────────────────────────
     # [CTA_SUBSCRIBE_FINAL] can appear multiple times when:
     #   • LLM echoes the marker mid-output then again at the end
