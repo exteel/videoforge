@@ -251,12 +251,40 @@ class WaveSpeedClient:
     # ─── Image download ───────────────────────────────────────────────────────
 
     async def _download(self, image_url: str, output_path: Path) -> Path:
-        """Download an image URL to a local file and verify it is non-empty."""
+        """Download an image URL to a local file and verify it is non-empty.
+
+        Automatically converts WebP→PNG: flux-dev-ultra-fast may return WebP despite
+        ``output_format='png'``.  FFmpeg concat demuxer cannot loop WebP images for their
+        full duration — it decodes only 1 frame and stops — so PNG is required.
+        Pillow is used for the conversion (available in project dependencies).
+        """
         output_path.parent.mkdir(parents=True, exist_ok=True)
         async with httpx.AsyncClient(timeout=60.0) as dl:
             resp = await dl.get(image_url)
             resp.raise_for_status()
-            output_path.write_bytes(resp.content)
+            data = resp.content
+
+        # Detect WebP by magic bytes: RIFF????WEBP (bytes 0-3 and 8-11)
+        # WaveSpeed flux-dev-ultra-fast ignores output_format='png' and may return WebP.
+        if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            try:
+                import io
+                from PIL import Image  # type: ignore[import]
+                img = Image.open(io.BytesIO(data))
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                converted = buf.getvalue()
+                log.info(
+                    "WebP→PNG converted: %s (%d KB → %d KB)",
+                    output_path.name, len(data) // 1024, len(converted) // 1024,
+                )
+                data = converted
+            except Exception as exc:
+                log.warning("WebP→PNG conversion failed for %s: %s — saving WebP as-is", output_path.name, exc)
+
+        output_path.write_bytes(data)
         saved_size = output_path.stat().st_size
         if saved_size < 5_000:  # 5 KB minimum — image gen should always produce >50 KB
             output_path.unlink(missing_ok=True)

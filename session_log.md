@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-03-07 — WebP bug fix, image duration fix, відео "If 2025 Felt Like a Failure"
+
+### Питання
+Перша картинка у статичному відео тримається 40-45 секунд — діагностика і виправлення.
+
+### Виконано
+
+**Root cause**: WaveSpeed `flux-dev-ultra-fast` повертає первинні зображення у форматі **WebP** (ігноруючи `output_format='png'`), зберігаючи їх з розширенням `.png`. FFmpeg concat demuxer декодує WebP лише 1 кадром → зображення не може зациклюватись на задану тривалість → "перша картинка 40 секунд" (насправді тримається freeze останнього кадру).
+
+**`clients/wavespeed_client.py`** — `_download()`:
+- Перевірка magic bytes `RIFF....WEBP` після завантаження
+- Конвертація WebP→PNG через Pillow перед збереженням
+- Логує: `WebP→PNG converted: block_001.png (312 KB → 1497 KB)`
+
+**`modules/05_video_compiler.py`** — фікс `image_word_offsets[0]`:
+- Bug: перше зображення рахувалося від `offsets[0]` замість `0`
+- Якщо `offsets[0]=15` при 100 словах → перший кадр отримував 35% замість 50%
+- Фікс: `start_off = offsets[ii] if ii > 0 else 0`
+
+**Конвертація існуючих зображень**:
+- 15 файлів `block_NNN.png` (WebP-as-PNG) → конвертовані через Pillow в реальний PNG
+- Після: всі 103 зображення у проекті — справжній PNG ✅
+
+**Перекомпіляція** (job `3a887cd7`, step 4 only, no_ken_burns=True):
+- Виконано за **275.6s** (раніше 518s з KenBurns)
+- Keyframes: зображення змінюються кожні ~8.3s ✅ (а не 40-45s)
+- Output: `output/final.mp4` — 126 MB, 2017s, 1920×1080
+
+### Файли
+- `clients/wavespeed_client.py` — WebP→PNG в `_download()`
+- `modules/05_video_compiler.py` — `start_off = 0` для першого зображення
+
+### Далі
+- Переглянути final.mp4, якщо є проблеми — git commit фіксів
+
+---
+
 ## 2026-03-05 — Full batch run: 8 відео 25-33хв, subtitle fix, no music
 
 ### Питання

@@ -480,16 +480,34 @@ def compile_video(
             for block in voiced_blocks:
                 duration = float(block["audio_duration"])
                 imgs = _get_block_images(block, images_dir, prev_image)
-                image_path = imgs[0] if imgs else None
-                if image_path is None:
+                if not imgs:
                     log.warning("Block %s: no image — using black", block["id"])
-                    # Reuse previous or skip; ffmpeg concat requires a file
                     if prev_image:
-                        image_path = prev_image
+                        frames.append((prev_image, duration))
+                    continue
+
+                if len(imgs) == 1:
+                    # Single image — whole block duration
+                    frames.append((imgs[0], duration))
+                else:
+                    # Multiple images — distribute duration by word offsets
+                    offsets: list[int] = block.get("image_word_offsets", [])
+                    total_words: int = len((block.get("narration") or "").split())
+                    if offsets and total_words > 0 and len(offsets) == len(imgs):
+                        for ii, img in enumerate(imgs):
+                            # First image covers words 0→offsets[1] (captures any leading
+                            # words before offsets[0]).  Subsequent images start at offsets[ii].
+                            start_off = offsets[ii] if ii > 0 else 0
+                            next_off = offsets[ii + 1] if ii + 1 < len(offsets) else total_words
+                            frac = max(next_off - start_off, 1) / total_words
+                            frames.append((img, round(duration * frac, 3)))
                     else:
-                        continue
-                frames.append((image_path, duration))
-                prev_image = image_path
+                        # No offset data — even split
+                        per_img = duration / len(imgs)
+                        for img in imgs:
+                            frames.append((img, round(per_img, 3)))
+
+                prev_image = imgs[0]
                 _con(len(frames), len(voiced_blocks), "static")
 
             static_res = DRAFT_RESOLUTION if draft else resolution
@@ -761,6 +779,11 @@ Examples:
         help="Disable crossfade between clips",
     )
     parser.add_argument(
+        "--no-ken-burns",
+        action="store_true",
+        help="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate inputs and show plan without running FFmpeg",
@@ -775,6 +798,7 @@ Examples:
         draft=args.draft,
         no_subs=args.no_subs,
         no_music=args.no_music,
+        no_ken_burns=args.no_ken_burns,
         no_intro_outro=args.no_intro_outro,
         crossfade=not args.no_crossfade,
         dry_run=args.dry_run,
