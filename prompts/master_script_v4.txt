@@ -489,59 +489,12 @@ WORDS AND NUMBERS:
 - Years and large numbers: numerals are fine (1923, 2.4 million)
 
 ═══════════════════════════════════════════════════════════════════
-IMAGE MARKER RULES
+IMAGE NOTES
 ═══════════════════════════════════════════════════════════════════
 
-YOUR JOB: place [IMAGE_MARKER] tags at the right positions.
-A separate Art Director AI will write the actual image descriptions later.
-You only control WHEN images appear — not WHAT they show.
-
-─────────────────────────────────────────────
-IMAGE DENSITY — 2-TIER MODEL (MANDATORY)
-─────────────────────────────────────────────
-
-⚠️ CRITICAL — VIOLATIONS WILL CAUSE REGENERATION ⚠️
-
-Place [IMAGE_MARKER] tags INLINE in narration at these EXACT word-count intervals.
-Count cumulative NARRATION WORDS from word 1 continuously to the end.
-DO NOT reset the counter per block or per section.
-
-══════════════════════════════════════
-TIER 1 — Words 0–1,400 (first ~10 min)
-══════════════════════════════════════
-  → ONE [IMAGE_MARKER] every 20–25 words (MAXIMUM 30 words between markers)
-  → This means ~56 markers in the first 1,400 words
-  → Every 10 seconds a NEW image must appear on screen
-
-TIER 1 EXAMPLE (words 1–75 of the script):
-  [IMAGE_MARKER]
-  Have you ever wondered why history keeps repeating itself? The same patterns, the same
-  mistakes, the same rise
-  [IMAGE_MARKER]
-  and fall of civilizations — century after century. Jung called this the collective unconscious:
-  [IMAGE_MARKER]
-  an invisible archive of every human experience ever lived, encoded in the deepest layer of the mind.
-
-  ↑ 3 markers in 60 words = correct Tier-1 density
-
-══════════════════════════════════════
-TIER 2 — Words 1,401+ (~10+ min)
-══════════════════════════════════════
-  → ONE [IMAGE_MARKER] every 60–70 words (MAXIMUM 80 words between markers)
-  → Never let a single image sit more than 30 seconds
-
-SELF-CHECK BEFORE SUBMITTING:
-  Count your [IMAGE_MARKER] tags in the first 1,400 words.
-  If count < 45 → YOU HAVE FAILED TIER-1. Add more markers.
-  For a 5,000-word script: expect ~56 markers in words 0–1,400 + ~51 in words 1,401–5,000 = ~107 total.
-
-ALSO: Follow the [BLOCK IMAGE TARGETS] in the user message.
-If a block target says ~8 images, place ~8 [IMAGE_MARKER] tags in that block.
-
-⚠️ CTA BLOCKS REQUIRE A MARKER:
-Both [CTA_SUBSCRIBE_MID] and [CTA_SUBSCRIBE_FINAL] must contain
-at least one [IMAGE_MARKER] within the CTA narration.
-Without a marker, the CTA will display a frozen frame for its entire duration.
+Do NOT write any image tags, markers, or prompts.
+A separate Art Director AI handles all image placement and descriptions automatically.
+Your job is pure narration only — focus entirely on the quality of the writing.
 
 ═══════════════════════════════════════════════════════════════════
 STYLISTIC GUIDELINES
