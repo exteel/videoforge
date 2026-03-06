@@ -447,6 +447,10 @@ async def run_pipeline(
         project_dir: Explicit project output directory.
         script_path_override: Use this script.json directly.
     """
+    # Clear module cache at the start of each run so code changes on disk
+    # (e.g. bug fixes committed during a live server session) are picked up immediately.
+    _module_cache.clear()
+
     cost = CostBudget(limit=budget)
     t_pipeline = time.monotonic()
 
