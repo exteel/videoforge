@@ -40,7 +40,22 @@
 - Помилковий висновок: H.264 temporal encoding (I/P/B frames) дає різні хеші навіть для статичних кадрів
 - Правильний метод: порівнювати кадри на різних часових мітках (кожні 10с) — всі різні хеші = різні зображення ✅
 - Підтверджено: обидва `test5min.mp4` (CLI) та `final.mp4` (server job) — в статичному режимі ✅
-- "Перша картинка 45с" = **візуальна схожість** 5 oil-painting зображень блоку_001, а не технічна проблема
+- "Перша картинка 45с" = старий `use_static` path брав тільки `imgs[0]` для цілого блоку (НЕ візуальна схожість)
+
+**Root cause (фінальний)**: старий код `use_static`:
+```python
+image_path = imgs[0] if imgs else None  # тільки перше зображення!
+frames.append((image_path, duration))   # весь блок = 1 картинка
+```
+Новий код розподіляє всі imgs по `image_word_offsets` = 5 зображень x ~10с.
+
+**Доказ** (I-frame аналіз ffprobe):
+- Стара компіляція: тільки periodic GOP кожні 8.33с (= 250 frames/30fps) — жодного scene-change
+- Нова компіляція: scene-change I-frames на 10.17s, 20.43s, 30.63s, 40.83s — переходи картинок
+
+**Фінальна перекомпіляція** (CLI):
+- `python3 modules/05_video_compiler.py --script ... --no-ken-burns --no-music`
+- `final.mp4 121.6 MB` — перевірено користувачем, картинки міняються
 
 **CLI `--no-ken-burns`**:
 - Додано CLI аргумент `--no-ken-burns` до `05_video_compiler.py`
