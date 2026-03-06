@@ -138,17 +138,22 @@ class JobManager:
 
     async def start_pipeline(
         self,
-        source_dir: Path,
+        source_dir: Path | None,
         channel_config_path: Path,
         **kwargs: Any,
     ) -> str:
         job_id = uuid.uuid4().hex[:8]
+        _source_label = (
+            source_dir.name
+            if source_dir is not None
+            else (kwargs.get("custom_topic") or "topic-only")[:40]
+        )
         job = Job(
             job_id=job_id,
             kind="pipeline",
             status="queued",
-            source=source_dir.name,
-            source_dir=str(source_dir),
+            source=_source_label,
+            source_dir=str(source_dir) if source_dir is not None else "",
             channel=channel_config_path.stem,
             quality=kwargs.get("quality", "max"),
         )
@@ -355,6 +360,76 @@ class JobManager:
             job.error = str(exc)[:500]
             job.log(f"Error: {exc}")
             job.emit(type="error", message=str(exc)[:500])
+
+
+    # ── Multi-Topic Batch ──────────────────────────────────────────────────────
+
+    async def start_multi_batch(
+        self,
+        items: list[dict],   # each: {source_dir: Path, channel_config_path: Path, kwargs: dict}
+        parallel: int = 2,
+    ) -> list[str]:
+        """
+        Start N independent pipeline jobs from a topic queue.
+
+        All N jobs are created immediately (visible in UI) but only `parallel`
+        run at a time — controlled by a shared asyncio.Semaphore.
+
+        Each job tracks progress independently (own WebSocket, own DB record).
+
+        Args:
+            items: List of dicts with keys:
+                - source_dir (Path): Transcriber output dir
+                - channel_config_path (Path): Channel config
+                - kwargs (dict): Extra args forwarded to run_pipeline()
+            parallel: Max simultaneous pipelines (1–8).
+
+        Returns:
+            List of job_ids (one per item).
+        """
+        sem = asyncio.Semaphore(parallel)
+        job_ids: list[str] = []
+
+        for item in items:
+            source_dir: Path | None = item["source_dir"]  # None = topic-only mode
+            channel_config_path: Path = item["channel_config_path"]
+            kwargs: dict = item.get("kwargs", {})
+
+            _source_label = (
+                source_dir.name
+                if source_dir is not None
+                else (kwargs.get("custom_topic") or "topic-only")[:40]
+            )
+            job_id = uuid.uuid4().hex[:8]
+            job = Job(
+                job_id=job_id,
+                kind="pipeline",
+                status="queued",
+                source=_source_label,
+                source_dir=str(source_dir) if source_dir is not None else "",
+                channel=channel_config_path.stem,
+                quality=kwargs.get("quality", "max"),
+            )
+            self._jobs[job_id] = job
+            job.task = asyncio.create_task(
+                self._run_with_semaphore(sem, job, source_dir, channel_config_path, **kwargs),
+                name=f"pipeline-{job_id}",
+            )
+            job_ids.append(job_id)
+
+        return job_ids
+
+    async def _run_with_semaphore(
+        self,
+        sem: asyncio.Semaphore,
+        job: Job,
+        source_dir: Path,
+        channel_config_path: Path,
+        **kwargs: Any,
+    ) -> None:
+        """Acquire semaphore slot then run pipeline — queued jobs wait their turn."""
+        async with sem:
+            await self._run_pipeline_job(job, source_dir, channel_config_path, **kwargs)
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

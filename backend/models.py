@@ -43,6 +43,14 @@ class PipelineRunRequest(BaseModel):
         description="Override topic for the new script (replaces reference video title). "
                     "Leave empty to use the reference video's title as the topic.",
     )
+    image_backend: str | None = Field(
+        None,
+        description="Image generation provider: 'wavespeed' (default) | 'betatest' | 'voidai'",
+    )
+    vision_model: str | None = Field(
+        None,
+        description="Vision model for image analysis/validation: 'gpt-4.1' (default) | 'gpt-4.1-mini'",
+    )
 
 
 class BatchRunRequest(BaseModel):
@@ -57,6 +65,48 @@ class BatchRunRequest(BaseModel):
     budget_total: float | None = Field(None, description="Max total batch spend in USD")
     skip_done: bool = Field(True, description="Skip videos that already have final.mp4")
     dry_run: bool = Field(False, description="Estimate costs only, no API calls")
+
+
+class MultiTopicItem(BaseModel):
+    """One video in a multi-topic queue."""
+    source_dir: str = Field(
+        "",
+        description="Transcriber output directory for this video. "
+                    "Leave empty for topic-only mode (custom_topic required).",
+    )
+    channel: str = Field("config/channels/history.json", description="Channel config JSON path")
+    custom_topic: str = Field("", description="Override topic (leave empty to use reference title)")
+    quality: str = Field("max", description="LLM quality preset for this video")
+    image_style: str = Field("", description="Image style override (empty = use global or channel default)")
+
+
+class MultiBatchRequest(BaseModel):
+    """Start multiple pipeline jobs from a topic queue, running up to `parallel` at once."""
+    items: list[MultiTopicItem] = Field(..., min_length=1, description="List of videos to generate")
+    parallel: int = Field(2, ge=1, le=8, description="Max simultaneous pipeline runs")
+    image_style: str = Field("", description="Global image style (overridden by per-item style if set)")
+    dry_run: bool = Field(False, description="Estimate costs only, no API calls")
+    draft: bool = Field(False, description="Generate 480p previews without effects")
+    from_step: int = Field(1, ge=1, le=6, description="Resume all videos from step N")
+    to_step: int = Field(6, ge=1, le=6, description="Stop after step N (1-6)")
+    budget_per_video: float | None = Field(None, description="Max spend per video in USD")
+    # Script settings (applied to all items)
+    template: str = Field("auto", description="Content template (auto/documentary/listicle/tutorial/comparison)")
+    duration_min: int = Field(8, ge=1, le=240, description="Minimum target video duration in minutes")
+    duration_max: int = Field(12, ge=1, le=240, description="Maximum target video duration in minutes")
+    master_prompt: str | None = Field(None, description="Override master prompt path for all videos")
+    # Voice / audio settings
+    voice_id: str | None = Field(None, description="Override voice ID for all videos")
+    background_music: bool = Field(True, description="Mix royalty-free background music under voice")
+    music_volume: float | None = Field(None, ge=-60, le=0, description="BGM volume override in dB")
+    music_track: str | None = Field(None, description="Explicit music track path (absolute)")
+    burn_subtitles: bool = Field(True, description="Burn generated subtitles into video")
+    # Video settings
+    skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
+    no_ken_burns: bool = Field(False, description="Static slideshow — no Ken Burns effect (faster)")
+    # Image settings
+    image_backend: str | None = Field(None, description="Image generation provider: 'wavespeed' (default) | 'betatest' | 'voidai'")
+    vision_model: str | None = Field(None, description="Vision model for image analysis/validation: 'gpt-4.1' (default) | 'gpt-4.1-mini'")
 
 
 # ─── Job response ─────────────────────────────────────────────────────────────

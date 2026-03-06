@@ -49,8 +49,11 @@ DEFAULT_ASS_STYLE = {
     "margin_v":      130,         # ~10% higher than default 60 (720p: 60+72=132)
 }
 
-# Characters per subtitle line before wrapping — keep short so entries stay 1 line
-MAX_CHARS_PER_LINE = 32
+# Characters per subtitle line before wrapping (45 ≈ comfortable reading width at 1280px)
+MAX_CHARS_PER_LINE = 50
+
+# Max lines per subtitle entry — YouTube style: 2 lines max
+MAX_LINES_PER_ENTRY = 1
 
 # Max subtitle duration for very long blocks (split into multiple entries)
 MAX_SUBTITLE_DURATION = 8.0   # seconds
@@ -78,8 +81,8 @@ def _fmt_ass(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}.{cs:02d}"
 
 
-def _wrap_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> str:
-    """Wrap subtitle text at max_chars, returning \\N-joined lines (ASS) or \\n (SRT)."""
+def _wrap_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> list[str]:
+    """Wrap subtitle text at max_chars, returning list of lines."""
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -92,6 +95,73 @@ def _wrap_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> str:
     if current:
         lines.append(current)
     return lines
+
+
+def _split_to_fit(
+    text: str,
+    max_chars: int = MAX_CHARS_PER_LINE,
+    max_lines: int = MAX_LINES_PER_ENTRY,
+) -> list[str]:
+    """
+    Split *text* into chunks so each chunk wraps to ≤ max_lines display lines.
+
+    Splits at the best natural boundary near the midpoint (comma, semicolon,
+    em-dash, conjunction word like 'and'/'but'/'or').  Falls back to a hard
+    word-midpoint split when no punctuation is found.  Recurses until every
+    chunk satisfies the line-count constraint.
+
+    Returns a list of text strings (each fits ≤ max_lines lines).
+    """
+    if len(_wrap_text(text, max_chars)) <= max_lines:
+        return [text]
+
+    words = text.split()
+    if len(words) <= 1:
+        return [text]  # can't split further
+
+    mid = len(words) // 2
+
+    # Priority: punctuation-based split near midpoint
+    # Search ±40% around midpoint
+    search_radius = max(mid // 2, 1)
+    best_split: int | None = None
+
+    # Prefer comma/semicolon ending a word
+    for offset in range(0, search_radius + 1):
+        for i in [mid + offset, mid - offset]:
+            if 0 < i < len(words):
+                w = words[i - 1]
+                if w.endswith((",", ";", ":", "—", "–")):
+                    best_split = i
+                    break
+        if best_split is not None:
+            break
+
+    # Fallback: split before a conjunction at midpoint
+    if best_split is None:
+        conjunctions = {"and", "but", "or", "nor", "yet", "so", "because",
+                        "although", "while", "when", "if", "that", "which",
+                        "who", "where", "then"}
+        for offset in range(0, search_radius + 1):
+            for i in [mid + offset, mid - offset]:
+                if 0 < i < len(words) and words[i].lower() in conjunctions:
+                    best_split = i
+                    break
+            if best_split is not None:
+                break
+
+    # Hard midpoint as last resort
+    if best_split is None:
+        best_split = mid
+
+    part1 = " ".join(words[:best_split]).strip()
+    part2 = " ".join(words[best_split:]).strip()
+
+    result: list[str] = []
+    for part in (part1, part2):
+        if part:
+            result.extend(_split_to_fit(part, max_chars, max_lines))
+    return result or [text]
 
 
 # ─── Subtitle entry ───────────────────────────────────────────────────────────
@@ -197,23 +267,28 @@ def _block_to_entries(
         entry = SubEntry(entry_index_start, start_time, end_time, narration)
         return [entry], end_time
 
-    # Always split at sentence boundaries — proportional to sentence length.
-    # This keeps subtitles short (≤1 line each) regardless of block duration.
-    total_chars = sum(len(s) for s in sentences)
+    # Split at sentence boundaries, then further split any sentence that would
+    # render as more than MAX_LINES_PER_ENTRY display lines.
+    # Timing is proportional to character count within each segment.
+    chunks: list[str] = []
+    for sentence in sentences:
+        chunks.extend(_split_to_fit(sentence))
+
+    total_chars = sum(len(c) for c in chunks)
     entries: list[SubEntry] = []
     current_time = start_time
     idx = entry_index_start
 
-    for i, sentence in enumerate(sentences):
-        frac    = len(sentence) / total_chars if total_chars else 1 / len(sentences)
+    for i, chunk in enumerate(chunks):
+        frac    = len(chunk) / total_chars if total_chars else 1 / len(chunks)
         seg_dur = duration * frac
         seg_end = current_time + seg_dur
 
         # Clamp last segment
-        if i == len(sentences) - 1:
+        if i == len(chunks) - 1:
             seg_end = end_time
 
-        entries.append(SubEntry(idx, current_time, seg_end, sentence))
+        entries.append(SubEntry(idx, current_time, seg_end, chunk))
         current_time = seg_end
         idx += 1
 

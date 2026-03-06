@@ -146,11 +146,13 @@ async def _score_image(
     image_prompt: str,
     api_key: str,
     sem: asyncio.Semaphore,
+    vision_model: str | None = None,
 ) -> tuple[float, str, str]:
     """
-    Score an image against its narration using gpt-4.1 vision.
+    Score an image against its narration using a vision model (default: gpt-4.1).
     Returns (score 0-10, reason, improved_prompt).
     """
+    model = vision_model or SCORE_MODEL
     img_bytes = image_path.read_bytes()
     img_b64   = base64.b64encode(img_bytes).decode()
     suffix    = image_path.suffix.lower()
@@ -189,7 +191,7 @@ Return ONLY valid JSON:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": SCORE_MODEL,
+                    "model": model,
                     "messages": [
                         {
                             "role": "user",
@@ -360,6 +362,7 @@ async def validate_and_fix_images(
     threshold: float = DEFAULT_THRESHOLD,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     progress_callback: Any = None,
+    vision_model: str | None = None,  # Override scoring model: "gpt-4.1" (default) | "gpt-4.1-mini"
 ) -> ImageValidationResult:
     """
     Validate all generated images against their narration text.
@@ -372,6 +375,7 @@ async def validate_and_fix_images(
         threshold:         Minimum acceptable score (default 7.0).
         max_attempts:      Max regeneration attempts per image (default 2).
         progress_callback: Optional callable({type, pct, message}).
+        vision_model:      Vision model override (e.g. "gpt-4.1-mini"). Default: gpt-4.1.
 
     Returns:
         ImageValidationResult with per-image scores and regen summary.
@@ -504,9 +508,10 @@ async def validate_and_fix_images(
         max(len(b.get("image_prompts") or []), 1 if (b.get("image_prompt") or "").strip() else 0)
         for b in blocks_to_score
     )
+    _eff_model = vision_model or SCORE_MODEL
     log.info(
         "Image validation: scoring %d images across %d blocks (threshold=%.0f/10, model=%s, skipped=%d)",
-        _total_images, len(blocks_to_score), threshold, SCORE_MODEL, len(pre_skipped),
+        _total_images, len(blocks_to_score), threshold, _eff_model, len(pre_skipped),
     )
     _emit(f"Scoring {_total_images} images across {len(blocks_to_score)} blocks…", 15.0)
 
@@ -546,6 +551,7 @@ async def validate_and_fix_images(
             try:
                 score, reason, improved = await _score_image(
                     bid_, img_path_, narration, prompt_, voidai_key, score_sem,
+                    vision_model=vision_model,
                 )
             except Exception as exc:
                 log.warning("Failed to score %s: %s — marking as skipped", img_path_.name, exc)
@@ -590,21 +596,20 @@ async def validate_and_fix_images(
     # Update total to reflect actual image count (not block count)
     result.total = len(result.scores)
 
-    ok_scores  = [s for s in scored_list if s.ok]
     # [FIXED] Exclude skipped from regen queue (scoring API errors ≠ bad images)
     bad_scores = [s for s in scored_list if not s.ok and not s.skipped]
-    result.ok_count = len(ok_scores)
 
     # Update skipped count (includes newly skipped from scoring failures)
     newly_skipped = [s for s in scored_list if s.skipped]
     result.skipped += len(newly_skipped)
-    result.total   += len(newly_skipped)  # adjust total if scoring added skips
+    # NOTE: result.total was already set to len(result.scores) which includes skipped — do NOT add again
 
+    _pre_ok_count = len([s for s in scored_list if s.ok and not s.skipped])
     log.info(
         "Scores done: %d OK, %d need regeneration, %d skipped (scoring error)",
-        len(ok_scores), len(bad_scores), len(newly_skipped),
+        _pre_ok_count, len(bad_scores), len(newly_skipped),
     )
-    _emit(f"{len(ok_scores)}/{len(blocks_to_score)} OK, regenerating {len(bad_scores)}…", 40.0)
+    _emit(f"{_pre_ok_count}/{len(blocks_to_score)} OK, regenerating {len(bad_scores)}…", 40.0)
 
     if not bad_scores:
         result.elapsed = time.monotonic() - t0
@@ -676,6 +681,7 @@ async def validate_and_fix_images(
             try:
                 new_score, new_reason, new_improved = await _score_image(
                     bid_, img_path_, narration, prompt_, voidai_key, score_sem,
+                    vision_model=vision_model,
                 )
                 log.info(
                     "  %s: rescore=%.0f (was %.0f)",
@@ -716,6 +722,9 @@ async def validate_and_fix_images(
             result.regenerated += 1
         else:
             result.failed += 1
+
+    # Recalculate ok_count AFTER regen (loop mutates .ok in-place on ImageScore objects)
+    result.ok_count = sum(1 for s in result.scores if s.ok and not s.skipped)
 
     # ── Save improved_prompt back to script.json (helps future regenerations) ──
     # Updates both image_prompts[idx] (for the specific image) and image_prompt (primary only)

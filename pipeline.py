@@ -173,6 +173,159 @@ def _emit(callback: Any, **event: Any) -> None:
         pass
 
 
+# ─── Balance snapshot helpers ─────────────────────────────────────────────────
+
+async def _fetch_balances() -> dict[str, Any]:
+    """
+    Fetch current balances from VoiceAPI and VoidAI (best-effort, never raises).
+
+    Returns a dict with keys:
+        voiceapi_chars  – remaining characters on VoiceAPI (int or None)
+        voidai_credits  – remaining daily credits on VoidAI (int or None)
+        timestamp       – unix time of snapshot (float)
+    """
+    import os as _os
+    result: dict[str, Any] = {"voiceapi_chars": None, "voidai_credits": None, "timestamp": time.monotonic()}
+
+    # ── VoiceAPI balance ──────────────────────────────────────────────────────
+    try:
+        import httpx as _httpx
+        _key = _os.getenv("VOICEAPI_KEY", "")
+        if _key:
+            async with _httpx.AsyncClient(base_url="https://voiceapi.csv666.ru", timeout=8) as _c:
+                _r = await _c.get("/balance", headers={"X-API-Key": _key})
+                if _r.status_code == 200:
+                    _d = _r.json()
+                    result["voiceapi_chars"] = int(_d.get("balance", _d.get("characters", 0)) or 0)
+    except Exception as _e:
+        log.debug("VoiceAPI balance fetch failed: %s", _e)
+
+    # ── VoidAI balance (best-effort — endpoint may not be available) ──────────
+    try:
+        import httpx as _httpx
+        _key = _os.getenv("VOIDAI_API_KEY", "")
+        _base = _os.getenv("VOIDAI_BASE_URL", "https://api.voidai.app/v1").rstrip("/")
+        if _key:
+            for _path in ("/dashboard/billing/credit_grants", "/usage", "/credits"):
+                try:
+                    async with _httpx.AsyncClient(timeout=8) as _c:
+                        _r = await _c.get(
+                            f"{_base}{_path}",
+                            headers={"Authorization": f"Bearer {_key}"},
+                        )
+                        if _r.status_code == 200:
+                            _d = _r.json()
+                            _rem = (_d.get("remaining") or _d.get("credits_remaining")
+                                    or _d.get("balance") or _d.get("daily_remaining"))
+                            if _rem is not None:
+                                result["voidai_credits"] = int(_rem)
+                                break
+                except Exception:
+                    continue
+    except Exception as _e:
+        log.debug("VoidAI balance fetch failed: %s", _e)
+
+    return result
+
+
+def _write_cost_report(
+    proj: Path,
+    start: dict[str, Any],
+    end: dict[str, Any],
+    elapsed_s: float,
+    *,
+    voiceapi_rate_per_char: float = 0.0000038,
+) -> None:
+    """
+    Calculate per-video costs from balance snapshots and write cost_report.json.
+    Also prints a human-readable summary to stdout.
+    """
+    # ── VoiceAPI ──────────────────────────────────────────────────────────────
+    va_start = start.get("voiceapi_chars")
+    va_end   = end.get("voiceapi_chars")
+    va_used: int | None  = None
+    va_cost: float | None = None
+    if va_start is not None and va_end is not None:
+        va_used = va_start - va_end
+        va_cost = max(0, va_used) * voiceapi_rate_per_char
+
+    # ── VoidAI ────────────────────────────────────────────────────────────────
+    vi_start = start.get("voidai_credits")
+    vi_end   = end.get("voidai_credits")
+    vi_used: int | None  = None
+    # VoidAI is flat $35/month — credits are informational (daily quota, not $)
+    if vi_start is not None and vi_end is not None:
+        vi_used = vi_start - vi_end
+
+    # ── Fixed monthly costs (pro-rated per video, amortized over 30 days) ────
+    # VoidAI $35 + BetaTest $15 = $50/month fixed
+    # Assumes ~1 video generated today; caller can override with actual count.
+    fixed_monthly = 50.0   # $35 VoidAI + $15 BetaTest
+    fixed_per_video_day = fixed_monthly / 30  # $1.67/day if 1 video/day
+
+    # ── Report dict ───────────────────────────────────────────────────────────
+    report = {
+        "elapsed_seconds":    round(elapsed_s, 1),
+        "voiceapi": {
+            "chars_start":  va_start,
+            "chars_end":    va_end,
+            "chars_used":   va_used,
+            "cost_usd":     round(va_cost, 6) if va_cost is not None else None,
+            "rate_per_char": voiceapi_rate_per_char,
+        },
+        "voidai": {
+            "credits_start": vi_start,
+            "credits_end":   vi_end,
+            "credits_used":  vi_used,
+            "note":          "Flat $35/month plan — daily quota, not per-call billing",
+        },
+        "fixed_costs": {
+            "voidai_monthly_usd":    35.0,
+            "betatest_monthly_usd":  15.0,
+            "total_monthly_usd":     fixed_monthly,
+            "pro_rated_per_video_if_1_per_day": round(fixed_per_video_day, 4),
+        },
+        "snapshots": {"start": start, "end": end},
+    }
+
+    # ── Write JSON ────────────────────────────────────────────────────────────
+    report_path = proj / "cost_report.json"
+    try:
+        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as _e:
+        log.warning("Could not write cost_report.json: %s", _e)
+
+    # ── Print summary ─────────────────────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("  COST REPORT")
+    print("=" * 60)
+    print(f"  Generation time : {elapsed_s/60:.1f} min")
+    print()
+    print("  VoiceAPI (variable):")
+    if va_used is not None:
+        print(f"    Chars used  : {va_used:,}")
+        print(f"    Cost        : ${va_cost:.4f}")
+    else:
+        print("    Balance unavailable (check voiceapi.csv666.ru)")
+    print()
+    print("  VoidAI (fixed $35/month, 4M credits/day):")
+    if vi_used is not None:
+        print(f"    Credits used: {vi_used:,}")
+    else:
+        print("    Credits tracking unavailable via API")
+    print()
+    print("  Fixed monthly costs:")
+    print(f"    VoidAI  : $35.00/month")
+    print(f"    BetaTest: $15.00/month  (unlimited images)")
+    print(f"    Total   : $50.00/month")
+    print()
+    if va_cost is not None:
+        print(f"  Variable cost this video : ${va_cost:.4f}")
+    print(f"  Report saved: {report_path.name}")
+    print("=" * 60)
+
+
 # ─── Validation helpers ────────────────────────────────────────────────────────
 
 def _require_files(paths: list[Path], *, min_bytes: int = 0, step: str = "") -> None:
@@ -274,6 +427,8 @@ async def run_pipeline(
     music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
     music_track: str | None = None,    # Explicit music file path; None = channel config random pick
     custom_topic: str | None = None,   # Override topic for new script (replaces reference video title)
+    image_backend: str | None = None,  # Image provider: "wavespeed" | "betatest" | "voidai"
+    vision_model: str | None = None,   # Vision model for image analysis: "gpt-4.1" | "gpt-4.1-mini"
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -306,6 +461,10 @@ async def run_pipeline(
         else:
             folder_name = source_dir.name
         proj = ROOT / "projects" / folder_name
+    elif custom_topic and custom_topic.strip():
+        # Topic-only mode: no reference video, derive project dir from topic name
+        _safe_topic = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200].strip(". ")
+        proj = ROOT / "projects" / _safe_topic
     else:
         raise ValueError("Either source_dir or project_dir must be provided")
 
@@ -367,6 +526,21 @@ async def run_pipeline(
         db_tracker.set_running(_vid_id)
         log.info("DB tracking : video_id=%d", _vid_id)
 
+    # ── Balance snapshot: START ────────────────────────────────────────────────
+    _balances_start: dict[str, Any] = {}
+    if not dry_run:
+        try:
+            _balances_start = await _fetch_balances()
+            va = _balances_start.get("voiceapi_chars")
+            vi = _balances_start.get("voidai_credits")
+            log.info(
+                "[BALANCE START] VoiceAPI: %s chars | VoidAI: %s credits",
+                f"{va:,}" if va is not None else "N/A",
+                f"{vi:,}" if vi is not None else "N/A",
+            )
+        except Exception as _be:
+            log.debug("Balance snapshot (start) failed: %s", _be)
+
     # ── Upfront cost estimate (dry-run only) ───────────────────────────────────
     if dry_run:
         try:
@@ -415,8 +589,10 @@ async def run_pipeline(
         _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
         t0 = time.monotonic()
 
-        if source_dir is None:
-            raise ValueError("--source is required for step 1 (script generation)")
+        if source_dir is None and not (custom_topic or "").strip():
+            raise ValueError(
+                "--source is required for step 1 unless --custom-topic is provided"
+            )
 
         generate_scripts = _fn("modules/01_script_generator.py", "generate_scripts")
         script_paths: list[Path] = await generate_scripts(
@@ -557,7 +733,7 @@ async def run_pipeline(
             log.info("[DRY RUN] No script.json (step 1 was also dry-run); using typical 10-block estimate")
             n_langs = len(langs) if langs else 1
             cost.add("Images estimate (10 blocks, WaveSpeed)", 10 * 0.005)
-            cost.add("Voice estimate (5000 chars/lang)", n_langs * 5000 * 0.0002)
+            cost.add("Voice estimate (5000 chars/lang)", n_langs * 5000 * 0.0000038)
         else:
             generate_images = _fn("modules/02_image_generator.py", "generate_images")
             generate_voices = _fn("modules/03_voice_generator.py", "generate_voices")
@@ -600,6 +776,7 @@ async def run_pipeline(
                 skip_existing=True,
                 image_style=image_style or None,
                 validate=False,   # Inline validation disabled — 02b handles all validation/regen
+                image_backend=image_backend or None,
                 progress_callback=_img_sub_cb,
             )
             voice_task = generate_voices(
@@ -623,6 +800,7 @@ async def run_pipeline(
                 _img_val = await _validate_images(
                     s_path, _images_dir, _chan_cfg,
                     threshold=_img_threshold,
+                    vision_model=vision_model or None,
                     progress_callback=_img_sub_cb,
                 )
                 _img_val_data = _img_val.to_dict()
@@ -692,11 +870,11 @@ async def run_pipeline(
             cost.add("Images (WaveSpeed)", ws_cost)
             if va_cost > 0:
                 cost.add("Images (VoidAI fallback)", va_cost)
-            # Voice: rough ~$0.0002/char (ElevenLabs tier)
-            cost.add("Voice (VoiceAPI)", n_chars * 0.0002)
+            # Voice: VoiceAPI rate = $19 / 5,000,000 chars = $0.0000038/char
+            cost.add("Voice (VoiceAPI)", n_chars * 0.0000038)
             if langs and len(langs) > 1:
                 for _ in langs[1:]:
-                    cost.add(f"Voice extra lang", n_chars * 0.0002)
+                    cost.add(f"Voice extra lang", n_chars * 0.0000038)
 
             if cost.over_budget():
                 log.error("Budget exceeded after Media! %s", cost.summary())
@@ -907,6 +1085,21 @@ async def run_pipeline(
         log.info("DB tracking : done (video_id=%d, elapsed=%.1fs)", _vid_id, elapsed_total)
 
     _emit(progress_callback, type="done", elapsed=elapsed_total, dry_run=dry_run)
+
+    # ── Balance snapshot: END + cost report ───────────────────────────────────
+    if not dry_run and _balances_start:
+        try:
+            _balances_end = await _fetch_balances()
+            va = _balances_end.get("voiceapi_chars")
+            vi = _balances_end.get("voidai_credits")
+            log.info(
+                "[BALANCE END] VoiceAPI: %s chars | VoidAI: %s credits",
+                f"{va:,}" if va is not None else "N/A",
+                f"{vi:,}" if vi is not None else "N/A",
+            )
+            _write_cost_report(proj, _balances_start, _balances_end, elapsed_total)
+        except Exception as _be:
+            log.debug("Balance snapshot (end) failed: %s", _be)
 
     print()
     print("=" * 60)

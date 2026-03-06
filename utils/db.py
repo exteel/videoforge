@@ -279,6 +279,25 @@ class VideoTracker:
                 (STATUS_SKIPPED, now, reason, video_id),
             )
 
+    def cancel_orphaned_jobs(self) -> int:
+        """On backend startup, mark any 'running'/'waiting_review'/'queued' rows as
+        cancelled — they are orphaned because the previous backend process was killed
+        while they were in-flight and the in-memory job dict is now empty.
+        Returns the number of rows affected.
+        """
+        now = _now()
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE videos
+                SET status='cancelled', updated_at=?,
+                    error_message='Cancelled: backend restarted while job was in-flight'
+                WHERE status IN ('running', 'waiting_review', 'queued')
+                """,
+                (now,),
+            )
+            return cur.rowcount
+
     def set_youtube_url(
         self,
         video_id: int,

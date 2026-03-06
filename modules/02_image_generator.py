@@ -24,6 +24,7 @@ CLI:
 """
 
 import asyncio
+import hashlib
 import json
 import re
 import sys
@@ -47,6 +48,24 @@ DEFAULT_SIZE           = "1280*720"        # WaveSpeed 16:9
 FALLBACK_SIZE          = "1536x1024"       # VoidAI 16:9 — valid size (1792x1024 not supported)
 MAX_VALIDATION_RETRIES = 2                 # Extra attempts if validation fails
 MIN_FILE_SIZE_BYTES    = 5_000            # Files smaller than this are considered corrupt
+
+def _derive_video_seed(title: str) -> int:
+    """Derive a stable per-video seed from the video title.
+
+    Using MD5 (not Python's hash(), which is process-randomized by PYTHONHASHSEED)
+    so the same title always produces the same seed across runs — enabling
+    reproducible image generation for the same video.
+
+    All images in a video share a seed family (video_seed + block_order),
+    which nudges the model toward a consistent visual style within a video
+    while different videos get distinct visual DNA.
+
+    Returns:
+        Integer seed in range [0, 2**30) — safe for all image gen APIs.
+    """
+    digest = hashlib.md5(title.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % (2 ** 30)
+
 
 _VALIDATION_PROMPT = """\
 You are a quality validator for AI-generated images in a YouTube video pipeline.
@@ -165,6 +184,7 @@ async def _generate_one(
     max_retries: int,
     idx: int = 0,  # image index: 0=primary ({block_id}.png), 1+= additional ({block_id}_N.png)
     wavespeed_globally_failed: list[bool] | None = None,  # shared mutable flag across coroutines
+    block_seed: int | None = None,  # per-video seed for style consistency (video_seed + block_order)
 ) -> ImageResult:
     """
     Generate one image for a script block.
@@ -230,7 +250,7 @@ async def _generate_one(
         gen_ok = False
         if not wavespeed_failed:
             try:
-                seed = 42 if attempt == 1 else None  # Fixed seed first, random on retries
+                seed = block_seed if attempt == 1 else None  # Per-video seed first, random on retries
                 await wavespeed.generate_text2img(
                     full_prompt,
                     size=size,
@@ -356,6 +376,8 @@ async def generate_images(
     max_retries: int = MAX_VALIDATION_RETRIES,
     size: str | None = None,
     image_style: str | None = None,
+    video_seed: int | None = None,  # Per-video style seed; None = auto-derive from title
+    image_backend: str | None = None,  # "wavespeed" (default) | "betatest" | "voidai"
     progress_callback: Any | None = None,
 ) -> GenerationSummary:
     """
@@ -389,6 +411,15 @@ async def generate_images(
     # image_style param overrides channel_config value when provided
     image_style = image_style or ""  # UI-provided only; no channel_config fallback
     image_size = size or DEFAULT_SIZE
+
+    # ── Per-video style seed ──────────────────────────────────────────────────
+    # All images in a video use seeds from the same "family" (video_seed + block_order)
+    # so the model tends toward a consistent visual aesthetic within a video.
+    # Different videos get different seeds → different visual identity.
+    if video_seed is None:
+        title = script.get("video_title") or script.get("title") or ""
+        video_seed = _derive_video_seed(title) if title else 42
+    log.info("Image style seed: %d (video: %s)", video_seed, (script.get("video_title") or "")[:50])
 
     # Output directory
     images_dir = Path(output_dir) if output_dir else script_path.parent / "images"
@@ -435,8 +466,24 @@ async def generate_images(
 
     t0 = time.monotonic()
 
-    from clients.voidai_client import VoidAIClient       # noqa: PLC0415
-    from clients.wavespeed_client import WaveSpeedClient  # noqa: PLC0415
+    from clients.voidai_client import VoidAIClient  # noqa: PLC0415
+
+    # ── Select primary image generation backend ───────────────────────────────
+    _backend = (image_backend or "wavespeed").lower().strip()
+    log.info("Image backend: %s", _backend)
+
+    if _backend == "betatest":
+        from clients.betaimage_client import BetaImageClient  # noqa: PLC0415
+        PrimaryClient = BetaImageClient
+        # BetaImage does NOT support arbitrary size strings — it always outputs 16:9.
+        # Override size so _generate_one doesn't pass an incompatible value.
+        image_size = "16:9"
+    elif _backend == "voidai":
+        PrimaryClient = None   # VoidAI only — primary client skipped entirely
+        image_size = FALLBACK_SIZE
+    else:  # "wavespeed" (default)
+        from clients.wavespeed_client import WaveSpeedClient  # noqa: PLC0415
+        PrimaryClient = WaveSpeedClient
 
     # ── Progress helper (reports 0-100% of image generation) ──
     n_img_total = n_total_images
@@ -456,18 +503,17 @@ async def generate_images(
 
     results: list[ImageResult] = []
 
-    # Shared mutable flag: set to True the moment any WaveSpeed call fails.
-    # All other concurrent coroutines check this and skip WaveSpeed immediately,
-    # preventing a cascade of failed API charges when the endpoint is broken.
-    _ws_global_failed: list[bool] = [False]
+    # Shared mutable flag: set to True the moment any primary client call fails.
+    # Remaining blocks skip the primary client and use VoidAI directly.
+    _ws_global_failed: list[bool] = [_backend == "voidai"]  # True = skip primary from start
 
-    async with WaveSpeedClient() as wavespeed, VoidAIClient() as voidai:
+    async def _run_coros(primary_client: Any) -> list[ImageResult]:
         coros = [
             _generate_one(
                 block=b,
                 images_dir=images_dir,
                 image_style=image_style,
-                wavespeed=wavespeed,
+                wavespeed=primary_client,
                 voidai=voidai,
                 size=image_size,
                 validate=validate,
@@ -475,6 +521,10 @@ async def generate_images(
                 max_retries=max_retries,
                 idx=idx,
                 wavespeed_globally_failed=_ws_global_failed,
+                # Per-video seed family: each block gets video_seed + block_order,
+                # so images within one video share the same "random DNA" for style consistency
+                # while different blocks vary in seed (preserving prompt-driven content differences).
+                block_seed=(video_seed + b.get("order", 0)) % (2 ** 30) if video_seed is not None else None,
             )
             for b, idx in all_jobs
         ]
@@ -503,8 +553,19 @@ async def generate_images(
                     results.append(item)
                 _emit_img_progress(i + 1)
 
-        wavespeed_cost = wavespeed.session_cost
-        voidai_cost    = voidai.session_cost
+    # ── Open clients and run ──────────────────────────────────────────────────
+    primary_cost = 0.0
+    voidai_cost  = 0.0
+
+    if PrimaryClient is not None:
+        async with PrimaryClient() as primary_client, VoidAIClient() as voidai:
+            await _run_coros(primary_client)
+            primary_cost = getattr(primary_client, "session_cost", 0.0)
+            voidai_cost  = voidai.session_cost
+    else:
+        async with VoidAIClient() as voidai:
+            await _run_coros(None)
+            voidai_cost = voidai.session_cost
 
     elapsed = time.monotonic() - t0
 
@@ -519,9 +580,9 @@ async def generate_images(
 
     log.info(
         "Done: %d generated | %d skipped | %d failed | %d fallback | "
-        "WaveSpeed=$%.3f VoidAI=$%.3f | %.1fs",
+        "primary=$%.3f VoidAI=$%.3f | %.1fs",
         generated, skipped, failed, fallback_count,
-        wavespeed_cost, voidai_cost, elapsed,
+        primary_cost, voidai_cost, elapsed,
     )
 
     if failed:
@@ -534,7 +595,7 @@ async def generate_images(
         skipped=skipped,
         failed=failed,
         fallback_count=fallback_count,
-        wavespeed_cost=wavespeed_cost,
+        wavespeed_cost=primary_cost,
         voidai_cost=voidai_cost,
         elapsed=elapsed,
         results=results,

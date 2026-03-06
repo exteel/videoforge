@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from backend.job_manager import manager
-from backend.models import BatchRunRequest, JobResponse, PipelineRunRequest
+from backend.models import BatchRunRequest, JobResponse, MultiBatchRequest, PipelineRunRequest
 
 router = APIRouter(tags=["jobs"])
 
@@ -54,6 +54,8 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         music_volume=req.music_volume,
         music_track=req.music_track,
         custom_topic=req.custom_topic,
+        image_backend=req.image_backend,
+        vision_model=req.vision_model,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 
@@ -82,6 +84,80 @@ async def run_batch(req: BatchRunRequest) -> dict:
         dry_run=req.dry_run,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
+
+
+# ── Multi-Topic Batch ──────────────────────────────────────────────────────────
+
+@router.post("/batch/multi", response_model=list[JobResponse], status_code=202)
+async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
+    """
+    Start N independent pipeline jobs from a topic queue.
+
+    Each item in `req.items` becomes a separate pipeline job.
+    Jobs run in parallel up to `req.parallel` at a time.
+    Returns a list of JobResponse objects — one per item.
+    """
+    if not req.items:
+        raise HTTPException(400, "items list is empty")
+
+    # Build per-job spec list (validate all dirs/channels before creating any job)
+    job_specs: list[dict] = []
+    for i, item in enumerate(req.items):
+        source_dir_str = (item.source_dir or "").strip()
+        if source_dir_str:
+            source_dir = Path(source_dir_str)
+            if not source_dir.is_dir():
+                raise HTTPException(400, f"Item {i}: source_dir not found: {source_dir}")
+        else:
+            # Topic-only mode — no reference video needed
+            if not (item.custom_topic or "").strip():
+                raise HTTPException(
+                    400,
+                    f"Item {i}: either source_dir or custom_topic is required",
+                )
+            source_dir = None  # type: ignore[assignment]
+
+        channel_path = _resolve_channel(item.channel)
+
+        # Per-item style overrides global; if both empty use None (channel config fallback)
+        resolved_style = item.image_style.strip() or req.image_style.strip() or ""
+
+        job_specs.append({
+            "source_dir": source_dir,
+            "channel_config_path": channel_path,
+            "kwargs": {
+                # Per-item overrides
+                "quality":            item.quality,
+                "custom_topic":       item.custom_topic or "",
+                "image_style":        resolved_style,
+                # Pipeline control
+                "dry_run":            req.dry_run,
+                "draft":              req.draft,
+                "from_step":          req.from_step,
+                "to_step":            req.to_step,
+                "budget":             req.budget_per_video,
+                # Script settings
+                "template":           req.template,
+                "duration_min":       req.duration_min,
+                "duration_max":       req.duration_max,
+                "master_prompt":      req.master_prompt,
+                # Voice / audio
+                "voice_id":           req.voice_id,
+                "background_music":   req.background_music,
+                "music_volume":       req.music_volume,
+                "music_track":        req.music_track,
+                "burn_subtitles":     req.burn_subtitles,
+                # Video
+                "skip_thumbnail":     req.skip_thumbnail,
+                "no_ken_burns":       req.no_ken_burns,
+                # Image
+                "image_backend":      req.image_backend,
+                "vision_model":       req.vision_model,
+            },
+        })
+
+    job_ids = await manager.start_multi_batch(job_specs, parallel=req.parallel)
+    return [manager.get(jid).to_response() for jid in job_ids]  # type: ignore[union-attr]
 
 
 # ── Job management ────────────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from modules.common import load_channel_config, load_env, setup_logging
+from modules.script_validator import sanitize_narration_for_tts
 from utils.ffmpeg_utils import concat_audio, get_duration, normalize_audio
 
 log = setup_logging("voice_gen")
@@ -127,7 +128,7 @@ async def _generate_block_audio(
     """
     block_id  = block["id"]
     order     = block["order"]
-    narration = block.get("narration", "").strip()
+    narration = sanitize_narration_for_tts(block.get("narration", ""))
 
     if not narration:
         log.debug("Block %s: empty narration — skip", block_id)

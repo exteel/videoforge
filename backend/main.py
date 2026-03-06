@@ -37,6 +37,15 @@ log = setup_logging("backend")
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     """Load environment on startup."""
     load_env()
+    # Cancel any jobs left in running/waiting_review/queued from a previous
+    # backend session (they are orphaned — no in-memory job exists for them).
+    try:
+        from utils.db import VideoTracker
+        n = VideoTracker().cancel_orphaned_jobs()
+        if n:
+            log.warning("Startup: cancelled %d orphaned job(s) from previous session", n)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Startup: could not cancel orphaned jobs: %s", exc)
     log.info("VideoForge API starting  (http://localhost:8000/docs)")
     yield
     log.info("VideoForge API shutting down")

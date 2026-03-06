@@ -731,6 +731,14 @@ async def _validate_intro_hook(
 
 # ─── Core Generation ──────────────────────────────────────────────────────────
 
+# Strict marker — used ONLY in the chunking loop to detect script completion.
+# We deliberately do NOT match "Thank you for being here" here because that phrase
+# can appear in regular outro narration (not only in the CTA section), which
+# previously caused premature CTA detection → strip → double-ending artefacts.
+_FINAL_CTA_MARKER_RE = re.compile(r"\[CTA_SUBSCRIBE_FINAL\]", re.IGNORECASE)
+
+# Broad pattern — used ONLY in the post-loop CTA repair / dedup section where we
+# need to find the CTA even when the LLM omitted the bracket marker.
 _FINAL_CTA_RE = re.compile(r"\[CTA_SUBSCRIBE_FINAL\]|Thank you for being here", re.IGNORECASE)
 _LAST_SECTION_NUM_RE = re.compile(r"\[SECTION\s+(\d+)\s*:", re.IGNORECASE)
 
@@ -844,9 +852,14 @@ async def _call_llm(
                 continuation_instruction = (
                     f"CONTINUATION — you already wrote sections 1-{last_section}. "
                     f"Here is the end of what you wrote so far:\n```\n{tail}\n```\n\n"
-                    f"Continue the script starting with [SECTION {last_section + 1}: ...]. "
+                    f"CRITICAL: Your response MUST start IMMEDIATELY with "
+                    f"[SECTION {last_section + 1}: <Title>]. "
+                    f"Do NOT output any reasoning, meta-commentary, or statements about what you "
+                    f"are doing. Do NOT write phrases like 'I need to reassess', 'Looking at what "
+                    f"you've written', 'Continuing from', 'I'll continue', or anything similar. "
+                    f"Start directly with [SECTION {last_section + 1}: ...] — nothing before it.\n\n"
                     f"Do NOT repeat any content from sections 1-{last_section}. "
-                    f"Write from Section {last_section + 1} through the final CTA. "
+                    f"Write from Section {last_section + 1} through the final [CTA_SUBSCRIBE_FINAL]. "
                     f"You have approximately {remaining_words} words remaining before the hard limit."
                 )
                 log.info(
@@ -884,10 +897,12 @@ async def _call_llm(
             word_budget,
         )
 
-        if _FINAL_CTA_RE.search(full_output):
+        # Use the strict marker-only regex here so that "Thank you for being here"
+        # in a regular outro section does not falsely trigger early-stop or CTA-strip.
+        if _FINAL_CTA_MARKER_RE.search(full_output):
             if narration_words < min_words_for_cta:
                 # LLM closed script too early — strip premature CTA and request more.
-                cta_match = _FINAL_CTA_RE.search(full_output)
+                cta_match = _FINAL_CTA_MARKER_RE.search(full_output)
                 full_output = full_output[: cta_match.start()].rstrip()
                 log.warning(
                     "Premature CTA stripped: %d narration words written but minimum is %d "
@@ -1188,7 +1203,7 @@ async def _generate_one_variant(
 # ─── Main API ─────────────────────────────────────────────────────────────────
 
 async def generate_scripts(
-    source_dir: str | Path,
+    source_dir: str | Path | None,
     channel_config_path: str | Path,
     *,
     template: str = "auto",
@@ -1205,11 +1220,11 @@ async def generate_scripts(
     custom_topic: str = "",
 ) -> list[Path]:
     """
-    Generate script(s) from Transcriber output.
+    Generate script(s) from Transcriber output or a custom topic alone.
 
     Args:
         source_dir: Path to Transcriber output directory.
-        channel_config_path: Path to channel config JSON.
+                    Pass ``None`` for topic-only mode (no reference video needed).
         template: Content template (documentary/listicle/tutorial/comparison/auto).
         preset: LLM quality preset (max/high/balanced/bulk/test). Default from config.
         compare: Number of script variants to generate.
@@ -1227,7 +1242,27 @@ async def generate_scripts(
     load_env()
 
     channel_config = load_channel_config(channel_config_path)
-    source_data = load_transcriber_output(source_dir)
+
+    if source_dir is not None:
+        source_data = load_transcriber_output(source_dir)
+    else:
+        # Topic-only mode: no reference video — generate purely from custom_topic
+        if not custom_topic.strip():
+            raise ValueError("custom_topic is required when source_dir is None (topic-only mode)")
+        log.info("Topic-only mode: generating from topic: %s", custom_topic[:80])
+        source_data = {
+            "transcript": "",
+            "transcript_srt": None,
+            "metadata": {
+                "language": channel_config.get("language", "en"),
+                "duration_seconds": 0,
+            },
+            "title": custom_topic,
+            "description": "",
+            "thumbnail": None,
+            "thumbnail_prompt": "",
+            "source_dir": str(output_dir) if output_dir else "",
+        }
 
     # Apply master_prompt_path override (bypasses channel config lookup)
     if master_prompt_path:
@@ -1265,10 +1300,16 @@ async def generate_scripts(
         log.info("[DRY RUN] No API calls made.")
         return []
 
-    out_dir = Path(output_dir) if output_dir else Path(source_dir)
+    if output_dir:
+        out_dir = Path(output_dir)
+    elif source_dir is not None:
+        out_dir = Path(source_dir)
+    else:
+        raise ValueError("output_dir is required in topic-only mode (source_dir=None)")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from clients.voidai_client import VoidAIClient  # noqa: PLC0415
+    from clients.voidai_client import VoidAIClient       # noqa: PLC0415
+    from modules.script_validator import validate_and_fix  # noqa: PLC0415
 
     saved: list[Path] = []
 
@@ -1303,15 +1344,27 @@ async def generate_scripts(
                 out_path = out_dir / f"script_v{i + 1}.json"
 
             script_dict = script.model_dump()
+
+            # ── Post-generation validation and auto-fix ──────────────────────
+            script_dict, val_issues = validate_and_fix(script_dict)
+            if val_issues:
+                log.warning(
+                    "Script validator: %d auto-fix(es) applied to variant %d/%d:",
+                    len(val_issues), i + 1, compare,
+                )
+                for iss in val_issues:
+                    log.warning("  %s", iss)
+
             out_path.write_text(
                 json.dumps(script_dict, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            fixed_blocks = script_dict.get("blocks", [])
             log.info(
                 "Saved: %s (%d blocks, %d chars narration)",
                 out_path,
-                len(script.blocks),
-                sum(len(b.narration) for b in script.blocks),
+                len(fixed_blocks),
+                sum(len(b.get("narration", "")) for b in fixed_blocks),
             )
             saved.append(out_path)
 

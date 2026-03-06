@@ -111,6 +111,8 @@ export interface PipelineRunRequest {
   music_volume?: number | null
   music_track?: string | null
   custom_topic?: string | null
+  image_backend?: string | null
+  vision_model?: string | null
 }
 
 export interface MusicTrack {
@@ -132,6 +134,42 @@ export interface BatchRunRequest {
   budget_total?: number | null
   skip_done?: boolean
   dry_run?: boolean
+}
+
+export interface MultiTopicItem {
+  source_dir: string
+  channel?: string
+  custom_topic?: string
+  quality?: string
+  image_style?: string
+}
+
+export interface MultiBatchRequest {
+  items: MultiTopicItem[]
+  parallel?: number
+  image_style?: string
+  dry_run?: boolean
+  draft?: boolean
+  from_step?: number
+  to_step?: number
+  budget_per_video?: number | null
+  // Script
+  template?: string
+  duration_min?: number
+  duration_max?: number
+  master_prompt?: string | null
+  // Voice / audio
+  voice_id?: string | null
+  background_music?: boolean
+  music_volume?: number | null
+  music_track?: string | null
+  burn_subtitles?: boolean
+  // Video
+  skip_thumbnail?: boolean
+  no_ken_burns?: boolean
+  // Image
+  image_backend?: string | null
+  vision_model?: string | null
 }
 
 export interface ChannelMeta {
@@ -222,6 +260,8 @@ export const api = {
   batch: {
     run: (body: BatchRunRequest) =>
       req<Job>('/batch/run', { method: 'POST', body: JSON.stringify(body) }),
+    runMulti: (body: MultiBatchRequest) =>
+      req<Job[]>('/batch/multi', { method: 'POST', body: JSON.stringify(body) }),
   },
 
   videos: {
