@@ -36,8 +36,32 @@
 - `clients/wavespeed_client.py` — WebP→PNG в `_download()`
 - `modules/05_video_compiler.py` — `start_off = 0` для першого зображення
 
+**Розслідування "Ken Burns vs Static"**:
+- Помилковий висновок: H.264 temporal encoding (I/P/B frames) дає різні хеші навіть для статичних кадрів
+- Правильний метод: порівнювати кадри на різних часових мітках (кожні 10с) — всі різні хеші = різні зображення ✅
+- Підтверджено: обидва `test5min.mp4` (CLI) та `final.mp4` (server job) — в статичному режимі ✅
+- "Перша картинка 45с" = **візуальна схожість** 5 oil-painting зображень блоку_001, а не технічна проблема
+
+**CLI `--no-ken-burns`**:
+- Додано CLI аргумент `--no-ken-burns` до `05_video_compiler.py`
+- Тестовий скрипт: `projects/.../script_test5min.json` (перші 4 блоки ~6хв для швидких тестів)
+- CLI тест: `python modules/05_video_compiler.py script_test5min.json config/... --no-ken-burns` → `mode=static` ✅
+- Output: `output/test5min.mp4` (18MB, 377.5s)
+
+**Також реалізовано (вже були в коді)**:
+- `_image_for_segment()` safety fallback для Ken Burns mode — вже є ✅
+- `burn_subtitles` checkbox — вже реалізований у backend + frontend ✅
+
+### Файли
+- `clients/wavespeed_client.py` — WebP→PNG в `_download()` + repr() paths
+- `modules/05_video_compiler.py` — multi-image static path + `--no-ken-burns` CLI
+- `utils/ffmpeg_utils.py` — repr() шляхи в concat.txt (Windows cross-drive fix)
+- `pipeline.py` — VOIDAI_PER_TOKEN константа для cost tracking
+- `modules/01c_image_planner.py` — 'script' preset key для моделі
+
 ### Далі
-- Переглянути final.mp4, якщо є проблеми — git commit фіксів
+- Повна перекомпіляція `final.mp4` якщо потрібно (образи вже правильні PNG)
+- Перегляд через UI/плеєр фінального відео
 
 ---
 
