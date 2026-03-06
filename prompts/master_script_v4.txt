@@ -489,114 +489,59 @@ WORDS AND NUMBERS:
 - Years and large numbers: numerals are fine (1923, 2.4 million)
 
 ═══════════════════════════════════════════════════════════════════
-IMAGE PROMPT RULES
+IMAGE MARKER RULES
 ═══════════════════════════════════════════════════════════════════
 
-─────────────────────────────────────────────
-IMAGE PROMPT FORMULA
-─────────────────────────────────────────────
-
-Every [IMAGE_PROMPT:] must follow this 5-element formula:
-
-  [SUBJECT] + [EMOTIONAL STATE] + [LIGHTING] + [VISUAL STYLE] + [COMPOSITION]
-
-Correct examples:
-  [IMAGE_PROMPT: solitary figure standing at cliff edge at dusk, contemplating the void,
-   golden backlight with long shadows, cinematic photorealism, wide establishing shot]
-
-  [IMAGE_PROMPT: close-up of person's hands releasing a small bird from cupped palms,
-   moment of release and quiet relief, warm morning diffuse light, hyperrealistic detail,
-   shallow depth of field with soft background bokeh]
-
-Incorrect — too generic (reject these patterns):
-  [IMAGE_PROMPT: philosophical concept, dark and moody]
-  [IMAGE_PROMPT: man thinking about his life]
-  [IMAGE_PROMPT: abstract representation of fear]
-
-─────────────────────────────────────────────
-IMAGE-NARRATION LOCK RULE
-─────────────────────────────────────────────
-
-Every IMAGE_PROMPT must illustrate the SPECIFIC idea spoken in the
-narration immediately surrounding it — not the general topic.
-
-A viewer should be able to guess what is being said from the image alone.
-
-WRONG:
-  Narration: "Jung believed the shadow holds everything we have rejected
-              about ourselves."
-  [IMAGE_PROMPT: ancient scholar at a desk by candlelight, thoughtful atmosphere]
-  — This illustrates "Jung the scholar," not "shadow = rejected self."
-
-CORRECT:
-  Narration: "Jung believed the shadow holds everything we have rejected
-              about ourselves."
-  [IMAGE_PROMPT: person standing before a mirror showing a distorted,
-   darker reflection of themselves, moment of disturbing self-recognition,
-   cold blue moonlight from the side, surrealist photorealism,
-   full-frame confrontation with reflection]
+YOUR JOB: place [IMAGE_MARKER] tags at the right positions.
+A separate Art Director AI will write the actual image descriptions later.
+You only control WHEN images appear — not WHAT they show.
 
 ─────────────────────────────────────────────
 IMAGE DENSITY — 2-TIER MODEL (MANDATORY)
 ─────────────────────────────────────────────
 
-⚠️ CRITICAL RULE — VIOLATIONS WILL CAUSE REGENERATION ⚠️
+⚠️ CRITICAL — VIOLATIONS WILL CAUSE REGENERATION ⚠️
 
-Place [IMAGE_PROMPT:] tags INLINE in narration at these EXACT word-count intervals.
-Count cumulative NARRATION WORDS from word 1 of the script continuously to the end.
+Place [IMAGE_MARKER] tags INLINE in narration at these EXACT word-count intervals.
+Count cumulative NARRATION WORDS from word 1 continuously to the end.
 DO NOT reset the counter per block or per section.
 
 ══════════════════════════════════════
 TIER 1 — Words 0–1,400 (first ~10 min)
 ══════════════════════════════════════
-  → ONE IMAGE_PROMPT every 20–25 words (MAXIMUM 30 words between images)
-  → This means ~56 images in the first 1,400 words
+  → ONE [IMAGE_MARKER] every 20–25 words (MAXIMUM 30 words between markers)
+  → This means ~56 markers in the first 1,400 words
   → Every 10 seconds a NEW image must appear on screen
-  → NO exceptions — not in CTA blocks, not in transitions, not anywhere
 
 TIER 1 EXAMPLE (words 1–75 of the script):
-  [IMAGE_PROMPT: ancient Roman Senate chamber, senators in togas debating under marble columns, dramatic low-angle shot, chiaroscuro lighting, oil painting realism]
-  Have you ever wondered why history keeps repeating itself? The same patterns, the same mistakes, the same rise
-  [IMAGE_PROMPT: wide aerial shot of a crumbling empire city overgrown with vines, golden dust in the air, apocalyptic but serene, photorealism]
+  [IMAGE_MARKER]
+  Have you ever wondered why history keeps repeating itself? The same patterns, the same
+  mistakes, the same rise
+  [IMAGE_MARKER]
   and fall of civilizations — century after century. Jung called this the collective unconscious:
-  [IMAGE_PROMPT: glowing neural network overlaid on a translucent human silhouette, dark background, electric blue synapses firing, scientific surrealism]
+  [IMAGE_MARKER]
   an invisible archive of every human experience ever lived, encoded in the deepest layer of the mind.
 
-  ↑ 3 images in 60 words = correct Tier-1 density
+  ↑ 3 markers in 60 words = correct Tier-1 density
 
 ══════════════════════════════════════
 TIER 2 — Words 1,401+ (~10+ min)
 ══════════════════════════════════════
-  → ONE IMAGE_PROMPT every 60–70 words (MAXIMUM 80 words between images)
-  → Never let a single image sit on screen for more than 30 seconds
+  → ONE [IMAGE_MARKER] every 60–70 words (MAXIMUM 80 words between markers)
+  → Never let a single image sit more than 30 seconds
 
 SELF-CHECK BEFORE SUBMITTING:
-  Count your IMAGE_PROMPT tags in the first 1,400 words.
-  If the count is less than 45 → YOU HAVE FAILED TIER-1. Add more.
-  If the count is less than 56 → add at least 5–10 more to tier-1.
-  For a 5,000-word script: expect ~56 images in words 0–1,400 + ~51 images in words 1,401–5,000 = ~107 total.
+  Count your [IMAGE_MARKER] tags in the first 1,400 words.
+  If count < 45 → YOU HAVE FAILED TIER-1. Add more markers.
+  For a 5,000-word script: expect ~56 markers in words 0–1,400 + ~51 in words 1,401–5,000 = ~107 total.
 
 ALSO: Follow the [BLOCK IMAGE TARGETS] in the user message.
-If a block target says ~8 images, distribute them across that block's narration.
+If a block target says ~8 images, place ~8 [IMAGE_MARKER] tags in that block.
 
-⚠️ CTA BLOCKS REQUIRE AN IMAGE:
+⚠️ CTA BLOCKS REQUIRE A MARKER:
 Both [CTA_SUBSCRIBE_MID] and [CTA_SUBSCRIBE_FINAL] must contain
-at least one [IMAGE_PROMPT:] tag within the CTA narration.
-Use a warm, hopeful visual that matches the emotional register of the moment.
-Without an image, the CTA will display the previous frame frozen for its entire duration.
-
-─────────────────────────────────────────────
-IMAGE DIVERSITY RULE
-─────────────────────────────────────────────
-
-No two IMAGE_PROMPTs in the entire script may describe similar or identical visuals.
-Track and vary across all dimensions:
-
-  - Subject: person, landscape, object, abstract scene, symbolic space
-  - Setting: interior, exterior, natural, architectural, dreamlike
-  - Emotional tone: contemplative, intense, peaceful, confrontational, hopeful
-  - Lighting: golden hour, candlelight, cold blue, harsh midday, diffuse overcast, backlit
-  - Composition: wide shot, close-up, overhead, low angle, symmetrical, rule-of-thirds
+at least one [IMAGE_MARKER] within the CTA narration.
+Without a marker, the CTA will display a frozen frame for its entire duration.
 
 ═══════════════════════════════════════════════════════════════════
 STYLISTIC GUIDELINES

@@ -261,8 +261,12 @@ class HookValidationResult(BaseModel):
 _SECTION_RE = re.compile(r"^\[SECTION\s+\d+\s*:\s*(.+?)\]\s*$", re.IGNORECASE | re.MULTILINE)
 _IMAGE_LINE_RE = re.compile(r"^\[IMAGE_PROMPT:\s*(.+?)\]\s*$", re.IGNORECASE | re.DOTALL)
 _IMAGE_INLINE_RE = re.compile(r"\[IMAGE_PROMPT:\s*(.+?)\]", re.IGNORECASE | re.DOTALL)
+_IMAGE_MARKER_RE = re.compile(r"^\[IMAGE_MARKER\]\s*$", re.IGNORECASE)   # two-pass: marker only
 _CTA_MID_RE = re.compile(r"^\[CTA_SUBSCRIBE_MID\]\s*$", re.IGNORECASE)
 _CTA_FINAL_RE = re.compile(r"^\[CTA_SUBSCRIBE_FINAL\]\s*$", re.IGNORECASE)
+
+# Sentinel stored in image_prompts for IMAGE_MARKER positions (replaced by 01c_image_planner)
+_MARKER_SENTINEL = "__MARKER__"
 
 
 def _block_type_from_title(title: str, order: int) -> BlockType:
@@ -324,6 +328,8 @@ def _parse_llm_output(
         # Strip unclosed [IMAGE_PROMPT: tags (no closing ]) — stops at \n\n to preserve text
         # after a paragraph break that follows a malformed/truncated tag
         narration = re.sub(r"\[IMAGE_PROMPT:.*?(?=\n\n|\Z)", "", narration, flags=re.IGNORECASE | re.DOTALL).strip()
+        # Strip any stray [IMAGE_MARKER] tags from narration (two-pass mode safety net)
+        narration = re.sub(r"\[IMAGE_MARKER\]", "", narration, flags=re.IGNORECASE).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
 
         if not narration and not all_image_prompts:
@@ -385,6 +391,11 @@ def _parse_llm_output(
         _fb_words = 0
         for _fb_line in raw.splitlines():
             _fb_stripped = _fb_line.rstrip()
+            # Two-pass mode: [IMAGE_MARKER] lines
+            if _IMAGE_MARKER_RE.match(_fb_stripped):
+                found_images.append(_MARKER_SENTINEL)
+                fallback_offsets.append(_fb_words)
+                continue
             _img_fb = _IMAGE_INLINE_RE.search(_fb_stripped)
             if _img_fb:
                 found_images.append(_img_fb.group(1).strip())
@@ -392,6 +403,7 @@ def _parse_llm_output(
             else:
                 _fb_words += len(_fb_stripped.split()) if _fb_stripped.strip() else 0
         narration = _IMAGE_INLINE_RE.sub("", raw).strip()
+        narration = re.sub(r"\[IMAGE_MARKER\]", "", narration, flags=re.IGNORECASE).strip()
         narration = re.sub(r"\n{3,}", "\n\n", narration)
         blocks.append(
             ScriptBlock(
@@ -436,6 +448,12 @@ def _parse_llm_output(
                 section_type = "outro"
                 is_cta_block = True
                 continue
+
+            # [IMAGE_MARKER] — two-pass mode: position-only marker, prompt filled later by 01c
+            if _IMAGE_MARKER_RE.match(stripped):
+                all_image_prompts.append(_MARKER_SENTINEL)
+                all_word_offsets.append(_narration_word_count)
+                continue  # never add marker tag to narration text
 
             # [IMAGE_PROMPT: ...] standalone line (closed — has ] on same line)
             # Collect ALL prompts per section (not just the first — v2 prompt has multiple per section)
