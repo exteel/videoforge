@@ -645,31 +645,23 @@ async def run_pipeline(
                 sys.exit(1)
 
             # ── Image Planner (Art Director pass — Step 1c) ─────────────────
-            # Runs only when script has __MARKER__ sentinels (two-pass mode).
-            # Replaces all markers with structured image prompts using Sonnet.
+            # Always runs: positions are calculated algorithmically (2-tier density
+            # model), then Art Director LLM writes one structured prompt per position.
+            # Does NOT rely on __MARKER__ sentinels — those are legacy and ignored.
             try:
                 _plan_images = _fn("modules/01c_image_planner.py", "plan_images")
-                _n_markers = sum(
-                    p == "__MARKER__"
-                    for b in (_load_script(s_path).get("blocks", []))
-                    for p in (b.get("image_prompts") or [])
+                _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                      pct=17.0, message="Art Director: planning image positions…")
+                await _plan_images(
+                    s_path,
+                    _chan_cfg,
+                    preset_name="high",          # Sonnet — sufficient for visual creativity
+                    image_style=image_style or "",
+                    progress_callback=progress_callback,
                 )
-                if _n_markers > 0:
-                    log.info("Image Planner: found %d markers — running Art Director pass", _n_markers)
-                    _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
-                          pct=17.0, message=f"Art Director: planning {_n_markers} images…")
-                    await _plan_images(
-                        s_path,
-                        _chan_cfg,
-                        preset_name="high",          # Sonnet — sufficient for visual creativity
-                        image_style=image_style or "",
-                        progress_callback=progress_callback,
-                    )
-                    # Cost estimate: Sonnet, ~40k input + 8k output tokens for a 30-min script
-                    cost.add("Image Planner (Art Director)", 0.015)
-                    log.info("Image Planner: done")
-                else:
-                    log.info("Image Planner: no __MARKER__ sentinels — skipping (one-pass mode)")
+                # Cost estimate: Sonnet, ~40k input + 8k output tokens for a 30-min script
+                cost.add("Image Planner (Art Director)", 0.015)
+                log.info("Image Planner: done")
             except Exception as _iexc:
                 log.exception("Image Planner failed (non-fatal, continuing): %s", _iexc)
 
