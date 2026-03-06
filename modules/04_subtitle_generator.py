@@ -262,10 +262,8 @@ def _block_to_entries(
     if not sentences:
         return [], start_time
 
-    # Single sentence (or very short block): one entry, no split needed
-    if len(sentences) == 1:
-        entry = SubEntry(entry_index_start, start_time, end_time, narration)
-        return [entry], end_time
+    # Single sentence — still must pass through _split_to_fit to enforce MAX_LINES_PER_ENTRY.
+    # Without this, long single-sentence blocks render as 4-6 subtitle lines.
 
     # Split at sentence boundaries, then further split any sentence that would
     # render as more than MAX_LINES_PER_ENTRY display lines.

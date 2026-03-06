@@ -537,23 +537,44 @@ CORRECT:
    full-frame confrontation with reflection]
 
 ─────────────────────────────────────────────
-IMAGE DENSITY — 2-TIER MODEL
+IMAGE DENSITY — 2-TIER MODEL (MANDATORY)
 ─────────────────────────────────────────────
 
-Place [IMAGE_PROMPT:] tags INLINE in the narration at these word-count intervals.
-Count cumulative NARRATION WORDS from the very start of the script.
+⚠️ CRITICAL RULE — VIOLATIONS WILL CAUSE REGENERATION ⚠️
 
-  TIER 1 — Words 0–1,400 (first ~10 min):
-    One IMAGE_PROMPT every ~25 words
-    Purpose: Maximum visual variety — new image every 10 seconds, no static moments
+Place [IMAGE_PROMPT:] tags INLINE in narration at these EXACT word-count intervals.
+Count cumulative NARRATION WORDS from word 1 of the script continuously to the end.
+DO NOT reset the counter per block or per section.
 
-  TIER 2 — Words 1,400+ (~10+ min):
-    One IMAGE_PROMPT every ~70 words
-    Purpose: Consistent visual rhythm — never let one image sit more than 30 seconds
+══════════════════════════════════════
+TIER 1 — Words 0–1,400 (first ~10 min)
+══════════════════════════════════════
+  → ONE IMAGE_PROMPT every 20–25 words (MAXIMUM 30 words between images)
+  → This means ~56 images in the first 1,400 words
+  → Every 10 seconds a NEW image must appear on screen
+  → NO exceptions — not in CTA blocks, not in transitions, not anywhere
 
-IMPORTANT: These are WORD-COUNT triggers, not section or block triggers.
-Count narration words continuously across all sections and blocks.
-Insert IMAGE_PROMPT at the right word-count interval wherever you are.
+TIER 1 EXAMPLE (words 1–75 of the script):
+  [IMAGE_PROMPT: ancient Roman Senate chamber, senators in togas debating under marble columns, dramatic low-angle shot, chiaroscuro lighting, oil painting realism]
+  Have you ever wondered why history keeps repeating itself? The same patterns, the same mistakes, the same rise
+  [IMAGE_PROMPT: wide aerial shot of a crumbling empire city overgrown with vines, golden dust in the air, apocalyptic but serene, photorealism]
+  and fall of civilizations — century after century. Jung called this the collective unconscious:
+  [IMAGE_PROMPT: glowing neural network overlaid on a translucent human silhouette, dark background, electric blue synapses firing, scientific surrealism]
+  an invisible archive of every human experience ever lived, encoded in the deepest layer of the mind.
+
+  ↑ 3 images in 60 words = correct Tier-1 density
+
+══════════════════════════════════════
+TIER 2 — Words 1,401+ (~10+ min)
+══════════════════════════════════════
+  → ONE IMAGE_PROMPT every 60–70 words (MAXIMUM 80 words between images)
+  → Never let a single image sit on screen for more than 30 seconds
+
+SELF-CHECK BEFORE SUBMITTING:
+  Count your IMAGE_PROMPT tags in the first 1,400 words.
+  If the count is less than 45 → YOU HAVE FAILED TIER-1. Add more.
+  If the count is less than 56 → add at least 5–10 more to tier-1.
+  For a 5,000-word script: expect ~56 images in words 0–1,400 + ~51 images in words 1,401–5,000 = ~107 total.
 
 ALSO: Follow the [BLOCK IMAGE TARGETS] in the user message.
 If a block target says ~8 images, distribute them across that block's narration.
