@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-03-07 — Систематичне виправлення: 13 images, short script, subtitles
+
+### Питання
+Відео Carl Jung: review показав 13 images замість ~78, тривалість 19.9-23 хв замість 25-30 хв.
+
+### Root causes знайдені
+1. **13 images** — `pipeline.py` auto-skip (рядки 577-595) при наявному `script.json` виставляє `from_step = STEP_MEDIA`, повністю оминаючи 01c. Блоки мають лише `image_prompt` (singular, 1 на блок).
+2. **Script too short** — LLM завершує без `[CTA_SUBSCRIBE_FINAL]` marker, `_FINAL_CTA_MARKER_RE` не спрацьовує, loop закінчується на `MAX_SCRIPT_CHUNKS` з частковим виводом.
+3. **Fix 3 (_image_for_segment safety)** і **Fix 4 (burn_subtitles checkbox)** вже реалізовані в попередніх комітах.
+
+### Виконано
+**`pipeline.py`** — `fix: 01c catch-up on auto-skip` (коміт 463c78b):
+- Після auto-skip: перевіряємо `image_prompts` в існуючих блоках
+- Якщо порожні → запускаємо `plan_images()` (01c) як "catch-up" перед STEP_MEDIA
+- Cost-safe: пропускаємо якщо `image_prompts` вже є (01c вже виконувався)
+
+**`modules/01_script_generator.py`** — post-loop expansion guard:
+- Після `MAX_SCRIPT_CHUNKS` loop: перевіряємо `narration_words < min_words_for_cta`
+- Якщо коротко і немає CTA marker → один targeted expansion API call
+- LLM отримує останні 2000 символів + інструкцію дописати `+shortage+100` слів + `[CTA_SUBSCRIBE_FINAL]`
+- Non-fatal: `except Exception → log.warning`
+
+### Далі
+- Запустити нове відео 25-30 хв і переконатись що review показує ~78 images
+- Перевірити expansion guard в логах (`"Script below minimum after all chunks"`)
+
+---
+
 ## 2026-03-07 — WebP bug fix, image duration fix, відео "If 2025 Felt Like a Failure"
 
 ### Питання

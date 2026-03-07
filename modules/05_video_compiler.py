@@ -46,6 +46,7 @@ from utils.ffmpeg_utils import (
     add_subtitles,
     check_ffmpeg,
     concat_videos,
+    get_duration,
     ken_burns,
     mix_audio,
     pad_video_end,
@@ -630,6 +631,26 @@ def compile_video(
                 crossfade_duration=crossfade_dur,
             )
             _emit_progress(82.0, "Concat done")
+
+            # ── Xfade silent-truncation guard ─────────────────────────────────
+            # FFmpeg's xfade filter chain with many inputs (10+ blocks) can silently
+            # produce truncated output on Windows (OOM/resource exhaustion, exit 0).
+            # Validate duration; if less than 70% of expected, fallback to hard-cut concat.
+            if use_crossfade and len(block_videos) > 1:
+                _expected_dur = (
+                    sum(float(b["audio_duration"]) for b in voiced_blocks)
+                    - (len(block_videos) - 1) * crossfade_dur
+                )
+                _actual_dur = get_duration(video_raw)
+                if _actual_dur < _expected_dur * 0.70:
+                    log.warning(
+                        "concat_videos xfade produced %.1fs (expected ~%.1fs, %.0f%%) — "
+                        "xfade filter likely failed (OOM). Retrying WITHOUT crossfade.",
+                        _actual_dur, _expected_dur, 100 * _actual_dur / _expected_dur,
+                    )
+                    _emit_progress(77.0, "Xfade failed — retrying without crossfade…")
+                    concat_videos(block_videos, video_raw, crossfade=False)
+                    use_crossfade = False   # disable pad below
 
             # Crossfade shortens total video by (N-1) * crossfade_dur seconds.
             # Pad the last frame to restore sync with full narration audio.

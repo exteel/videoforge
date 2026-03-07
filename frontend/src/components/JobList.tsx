@@ -103,6 +103,7 @@ type PFormState = PipelineRunRequest & {
   background_music: boolean // override optional → required
   skip_thumbnail: boolean   // override optional → required
   burn_subtitles: boolean   // override optional → required
+  no_ken_burns: boolean     // override optional → required
   image_style: string       // override optional → required
   voice_id: string          // override optional → required
   duration_min: number      // override optional → required
@@ -134,6 +135,7 @@ export function JobList() {
     background_music: true,
     skip_thumbnail:   false,
     burn_subtitles:   true,
+    no_ken_burns:     false,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
@@ -776,6 +778,13 @@ export function JobList() {
                   className="accent-blue-500" />
                 <span>Burn subtitles</span>
                 <Tip text="Записати субтитри у відео (крок 4 повинен бути виконаний). Вимкніть для відео без субтитрів." />
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={pForm.no_ken_burns}
+                  onChange={(e) => setPForm({ ...pForm, no_ken_burns: e.target.checked })}
+                  className="accent-blue-500" />
+                <span>No Ken Burns</span>
+                <Tip text="Статичний слайдшоу замість Ken Burns анімації. Набагато швидший рендер — рекомендовано для довгих відео (25+ хв)." />
               </label>
               {/* Image backend selector */}
               <label className="space-y-1 block">
