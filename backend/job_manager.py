@@ -9,12 +9,23 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Windows cp1252 → UTF-8 fix for stderr progress output
+_STDERR = open(sys.stderr.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+
+
+def _term_bar(pct: float, width: int = 28) -> str:
+    """Return a Unicode progress bar string: [████░░░░] 62%"""
+    filled = int(width * pct / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {pct:3.0f}%"
 
 ROOT = Path(__file__).parent.parent
 
@@ -207,6 +218,19 @@ class JobManager:
             )
             job.db_video_id = db_video_id
 
+        _bar_active = [False]   # True while a \r progress line is on stderr
+
+        def _term(text: str, *, newline: bool = True, overwrite: bool = False) -> None:
+            """Write to stderr with optional \r overwrite (in-place progress bar)."""
+            try:
+                prefix = "\r" if overwrite else ("\n" if _bar_active[0] else "")
+                suffix = "" if overwrite else "\n"
+                _STDERR.write(f"{prefix}{text}{suffix}")
+                _STDERR.flush()
+                _bar_active[0] = overwrite
+            except Exception:
+                pass
+
         def progress_callback(event: dict) -> None:
             evt_type = event.get("type", "")
             if evt_type == "step_start":
@@ -215,15 +239,28 @@ class JobManager:
                 if "pct" in event:
                     job.pct = float(event["pct"])
                 job.log(f"[Step {job.step}] {job.step_name}")
+                _term(f"▶  Step {job.step}: {job.step_name}  [{job_id}]")
             elif evt_type == "step_done":
                 elapsed_s = event.get("elapsed", 0.0)
                 if "pct" in event:
                     job.pct = float(event["pct"])
                 job.log(f"[Step {event.get('step', job.step)} done] {elapsed_s:.1f}s")
+                _term(f"✓  Step {event.get('step', job.step)} done  {elapsed_s:.1f}s")
             elif evt_type == "sub_progress":
-                # Fine-grained within-step progress (e.g. FFmpeg block-by-block)
+                # Fine-grained within-step progress — in-place bar on stderr
                 if "pct" in event:
                     job.pct = float(event["pct"])
+                msg = event.get("message", "")
+                bar = _term_bar(job.pct)
+                _term(f"   {bar}  {msg:<35}", overwrite=True)
+            elif evt_type == "error":
+                msg = event.get("message", "")
+                _term(f"✗  Error: {msg[:120]}")
+            elif evt_type == "review_required":
+                _term(f"⏸  Review required — stage: {event.get('stage', '?')}  [{job_id}]")
+            elif evt_type == "done":
+                elapsed_s = event.get("elapsed", 0.0)
+                _term(f"✅ Done  {elapsed_s:.1f}s  [{job_id}]")
             job.emit(**event)
 
         async def review_callback(stage: str, data: dict) -> None:
