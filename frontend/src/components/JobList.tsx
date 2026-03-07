@@ -111,7 +111,7 @@ type PFormState = PipelineRunRequest & {
   master_prompt: string | null  // override optional → string | null
   music_volume: number | null
   custom_topic: string      // topic override for script generation
-  image_backend: string     // "wavespeed" | "betatest" | "voidai"
+  image_backend: string     // "" (auto from channel config) | "wavespeed" | "voiceimage" | "betatest" | "voidai"
   vision_model: string      // "gpt-4.1" | "gpt-4.1-mini"
 }
 
@@ -144,7 +144,7 @@ export function JobList() {
     music_volume:     null,
     music_track:      null,
     custom_topic:     '',
-    image_backend:    'wavespeed',
+    image_backend:    '',
     vision_model:     'gpt-4.1',
   })
 
@@ -194,7 +194,7 @@ export function JobList() {
   const [mSubs, setMSubs]               = useState<boolean>((_ms.burn_subtitles as boolean) ?? true)
   const [mSkipThumb, setMSkipThumb]     = useState<boolean>((_ms.skip_thumbnail as boolean) ?? false)
   const [mNoKenBurns, setMNoKenBurns]   = useState<boolean>((_ms.no_ken_burns as boolean) ?? false)
-  const [mImageBackend, setMImageBackend] = useState<string>((_ms.image_backend as string) ?? 'wavespeed')
+  const [mImageBackend, setMImageBackend] = useState<string>((_ms.image_backend as string) ?? '')
   const [mVisionModel, setMVisionModel]   = useState<string>((_ms.vision_model as string) ?? 'gpt-4.1')
   const [mBudget, setMBudget]           = useState<number | ''>((_ms.budget_per_video as number | null) ?? '')
 
@@ -319,6 +319,7 @@ export function JobList() {
       if (!payload.voice_id)            delete payload.voice_id
       if (payload.music_volume == null) delete payload.music_volume
       if (!payload.custom_topic)        delete payload.custom_topic
+      if (!payload.image_backend)       payload.image_backend = null   // "" → null → auto from channel config
       await api.pipeline.run(payload as unknown as PipelineRunRequest)
       await loadJobs()
     } catch (err) {
@@ -790,15 +791,17 @@ export function JobList() {
               <label className="space-y-1 block">
                 <span className="text-xs text-gray-400">
                   Image backend
-                  <Tip text="Провайдер генерації картинок: WaveSpeed (за замовчуванням, дешевий), BetaTest (альтернативний), VoidAI (резервний, дорогий)." />
+                  <Tip text="Провайдер генерації картинок: Channel config (auto) — з налаштувань каналу, WaveSpeed (дешевий), VoiceImage (voiceapi.csv666.ru), VoidAI (резервний, дорогий)." />
                 </span>
                 <select
                   value={pForm.image_backend}
                   onChange={(e) => setPForm({ ...pForm, image_backend: e.target.value })}
                   className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
                 >
-                  <option value="wavespeed">WaveSpeed (default)</option>
-                  <option value="betatest">BetaTest</option>
+                  <option value="">Channel config (auto)</option>
+                  <option value="wavespeed">WaveSpeed</option>
+                  <option value="voiceimage">VoiceImage (voiceapi.csv666.ru)</option>
+                  <option value="betatest">BetaTest (legacy alias)</option>
                   <option value="voidai">VoidAI only</option>
                 </select>
               </label>
@@ -1191,8 +1194,10 @@ export function JobList() {
                     onChange={(e) => setMImageBackend(e.target.value)}
                     className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500"
                   >
-                    <option value="wavespeed">WaveSpeed (default)</option>
-                    <option value="betatest">BetaTest</option>
+                    <option value="">Channel config (auto)</option>
+                    <option value="wavespeed">WaveSpeed</option>
+                    <option value="voiceimage">VoiceImage (voiceapi.csv666.ru)</option>
+                    <option value="betatest">BetaTest (legacy alias)</option>
                     <option value="voidai">VoidAI only</option>
                   </select>
                 </label>

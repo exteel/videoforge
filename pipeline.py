@@ -493,6 +493,14 @@ async def run_pipeline(
     except Exception as _ce:
         log.warning("Could not load channel config: %s", _ce)
 
+    # If image_backend not explicitly specified, read from channel config images.provider.
+    # Allows history.json to set "voiceimage" without needing UI selection every run.
+    if not image_backend:
+        _chan_img_provider = (_chan_cfg.get("images") or {}).get("provider", "")
+        if _chan_img_provider:
+            image_backend = _chan_img_provider
+            log.info("Image backend from channel config: %s", image_backend)
+
     # ── DB tracking variables ──────────────────────────────────────────────────
     _vid_id: int | None = None
     _video_path: Path | None = None

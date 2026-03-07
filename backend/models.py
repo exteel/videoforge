@@ -45,7 +45,7 @@ class PipelineRunRequest(BaseModel):
     )
     image_backend: str | None = Field(
         None,
-        description="Image generation provider: 'wavespeed' (default) | 'betatest' | 'voidai'",
+        description="Image generation provider: None (auto from channel config) | 'wavespeed' | 'voiceimage' | 'betatest' (alias for voiceimage) | 'voidai'",
     )
     vision_model: str | None = Field(
         None,
@@ -105,7 +105,7 @@ class MultiBatchRequest(BaseModel):
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
     no_ken_burns: bool = Field(False, description="Static slideshow — no Ken Burns effect (faster)")
     # Image settings
-    image_backend: str | None = Field(None, description="Image generation provider: 'wavespeed' (default) | 'betatest' | 'voidai'")
+    image_backend: str | None = Field(None, description="Image generation provider: None (auto from channel config) | 'wavespeed' | 'voiceimage' | 'betatest' (alias) | 'voidai'")
     vision_model: str | None = Field(None, description="Vision model for image analysis/validation: 'gpt-4.1' (default) | 'gpt-4.1-mini'")
 
 
