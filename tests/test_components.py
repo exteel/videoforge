@@ -63,7 +63,7 @@ def test_ken_burns(image_path: Path | None = None, duration: float = 8.0) -> Non
     out_dir = ROOT / "projects" / "_test_pipeline"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    animations = ["zoom_in", "zoom_out", "pan_left", "pan_right"]
+    animations = ["zoom_in", "static"]
     results = []
 
     for anim in animations:

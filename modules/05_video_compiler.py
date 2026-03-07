@@ -67,7 +67,7 @@ BLOCK_VIDEO_EXT = ".mp4"
 # pan_left/pan_right — constant linear motion, visually smoothest.
 # Long multi-segment blocks always use _WITHIN_BLOCK_KB_CYCLE (zoom_in/zoom_out)
 # because those chain SEAMLESSLY at hard-cut boundaries (no audio sync loss).
-_KB_CYCLE = ["pan_left", "pan_right"]
+_KB_CYCLE = ["zoom_in"]
 
 # Within-block animation cycle for multi-segment blocks.
 # ONLY zoom_in/zoom_out — they chain SEAMLESSLY at hard-cut boundaries (zoompan):
@@ -76,7 +76,7 @@ _KB_CYCLE = ["pan_left", "pan_right"]
 #   zoom_out last frame:  z≈1.0   →  x = 0                  (full frame)
 #   zoom_in  first frame: z=1.0   →  x = 0                  ← identical ✓
 # No crossfade needed → block duration preserved exactly → no audio sync loss.
-_WITHIN_BLOCK_KB_CYCLE = ["zoom_in", "zoom_out"]
+_WITHIN_BLOCK_KB_CYCLE = ["zoom_in"]
 
 # Fixed duration of a single animation segment (zoom_in or zoom_out).
 # Two animations form one visual cycle: zoom_in(10s) + zoom_out(10s) = 20s loop.

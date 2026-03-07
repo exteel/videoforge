@@ -347,16 +347,8 @@ def _parse_llm_output(
         actual_type: BlockType = "cta" if is_cta_block else section_type
         primary_prompt = all_image_prompts[0] if all_image_prompts else ""
 
-        # Rotating animation: intro=zoom_in, cta/outro=zoom_out, sections alternate
-        # pan_left → pan_right → zoom_in → zoom_out → pan_left → ...
-        _SECTION_ANIMS = ["pan_left", "pan_right", "zoom_in", "zoom_out"]
-        if actual_type == "intro":
-            _animation = "zoom_in"
-        elif actual_type in ("cta", "outro"):
-            _animation = "zoom_out"
-        else:
-            # order-1 because order=0 is intro; first section → _SECTION_ANIMS[0]=pan_left
-            _animation = _SECTION_ANIMS[(order - 1) % len(_SECTION_ANIMS)]
+        # All blocks use zoom_in — only supported animation type
+        _animation = "zoom_in"
 
         blocks.append(
             ScriptBlock(

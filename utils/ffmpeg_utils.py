@@ -51,22 +51,16 @@ DRAFT_RESOLUTION = "854x480"
 DRAFT_CRF = 28
 DRAFT_PRESET = "ultrafast"
 
-# Ken Burns was previously computed via zoompan at reduced FPS (ZOOMPAN_FPS=6).
-# That caused visible frame-duplication stutter on long clips (130-240s blocks).
-# Now replaced by dynamic crop filter with `t` time variable (per-frame smooth motion).
-# ZOOMPAN_FPS kept for reference only — no longer used in ken_burns().
-ZOOMPAN_FPS = 6
+# Zoom: pre-upscale image to 8000px wide, then use zoompan with trunc() on x/y
+# for center-locked zoom. Lanczos interpolation for sharp upscale.
+# 8000px makes integer rounding errors negligible (1px/8000 vs 1px/1920).
+ZOOM_UPSCALE_WIDTH = 8000
 
-# Zoom scale factor for zoom_in / zoom_out animations.
-# 1.30 = image scales from 100% to 130% (or back). 30% gives more dramatic
-# motion and larger per-frame pixel steps → smoother floating-point rendering.
+# Zoom scale factor: 1.0 → 1.3 over the clip duration (30% zoom range).
 ZOOM_SCALE = 1.30
 
-# Ken Burns animation types
-AnimationType = Literal[
-    "zoom_in", "zoom_out",
-    "pan_left", "pan_right", "static",
-]
+# Ken Burns animation types (only zoom_in and static supported)
+AnimationType = Literal["zoom_in", "static"]
 
 # Crossfade duration in seconds
 CROSSFADE_DURATION = 0.5
@@ -236,11 +230,8 @@ def ken_burns(
     Apply Ken Burns effect to a still image to create a video clip.
 
     Animations:
-      zoom_in    — slow zoom from 100% to 115% (dramatic reveal)
-      zoom_out   — slow zoom from 115% to 100% (establishing shot)
-      pan_left   — pan from right to left
-      pan_right  — pan from left to right
-      static     — no motion (simple image hold)
+      zoom_in  — smooth center zoom from 100% to 130% (upscale 8000px + zoompan)
+      static   — no motion (simple image hold)
 
     Args:
         image_path: Source image (JPG, PNG).
@@ -262,7 +253,7 @@ def ken_burns(
     preset = DRAFT_PRESET if draft else DEFAULT_PRESET
     res = DRAFT_RESOLUTION if draft else resolution
     if draft or animation == "static":
-        # Simple static: image → video at target resolution
+        # Simple static: image -> video at target resolution
         dw, dh = (int(x) for x in res.split("x"))
         vf = (
             f"scale={dw}:{dh}:force_original_aspect_ratio=decrease,"
@@ -280,61 +271,25 @@ def ken_burns(
             str(out),
         ]
     else:
+        # ── Upscale 8000px + zoompan center zoom ──────────────────────────
+        #
+        # Pre-upscale to 8000px with lanczos makes zoompan's integer rounding
+        # negligible (1px error / 8000px vs 1px / 1920px).  trunc() on x/y
+        # ensures consistent rounding direction → no jitter.
+        #
+        # Tested as smoothest variant: no jerkiness, perfect center lock.
         total_frames = max(int(duration * fps), 1)
+        zoom_increment = (ZOOM_SCALE - 1.0) / total_frames   # e.g. 0.001 at 300f
 
-        if animation in ("zoom_in", "zoom_out"):
-            # ── Scale+crop Ken Burns (floating-point, no integer rounding) ──────
-            #
-            # zoompan rounds crop boundaries to integer pixels → uneven per-frame
-            # steps → visible stutter. scale+crop evaluates per frame in float →
-            # same approach as CapCut / Premiere Pro → perfectly smooth motion.
-            #
-            # ZOOM_SCALE = 1.30: image scales between 100% and 130%.
-            # 30% range gives ~3.84px/frame change at 30fps/10s → rounds evenly.
-            #
-            # Seamless zoom_in → zoom_out hard-cut chain:
-            #   zoom_in  last frame:  scale=W*ZOOM_SCALE, crop center W×H  ✓
-            #   zoom_out first frame: scale=W*ZOOM_SCALE, crop center W×H  ✓
-            W_zoom = int(round(w * ZOOM_SCALE / 2)) * 2   # e.g. 2496 for 1920
-            H_zoom = int(round(h * ZOOM_SCALE / 2)) * 2   # e.g. 1404 for 1080
+        z_expr = f"min(zoom+{zoom_increment:.8f},{ZOOM_SCALE})"
+        x_expr = "trunc(iw/2-(iw/zoom/2))"
+        y_expr = "trunc(ih/2-(ih/zoom/2))"
 
-            w_start = w      if animation == "zoom_in" else W_zoom
-            w_end   = W_zoom if animation == "zoom_in" else w
-            B = w_end - w_start   # +576 for zoom_in, -576 for zoom_out
-
-            # max(w,...) guards against float rounding making scale_w < output size
-            w_expr = f"max({w},trunc(({w_start}+({B})*n/{total_frames})/2)*2)"
-            h_expr = f"max({h},trunc(({w_start}+({B})*n/{total_frames})*{h}/{w}/2)*2)"
-            vf = (
-                f"scale=w='{w_expr}':h='{h_expr}':eval=frame,"
-                f"crop={w}:{h}:(iw-{w})/2:(ih-{h})/2"
-            )
-
-        else:
-            # ── Zoompan for pan animations (constant z, smooth lateral motion) ──
-            #   pan_left/pan_right: constant zoom 1.15×, animated x position.
-            #   2× pre-scale to get ≥1.67px/frame → rounds to 1-2px → smooth.
-            scale_filter = (
-                f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=decrease,"
-                f"pad={w * 2}:{h * 2}:(ow-iw)/2:(oh-ih)/2"
-            )
-
-            if animation == "pan_left":
-                z_expr = "1.15"
-                x_expr = f"(iw-iw/zoom)*(1-on/{total_frames})"
-                y_expr = "ih/2-(ih/zoom/2)"
-            elif animation == "pan_right":
-                z_expr = "1.15"
-                x_expr = f"(iw-iw/zoom)*on/{total_frames}"
-                y_expr = "ih/2-(ih/zoom/2)"
-            else:
-                raise ValueError(f"Unknown animation type: {animation!r}")
-
-            vf = (
-                f"{scale_filter},"
-                f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
-                f":d=1:fps={fps}:s={w}x{h}"
-            )
+        vf = (
+            f"scale={ZOOM_UPSCALE_WIDTH}:-1:flags=lanczos,"
+            f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
+            f":d={total_frames}:s={w}x{h}:fps={fps}"
+        )
 
         cmd = [
             FFMPEG, "-y",
@@ -349,7 +304,7 @@ def ken_burns(
         ]
 
     _run(cmd)
-    log.info("Ken Burns [%s] %s → %s (%.1fs)", animation, inp.name, out.name, duration)
+    log.info("Ken Burns [%s] %s -> %s (%.1fs)", animation, inp.name, out.name, duration)
     return out
 
 
