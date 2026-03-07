@@ -508,6 +508,12 @@ async def generate_images(
     _ws_global_failed: list[bool] = [_backend == "voidai"]  # True = skip primary from start
 
     async def _run_coros(primary_client: Any) -> list[ImageResult]:
+        # WaveSpeed: share global-failure flag so one API error stops all WaveSpeed calls
+        # (prevents wasted charges on a broken session).
+        # BetaImage / others: pass None so each block retries independently — a single
+        # timeout does NOT force the entire batch to fall back to VoidAI.
+        _global_fail_flag = _ws_global_failed if _backend == "wavespeed" else None
+
         coros = [
             _generate_one(
                 block=b,
@@ -520,7 +526,7 @@ async def generate_images(
                 skip_existing=skip_existing,
                 max_retries=max_retries,
                 idx=idx,
-                wavespeed_globally_failed=_ws_global_failed,
+                wavespeed_globally_failed=_global_fail_flag,
                 # Per-video seed family: each block gets video_seed + block_order,
                 # so images within one video share the same "random DNA" for style consistency
                 # while different blocks vary in seed (preserving prompt-driven content differences).
@@ -600,7 +606,8 @@ async def generate_images(
         all_jobs[:] = _retry_jobs
         # Force skip_existing=True so already-generated images are not re-generated.
         skip_existing = True  # noqa: PLW2901  (closure reads this variable dynamically)
-        # Reset WaveSpeed global failure flag: give it another chance on retry.
+        # Reset primary-client failure flag for WaveSpeed so it gets another chance on retry.
+        # (For betatest, _global_fail_flag=None so this has no effect on generation behaviour.)
         _ws_global_failed[0] = (_backend == "voidai")
         _img_done[0] = 0
         if PrimaryClient is not None:
