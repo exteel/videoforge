@@ -110,7 +110,14 @@ function JobCard({
       )}
 
       {job.status === 'done' && job.out_dir && (
-        <div className="text-xs text-green-400 truncate">✓ {job.out_dir}</div>
+        <div className="flex items-center gap-1 text-xs text-green-400">
+          <div className="truncate">✓ {job.out_dir}</div>
+          <button
+            onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(job.out_dir!) }}
+            className="shrink-0 px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px]"
+            title="Copy path"
+          >📋</button>
+        </div>
       )}
 
       {job.error && (
@@ -346,12 +353,19 @@ export function TranscriberPanel({ onSelectDir, pipelineSettings }: Props) {
                         {o.has_thumbnail && <span>· 🖼</span>}
                       </div>
                     </div>
-                    <button
-                      onClick={() => onSelectDir(o.dir)}
-                      className="shrink-0 text-xs px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white"
-                    >
-                      ▶ Pipeline
-                    </button>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => navigator.clipboard.writeText(o.dir)}
+                        className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300"
+                        title="Copy path"
+                      >📋</button>
+                      <button
+                        onClick={() => onSelectDir(o.dir)}
+                        className="text-xs px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white"
+                      >
+                        ▶ Pipeline
+                      </button>
+                    </div>
                   </div>
                 ))}
 
