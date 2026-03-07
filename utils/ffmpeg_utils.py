@@ -120,6 +120,16 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _esc_concat_path(p: str | Path) -> str:
+    """Escape path for FFmpeg concat demuxer single-quote format.
+
+    Apostrophes in filenames (e.g. "Machiavelli's") break ``file 'PATH'``
+    format.  Escape each ``'`` as ``'\\''`` (close-quote, literal-quote,
+    open-quote) — standard POSIX shell-style escaping.
+    """
+    return str(Path(p).resolve().as_posix()).replace("'", r"'\''")
+
+
 # ─── Probe ────────────────────────────────────────────────────────────────────
 
 def get_duration(file_path: str | Path) -> float:
@@ -452,7 +462,7 @@ def concat_videos(
         # Fast path: concat demuxer (no re-encode)
         list_file = out.parent / "_concat_list.txt"
         list_file.write_text(
-            "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in video_paths),
+            "\n".join(f"file '{_esc_concat_path(p)}'" for p in video_paths),
             encoding="utf-8",
         )
         cmd = [
@@ -735,7 +745,7 @@ def concat_audio(
 
     list_file = out.parent / "_audio_concat_list.txt"
     list_file.write_text(
-        "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in audio_paths),
+        "\n".join(f"file '{_esc_concat_path(p)}'" for p in audio_paths),
         encoding="utf-8",
     )
 
