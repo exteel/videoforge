@@ -472,11 +472,11 @@ async def generate_images(
     _backend = (image_backend or "wavespeed").lower().strip()
     log.info("Image backend: %s", _backend)
 
-    if _backend == "betatest":
-        from clients.betaimage_client import BetaImageClient  # noqa: PLC0415
-        PrimaryClient = BetaImageClient
-        # BetaImage does NOT support arbitrary size strings — it always outputs 16:9.
-        # Override size so _generate_one doesn't pass an incompatible value.
+    if _backend in ("betatest", "voiceimage"):
+        # "betatest" kept as alias for backward compat — betatestru.csv666.ru is shut down,
+        # voiceimage (voiceapi.csv666.ru) is its replacement with the same VOICEAPI_KEY.
+        from clients.voiceimage_client import VoiceImageClient  # noqa: PLC0415
+        PrimaryClient = VoiceImageClient
         image_size = "16:9"
     elif _backend == "voidai":
         PrimaryClient = None   # VoidAI only — primary client skipped entirely

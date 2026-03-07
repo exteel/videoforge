@@ -51,7 +51,7 @@
     "fallback": "tts-1-hd"
   },
   "images": {
-    "provider": "wavespeed",
+    "provider": "voiceimage",
     "fallback": "gpt-image-1.5"
   },
   "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}",
