@@ -389,6 +389,17 @@ export function JobList() {
   const recentJobs = jobs.filter((j) => j.status !== 'running' && j.status !== 'queued').slice(0, 20)
 
   function handleTranscriberSelect(dir: string) {
+    if (tab === 'multi') {
+      // Multi-topic mode: add path to queue (fill first empty slot or append new)
+      setMItems(prev => {
+        const emptyIdx = prev.findIndex(it => !it.source_dir.trim() && !it.custom_topic?.trim())
+        if (emptyIdx >= 0) {
+          return prev.map((it, i) => i === emptyIdx ? { ...it, source_dir: dir } : it)
+        }
+        return [...prev, { ...DEFAULT_MULTI_ITEM(), source_dir: dir }]
+      })
+      return
+    }
     updateSourceDir(dir)
     setTab('pipeline')
     // Scroll to source dir input
