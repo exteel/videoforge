@@ -562,15 +562,68 @@ async def generate_images(
     primary_cost = 0.0
     voidai_cost  = 0.0
 
+    # Initial generation pass
     if PrimaryClient is not None:
         async with PrimaryClient() as primary_client, VoidAIClient() as voidai:
             await _run_coros(primary_client)
-            primary_cost = getattr(primary_client, "session_cost", 0.0)
-            voidai_cost  = voidai.session_cost
+            primary_cost += getattr(primary_client, "session_cost", 0.0)
+            voidai_cost  += voidai.session_cost
     else:
         async with VoidAIClient() as voidai:
             await _run_coros(None)
-            voidai_cost = voidai.session_cost
+            voidai_cost += voidai.session_cost
+
+    # ── Retry passes: re-generate any images still missing after initial run ──
+    _MAX_RETRY_PASSES = 5
+    for _retry_pass in range(1, _MAX_RETRY_PASSES + 1):
+        _retry_jobs = [
+            (b, idx) for b, idx in all_jobs
+            if not (images_dir / _image_output_name(b["id"], idx)).exists()
+            or (images_dir / _image_output_name(b["id"], idx)).stat().st_size < MIN_FILE_SIZE_BYTES
+        ]
+        if not _retry_jobs:
+            if _retry_pass > 1:
+                log.info("All images generated — took %d extra pass(es)", _retry_pass - 1)
+            break
+        log.warning(
+            "Retry pass %d/%d: %d image(s) still missing — retrying",
+            _retry_pass, _MAX_RETRY_PASSES, len(_retry_jobs),
+        )
+        # Remove stale failed entries from results so _run_coros can re-add fresh ones.
+        # Keep skipped (CTA / cache-hit) and already-successful results.
+        _retry_names = {_image_output_name(b["id"], idx) for b, idx in _retry_jobs}
+        results[:] = [
+            r for r in results
+            if r.skipped or (r.path is not None and Path(r.path).name not in _retry_names)
+        ]
+        # Narrow all_jobs to only the retry subset (closure reads at call time).
+        all_jobs[:] = _retry_jobs
+        # Force skip_existing=True so already-generated images are not re-generated.
+        skip_existing = True  # noqa: PLW2901  (closure reads this variable dynamically)
+        # Reset WaveSpeed global failure flag: give it another chance on retry.
+        _ws_global_failed[0] = (_backend == "voidai")
+        _img_done[0] = 0
+        if PrimaryClient is not None:
+            async with PrimaryClient() as primary_client, VoidAIClient() as voidai:
+                await _run_coros(primary_client)
+                primary_cost += getattr(primary_client, "session_cost", 0.0)
+                voidai_cost  += voidai.session_cost
+        else:
+            async with VoidAIClient() as voidai:
+                await _run_coros(None)
+                voidai_cost += voidai.session_cost
+    else:
+        # for-else: loop completed without break → some images still missing after all passes
+        _still_missing = sum(
+            1 for b, idx in all_jobs
+            if not (images_dir / _image_output_name(b["id"], idx)).exists()
+            or (images_dir / _image_output_name(b["id"], idx)).stat().st_size < MIN_FILE_SIZE_BYTES
+        )
+        if _still_missing:
+            log.error(
+                "Could not generate %d image(s) after %d retry passes",
+                _still_missing, _MAX_RETRY_PASSES,
+            )
 
     elapsed = time.monotonic() - t0
 
