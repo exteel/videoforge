@@ -113,6 +113,7 @@ export interface PipelineRunRequest {
   custom_topic?: string | null
   image_backend?: string | null
   vision_model?: string | null
+  auto_approve?: boolean
 }
 
 export interface MusicTrack {
@@ -170,6 +171,8 @@ export interface MultiBatchRequest {
   // Image
   image_backend?: string | null
   vision_model?: string | null
+  // Review
+  auto_approve?: boolean
 }
 
 export interface ChannelMeta {

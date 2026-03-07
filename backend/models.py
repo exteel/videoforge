@@ -25,6 +25,7 @@ class PipelineRunRequest(BaseModel):
     no_ken_burns: bool = Field(False, description="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)")
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
     burn_subtitles: bool = Field(True, description="Burn generated subtitles into video (Step 4 must have run)")
+    auto_approve: bool = Field(False, description="Auto-approve script/image review if quality criteria met")
     image_style: str | None = Field(None, description="Override image generation style prompt")
     voice_id: str | None = Field(None, description="Override voice ID from channel config")
     master_prompt: str | None = Field(None, description="Override master prompt path (e.g. 'prompts/master_script_v2.txt')")
@@ -101,6 +102,7 @@ class MultiBatchRequest(BaseModel):
     music_volume: float | None = Field(None, ge=-60, le=0, description="BGM volume override in dB")
     music_track: str | None = Field(None, description="Explicit music track path (absolute)")
     burn_subtitles: bool = Field(True, description="Burn generated subtitles into video")
+    auto_approve: bool = Field(False, description="Auto-approve script/image review if quality criteria met")
     # Video settings
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
     no_ken_burns: bool = Field(False, description="Static slideshow — no Ken Burns effect (faster)")

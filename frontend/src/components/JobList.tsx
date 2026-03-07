@@ -104,6 +104,7 @@ type PFormState = PipelineRunRequest & {
   skip_thumbnail: boolean   // override optional → required
   burn_subtitles: boolean   // override optional → required
   no_ken_burns: boolean     // override optional → required
+  auto_approve: boolean     // override optional → required
   image_style: string       // override optional → required
   voice_id: string          // override optional → required
   duration_min: number      // override optional → required
@@ -136,6 +137,7 @@ export function JobList() {
     skip_thumbnail:   false,
     burn_subtitles:   true,
     no_ken_burns:     false,
+    auto_approve:     false,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
@@ -194,6 +196,7 @@ export function JobList() {
   const [mSubs, setMSubs]               = useState<boolean>((_ms.burn_subtitles as boolean) ?? true)
   const [mSkipThumb, setMSkipThumb]     = useState<boolean>((_ms.skip_thumbnail as boolean) ?? false)
   const [mNoKenBurns, setMNoKenBurns]   = useState<boolean>((_ms.no_ken_burns as boolean) ?? false)
+  const [mAutoApprove, setMAutoApprove] = useState<boolean>((_ms.auto_approve as boolean) ?? false)
   const [mImageBackend, setMImageBackend] = useState<string>((_ms.image_backend as string) ?? '')
   const [mVisionModel, setMVisionModel]   = useState<string>((_ms.vision_model as string) ?? 'gpt-4.1')
   const [mBudget, setMBudget]           = useState<number | ''>((_ms.budget_per_video as number | null) ?? '')
@@ -209,12 +212,13 @@ export function JobList() {
       duration_min: mDurMin, duration_max: mDurMax, master_prompt: mMaster,
       voice_id: mVoice, background_music: mMusic, music_volume: mMusicVol || null,
       music_track: mMusicTrack, burn_subtitles: mSubs, skip_thumbnail: mSkipThumb,
-      no_ken_burns: mNoKenBurns, image_backend: mImageBackend, vision_model: mVisionModel,
+      no_ken_burns: mNoKenBurns, auto_approve: mAutoApprove,
+      image_backend: mImageBackend, vision_model: mVisionModel,
       budget_per_video: mBudget || null,
     })
   }, [mParallel, mStyle, mDryRun, mDraft, mFromStep, mToStep, mTemplate,
       mDurMin, mDurMax, mMaster, mVoice, mMusic, mMusicVol, mMusicTrack,
-      mSubs, mSkipThumb, mNoKenBurns, mImageBackend, mVisionModel, mBudget])  // eslint-disable-line
+      mSubs, mSkipThumb, mNoKenBurns, mAutoApprove, mImageBackend, mVisionModel, mBudget])  // eslint-disable-line
 
   const addMItem  = () => setMItems(prev => [...prev, DEFAULT_MULTI_ITEM()])
   const removeMItem = (i: number) => setMItems(prev => prev.filter((_, idx) => idx !== i))
@@ -372,6 +376,7 @@ export function JobList() {
         burn_subtitles:   mSubs,
         skip_thumbnail:   mSkipThumb,
         no_ken_burns:     mNoKenBurns,
+        auto_approve:     mAutoApprove,
         image_backend:    mImageBackend || null,
         vision_model:     mVisionModel || null,
         budget_per_video: mBudget !== '' ? mBudget : null,
@@ -798,6 +803,13 @@ export function JobList() {
                 <span>No Ken Burns</span>
                 <Tip text="Статичний слайдшоу замість Ken Burns анімації. Набагато швидший рендер — рекомендовано для довгих відео (25+ хв)." />
               </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={pForm.auto_approve}
+                  onChange={(e) => setPForm({ ...pForm, auto_approve: e.target.checked })}
+                  className="accent-green-500" />
+                <span>Auto-approve</span>
+                <Tip text="Автоматично апрувити сценарій та картинки якщо: є хук, тривалість в межах, всі картинки ОК. Інакше — ручний ревʼю." />
+              </label>
               {/* Image backend selector */}
               <label className="space-y-1 block">
                 <span className="text-xs text-gray-400">
@@ -1194,6 +1206,12 @@ export function JobList() {
                     onChange={(e) => setMNoKenBurns(e.target.checked)} className="accent-blue-500" />
                   <span>No Ken Burns</span>
                   <Tip text="Статичний слайдшоу замість анімації. Набагато швидший рендер." />
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={mAutoApprove}
+                    onChange={(e) => setMAutoApprove(e.target.checked)} className="accent-green-500" />
+                  <span>Auto-approve</span>
+                  <Tip text="Автоматично апрувити сценарій та картинки якщо: є хук, тривалість в межах, всі картинки ОК." />
                 </label>
                 {/* Image backend */}
                 <label className="space-y-1 block">

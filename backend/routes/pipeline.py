@@ -56,6 +56,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         custom_topic=req.custom_topic,
         image_backend=req.image_backend,
         vision_model=req.vision_model,
+        auto_approve=req.auto_approve,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 
@@ -153,6 +154,7 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
                 # Image
                 "image_backend":      req.image_backend,
                 "vision_model":       req.vision_model,
+                "auto_approve":       req.auto_approve,
             },
         })
 

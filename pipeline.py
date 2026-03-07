@@ -435,6 +435,7 @@ async def run_pipeline(
     custom_topic: str | None = None,   # Override topic for new script (replaces reference video title)
     image_backend: str | None = None,  # Image provider: "wavespeed" | "betatest" | "voidai"
     vision_model: str | None = None,   # Vision model for image analysis: "gpt-4.1" | "gpt-4.1-mini"
+    auto_approve: bool = False,       # Auto-approve script/image review if quality criteria met
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -579,6 +580,9 @@ async def run_pipeline(
         except Exception as exc:
             log.debug("Cost estimate failed: %s", exc)
 
+    # Validator result — shared between script generation and review auto-approve
+    _val_result: Any = None
+
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 1 — SCRIPT
     # ══════════════════════════════════════════════════════════════════════════
@@ -662,7 +666,6 @@ async def run_pipeline(
             # ── Script validation + auto-fix ───────────────────────────────
             def _script_val_cb(ev: dict) -> None:
                 _emit(progress_callback, **ev)
-            _val_result: Any = None
             try:
                 _validate_script = _fn("modules/01b_script_validator.py", "validate_and_fix_script")
                 _val_result = await _validate_script(s_path, _chan_cfg, progress_callback=_script_val_cb)
@@ -772,7 +775,7 @@ async def run_pipeline(
                 for _b in _blocks
             ]
 
-            await review_callback("script", {
+            _review_data = {
                 "script_path":   str(s_path),
                 "title":         _sd.get("title", ""),
                 "block_count":   len(_blocks),
@@ -783,7 +786,36 @@ async def run_pipeline(
                 "image_prompt_count": _total_imgs,
                 "has_hook":      _has_hook,
                 "blocks":        _block_summaries,
-            })
+            }
+
+            # Auto-approve: skip review if all quality criteria met
+            _script_auto_ok = False
+            if auto_approve:
+                _min_words = duration_min * 130   # slowest speech rate
+                _max_words = duration_max * 170   # fastest speech rate
+                _has_critical = getattr(_val_result, "has_critical", False) if _val_result else False
+                _script_auto_ok = (
+                    _has_hook
+                    and _word_count >= _min_words
+                    and _word_count <= _max_words
+                    and _total_imgs >= len(_blocks)
+                    and not _has_critical
+                )
+                if _script_auto_ok:
+                    log.info(
+                        "Auto-approve script: hook=%s, words=%d (%d-%d), imgs=%d, blocks=%d",
+                        _has_hook, _word_count, _min_words, _max_words, _total_imgs, len(_blocks),
+                    )
+                    _emit(progress_callback, type="auto_approved", stage="script")
+                else:
+                    log.info(
+                        "Auto-approve FAILED for script (hook=%s, words=%d, range=%d-%d, imgs=%d, critical=%s)"
+                        " — falling back to manual review",
+                        _has_hook, _word_count, _min_words, _max_words, _total_imgs, _has_critical,
+                    )
+
+            if not _script_auto_ok:
+                await review_callback("script", _review_data)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 2 — IMAGES + VOICES (parallel)
@@ -891,13 +923,39 @@ async def run_pipeline(
                 log.exception("Image validation skipped (non-fatal): %s", _ivexc)
 
             # Review checkpoint after images
-            if review_callback is not None:
-                await review_callback("images", {
-                    "images_dir": str(proj / "images"),
-                    "script_path": str(s_path),
-                    "source_name": proj.name,
-                    "validation": _img_val_data,
-                })
+            _img_review_data = {
+                "images_dir": str(proj / "images"),
+                "script_path": str(s_path),
+                "source_name": proj.name,
+                "validation": _img_val_data,
+            }
+
+            _img_auto_ok = False
+            if auto_approve and _img_val_data:
+                _iv = _img_val_data
+                _img_auto_ok = (
+                    _iv.get("failed", 999) == 0
+                    and _iv.get("skipped", 999) == 0
+                    and (_iv.get("ok_count", 0) + _iv.get("regenerated", 0))
+                        >= _iv.get("total", 1) * 0.95
+                )
+                if _img_auto_ok:
+                    log.info(
+                        "Auto-approve images: %d/%d OK, %d regen, %d failed, %d skipped",
+                        _iv.get("ok_count", 0), _iv.get("total", 0),
+                        _iv.get("regenerated", 0), _iv.get("failed", 0), _iv.get("skipped", 0),
+                    )
+                    _emit(progress_callback, type="auto_approved", stage="images")
+                else:
+                    log.info(
+                        "Auto-approve FAILED for images (ok=%d, total=%d, failed=%d, skipped=%d)"
+                        " — falling back to manual review",
+                        _iv.get("ok_count", 0), _iv.get("total", 0),
+                        _iv.get("failed", 0), _iv.get("skipped", 0),
+                    )
+
+            if not _img_auto_ok and review_callback is not None:
+                await review_callback("images", _img_review_data)
 
             # Additional language voices (sequential to respect rate limits)
             if langs and len(langs) > 1:
