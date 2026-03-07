@@ -39,6 +39,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from clients.voidai_client import VoidAIClient
+from clients.voiceimage_client import VoiceImageClient
 from clients.wavespeed_client import WaveSpeedClient
 from modules.common import (
     get_llm_preset,
@@ -472,8 +473,12 @@ async def generate_thumbnail_variants(
 
     results: list[ThumbnailResult] = []
 
+    # Determine image backend from channel config (same logic as 02_image_generator)
+    _img_provider = (channel_config.get("images") or {}).get("provider", "wavespeed")
+
     try:
-        async with WaveSpeedClient() as wave, VoidAIClient() as void:
+        async with VoiceImageClient(aspect_ratio="16:9") as voiceimg, \
+                   WaveSpeedClient() as wave, VoidAIClient() as void:
             seeds = VARIANT_SEEDS[:count]
             # Pad with random seeds if count > len(VARIANT_SEEDS)
             while len(seeds) < count:
@@ -484,20 +489,35 @@ async def generate_thumbnail_variants(
                 tmp_path = tmp_dir / f"variant_{i}.png"
                 out_path = out_dir / f"thumbnail_{i}.png"
 
-                # Generate — WaveSpeed primary, VoidAI fallback
+                # Generate — VoiceImage primary, WaveSpeed 2nd, VoidAI 3rd
                 generated = False
-                try:
-                    await wave.generate_text2img(
-                        prompt,
-                        size=THUMBNAIL_SIZE_WS,
-                        seed=seed,
-                        num_inference_steps=4,
-                        output_path=tmp_path,
-                    )
-                    generated = True
-                except Exception as exc:
-                    log.warning("WaveSpeed variant %d failed: %s", i, exc)
 
+                # Try VoiceImage first (if configured or always as cheapest option)
+                if not generated and _img_provider in ("voiceimage", "betatest"):
+                    try:
+                        await voiceimg.generate_text2img(
+                            prompt,
+                            output_path=tmp_path,
+                        )
+                        generated = True
+                    except Exception as exc:
+                        log.warning("VoiceImage variant %d failed: %s", i, exc)
+
+                # Try WaveSpeed
+                if not generated:
+                    try:
+                        await wave.generate_text2img(
+                            prompt,
+                            size=THUMBNAIL_SIZE_WS,
+                            seed=seed,
+                            num_inference_steps=4,
+                            output_path=tmp_path,
+                        )
+                        generated = True
+                    except Exception as exc:
+                        log.warning("WaveSpeed variant %d failed: %s", i, exc)
+
+                # Try VoidAI last
                 if not generated:
                     try:
                         await void.generate_image(
