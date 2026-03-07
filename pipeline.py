@@ -791,8 +791,8 @@ async def run_pipeline(
             # Auto-approve: skip review if all quality criteria met
             _script_auto_ok = False
             if auto_approve:
-                _min_words = duration_min * 130   # slowest speech rate
-                _max_words = duration_max * 170   # fastest speech rate
+                _min_words = int(duration_min * 130 * 0.9)   # slowest rate − 10% tolerance
+                _max_words = int(duration_max * 170 * 1.1)   # fastest rate + 10% tolerance
                 _has_critical = getattr(_val_result, "has_critical", False) if _val_result else False
                 _script_auto_ok = (
                     _has_hook
