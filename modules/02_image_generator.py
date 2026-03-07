@@ -539,7 +539,12 @@ async def generate_images(
                 desc="Generating images",
                 unit="img",
             ):
-                results.append(await fut)
+                try:
+                    results.append(await fut)
+                except Exception as _task_exc:
+                    # Individual task failure must NOT abort the entire loop.
+                    # Log and continue — 02b_image_validator will catch missing files.
+                    log.error("Image generation task raised unexpectedly: %s", _task_exc)
                 _img_done[0] += 1
                 _emit_img_progress(_img_done[0])
 
