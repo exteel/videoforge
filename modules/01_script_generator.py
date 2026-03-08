@@ -935,10 +935,19 @@ async def _call_llm(
             )
 
     # ── Post-loop expansion guard ──────────────────────────────────────────────
-    # Catches the case where the LLM ended without [CTA_SUBSCRIBE_FINAL] AND narration
-    # is still below the minimum.  Makes one targeted expansion call to hit the target.
+    # Catches the case where the LLM ended script too early (narration below minimum).
+    # Key fix: check word count FIRST; if short AND CTA marker is already present,
+    # strip it before expansion — otherwise the guard was silently skipped when LLM
+    # added [CTA_SUBSCRIBE_FINAL] prematurely (causing 7-min scripts instead of 25+).
     _final_narration = _count_narration_words(full_output)
-    if _final_narration < min_words_for_cta and not _FINAL_CTA_MARKER_RE.search(full_output):
+    if _final_narration < min_words_for_cta:
+        if _FINAL_CTA_MARKER_RE.search(full_output):
+            full_output = _FINAL_CTA_MARKER_RE.sub("", full_output).rstrip()
+            log.warning(
+                "Post-loop: stripped premature CTA — script has only %d narration words "
+                "(min %d); will expand to hit target",
+                _final_narration, min_words_for_cta,
+            )
         _shortage = min_words_for_cta - _final_narration
         log.warning(
             "Script below minimum after all chunks: %d narration words (need %d, short %d) "
