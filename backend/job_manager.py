@@ -55,6 +55,7 @@ class Job:
     error: str = ""
     logs: list[str] = field(default_factory=list)
     db_video_id: int | None = None
+    project_dir: str = ""  # actual output directory (set when pipeline starts)
     review_stage: str | None = None
     review_data: dict = field(default_factory=dict, repr=False, compare=False)
     task: asyncio.Task | None = field(default=None, repr=False, compare=False)
@@ -96,7 +97,7 @@ class Job:
             "status": self.status,
             "source": self.source,
             "source_dir": self.source_dir,
-            "project_dir": str(ROOT / "projects" / self.source) if self.source else "",
+            "project_dir": self.project_dir or (str(ROOT / "projects" / self.channel / self.source) if (self.source and self.channel) else ""),
             "channel": self.channel,
             "quality": self.quality,
             "created_at": self.created_at,
@@ -125,6 +126,48 @@ class JobManager:
 
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
+
+    def restore_from_db(self, limit: int = 50) -> int:
+        """Load recent completed/failed jobs from DB into memory on startup."""
+        try:
+            from utils.db import VideoTracker
+            db = VideoTracker()
+            rows = db.list_videos(limit=limit)
+            count = 0
+            for row in rows:
+                status = row.get("status", "")
+                if status not in ("done", "failed", "cancelled"):
+                    continue
+                job_id = f"db-{row['id']}"
+                if job_id in self._jobs:
+                    continue
+                source_dir = row.get("source_dir") or ""
+                source = row.get("source_title") or Path(source_dir).name
+                job = Job(
+                    job_id=job_id,
+                    kind="pipeline",
+                    status=status,
+                    source=source,
+                    source_dir=source_dir,
+                    channel=row.get("channel") or "",
+                    quality=row.get("quality_preset") or "max",
+                    created_at=row.get("created_at") or _now(),
+                    started_at=row.get("started_at"),
+                    finished_at=row.get("updated_at"),
+                    elapsed=row.get("elapsed_seconds"),
+                    step=6 if status == "done" else 0,
+                    pct=100.0 if status == "done" else 0.0,
+                    error=row.get("error") or "",
+                    db_video_id=row.get("id"),
+                    project_dir=row.get("project_dir") or "",
+                )
+                self._jobs[job_id] = job
+                count += 1
+            return count
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("restore_from_db failed: %s", exc)
+            return 0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -204,9 +247,11 @@ class JobManager:
             custom_topic = kwargs.get("custom_topic", "") or ""
             if custom_topic.strip():
                 _safe = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200].strip(". ")
-                _folder = _safe or source_dir.name
+                _folder = _safe or (source_dir.name if source_dir else "topic")
             else:
-                _folder = source_dir.name
+                _folder = source_dir.name if source_dir else "topic"
+            _actual_proj = ROOT / "projects" / channel_config_path.stem / _folder
+            job.project_dir = str(_actual_proj)  # store real path for Drive upload
             db_tracker = VideoTracker()
             db_video_id = db_tracker.create_video(
                 source_dir=source_dir,
@@ -214,7 +259,7 @@ class JobManager:
                 quality_preset=kwargs.get("quality", "max"),
                 template=kwargs.get("template", "auto"),
                 from_step=kwargs.get("from_step", 1),
-                project_dir=ROOT / "projects" / _folder,
+                project_dir=_actual_proj,
             )
             job.db_video_id = db_video_id
 
@@ -401,6 +446,10 @@ class JobManager:
 
     # ── Multi-Topic Batch ──────────────────────────────────────────────────────
 
+    # Shared semaphore for the active queue — reused by append_to_queue()
+    _active_sem: asyncio.Semaphore | None = None
+    _active_parallel: int = 2
+
     async def start_multi_batch(
         self,
         items: list[dict],   # each: {source_dir: Path, channel_config_path: Path, kwargs: dict}
@@ -425,10 +474,60 @@ class JobManager:
             List of job_ids (one per item).
         """
         sem = asyncio.Semaphore(parallel)
+        self._active_sem = sem
+        self._active_parallel = parallel
         job_ids: list[str] = []
 
         for item in items:
             source_dir: Path | None = item["source_dir"]  # None = topic-only mode
+            channel_config_path: Path = item["channel_config_path"]
+            kwargs: dict = item.get("kwargs", {})
+
+            _source_label = (
+                source_dir.name
+                if source_dir is not None
+                else (kwargs.get("custom_topic") or "topic-only")[:40]
+            )
+            job_id = uuid.uuid4().hex[:8]
+            job = Job(
+                job_id=job_id,
+                kind="pipeline",
+                status="queued",
+                source=_source_label,
+                source_dir=str(source_dir) if source_dir is not None else "",
+                channel=channel_config_path.stem,
+                quality=kwargs.get("quality", "max"),
+            )
+            self._jobs[job_id] = job
+            job.task = asyncio.create_task(
+                self._run_with_semaphore(sem, job, source_dir, channel_config_path, **kwargs),
+                name=f"pipeline-{job_id}",
+            )
+            job_ids.append(job_id)
+
+        return job_ids
+
+    async def append_to_queue(
+        self,
+        items: list[dict],
+    ) -> list[str]:
+        """
+        Append jobs to the currently active queue, sharing its semaphore.
+
+        If no active queue exists (first run or all previous jobs finished),
+        creates a new semaphore with the last used parallel value.
+
+        Returns:
+            List of new job_ids.
+        """
+        if self._active_sem is None:
+            self._active_sem = asyncio.Semaphore(self._active_parallel)
+
+        sem = self._active_sem
+        job_ids: list[str] = []
+
+        for item in items:
+            source_dir: Path | None = item["source_dir"]
             channel_config_path: Path = item["channel_config_path"]
             kwargs: dict = item.get("kwargs", {})
 
@@ -467,6 +566,226 @@ class JobManager:
         """Acquire semaphore slot then run pipeline — queued jobs wait their turn."""
         async with sem:
             await self._run_pipeline_job(job, source_dir, channel_config_path, **kwargs)
+
+
+    # ── Quick (script + voice + 1 image) ──────────────────────────────────────
+
+    async def start_quick(
+        self,
+        transcription_url: str,
+        topic: str,
+        channel_config_path: Path,
+        *,
+        sem: asyncio.Semaphore | None = None,
+        **kwargs: Any,
+    ) -> str:
+        job_id = uuid.uuid4().hex[:8]
+        job = Job(
+            job_id=job_id,
+            kind="pipeline",
+            status="queued",
+            source=topic[:40] or "quick",
+            source_dir="",
+            channel=channel_config_path.stem,
+            quality=kwargs.get("quality", "balanced"),
+        )
+        self._jobs[job_id] = job
+
+        async def _run() -> None:
+            if sem:
+                async with sem:
+                    await self._run_quick_job(job, transcription_url, topic, channel_config_path, **kwargs)
+            else:
+                await self._run_quick_job(job, transcription_url, topic, channel_config_path, **kwargs)
+
+        job.task = asyncio.create_task(_run(), name=f"quick-{job_id}")
+        return job_id
+
+    async def start_quick_batch(
+        self,
+        items: list[dict],   # each: {transcription_url, topic, channel_config_path, **kwargs}
+        parallel: int = 2,
+    ) -> list[str]:
+        """Start N quick jobs with a shared semaphore — only `parallel` run at a time."""
+        sem = asyncio.Semaphore(parallel)
+        self._active_sem = sem
+        self._active_parallel = parallel
+        job_ids: list[str] = []
+        for item in items:
+            jid = await self.start_quick(
+                transcription_url=item["transcription_url"],
+                topic=item["topic"],
+                channel_config_path=item["channel_config_path"],
+                sem=sem,
+                **{k: v for k, v in item.items() if k not in ("transcription_url", "topic", "channel_config_path")},
+            )
+            job_ids.append(jid)
+        return job_ids
+
+    async def _run_quick_job(
+        self,
+        job: Job,
+        transcription_url: str,
+        topic: str,
+        channel_config_path: Path,
+        **kwargs: Any,
+    ) -> None:
+        import importlib.util
+        import re as _re
+        import sys
+        sys.path.insert(0, str(ROOT))
+
+        from modules.common import load_env
+        from utils.db import VideoTracker
+
+        load_env()
+        job.status = "running"
+        job.started_at = _now()
+        job.emit(type="status", status="running")
+
+        t0 = time.monotonic()
+        quality      = kwargs.get("quality", "balanced")
+        voice_id     = kwargs.get("voice_id") or None
+        duration_min = kwargs.get("duration_min", 25)
+        duration_max = kwargs.get("duration_max", 30)
+
+        _safe = _re.sub(r'[\\/:*?"<>|]', "_", topic.strip())[:200].strip(". ")
+        proj = ROOT / "projects" / channel_config_path.stem / (_safe or "quick")
+        proj.mkdir(parents=True, exist_ok=True)
+        job.project_dir = str(proj)
+
+        db_tracker = VideoTracker()
+        db_video_id = db_tracker.create_video(
+            source_dir=proj,
+            channel=channel_config_path.stem,
+            quality_preset=quality,
+            template="quick",
+            from_step=1,
+            project_dir=proj,
+        )
+        job.db_video_id = db_video_id
+        db_tracker.set_running(db_video_id)
+
+        def _load_mod(name: str, rel_path: str) -> Any:
+            full = ROOT / rel_path
+            spec = importlib.util.spec_from_file_location(name, str(full))
+            mod  = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            return mod
+
+        try:
+            source_dir: Path | None = None
+
+            # ── 0: Transcription (if URL) ─────────────────────────────────────
+            if transcription_url.startswith("http"):
+                job.step = 0
+                job.step_name = "Transcribing"
+                job.pct = 5.0
+                job.log("[Quick] Transcribing URL…")
+                job.emit(type="step_start", step=0, name="Transcribing", pct=5.0)
+
+                from backend.transcribe_worker import transcribe_url
+                source_dir = await transcribe_url(
+                    transcription_url,
+                    on_progress=lambda msg: job.log(f"[Transcribe] {msg}"),
+                )
+                job.log(f"[Quick] Transcribed → {source_dir}")
+                job.emit(type="step_done", step=0, elapsed=time.monotonic() - t0, pct=20.0)
+
+            elif transcription_url:
+                p = Path(transcription_url)
+                if not p.is_dir():
+                    raise ValueError(f"Transcription path not found: {p}")
+                source_dir = p
+
+            # ── 1: Script ─────────────────────────────────────────────────────
+            job.step = 1
+            job.step_name = "Script"
+            job.pct = 20.0
+            job.log("[Quick] Generating script…")
+            job.emit(type="step_start", step=1, name="Script", pct=20.0)
+
+            mod01 = _load_mod("01_script_generator", "modules/01_script_generator.py")
+            await mod01.generate_scripts(
+                source_dir,
+                channel_config_path,
+                preset=quality,
+                custom_topic=topic,
+                output_dir=proj,
+                duration_min=duration_min,
+                duration_max=duration_max,
+            )
+            script_path = proj / "script.json"
+            job.log(f"[Quick] Script → {script_path}")
+            job.emit(type="step_done", step=1, elapsed=time.monotonic() - t0, pct=50.0)
+
+            # ── 2: Voice ──────────────────────────────────────────────────────
+            job.step = 2
+            job.step_name = "Voice"
+            job.pct = 50.0
+            job.log("[Quick] Generating voice…")
+            job.emit(type="step_start", step=2, name="Voice", pct=50.0)
+
+            mod03 = _load_mod("03_voice_generator", "modules/03_voice_generator.py")
+            await mod03.generate_voices(
+                script_path,
+                channel_config_path,
+                voice_id_override=voice_id,
+                output_dir=proj,
+            )
+            job.log("[Quick] Voice generated")
+            job.emit(type="step_done", step=2, elapsed=time.monotonic() - t0, pct=80.0)
+
+            # ── 3: Thumbnail image (1 image) ───────────────────────────────────
+            job.step = 3
+            job.step_name = "Image"
+            job.pct = 80.0
+            job.log("[Quick] Generating thumbnail image…")
+            job.emit(type="step_start", step=3, name="Image", pct=80.0)
+
+            (proj / "output").mkdir(exist_ok=True)
+            mod06 = _load_mod("06_thumbnail_generator", "modules/06_thumbnail_generator.py")
+            await mod06.generate_thumbnail(
+                script_path,
+                channel_config_path,
+                transcriber_dir=source_dir,
+                iterate=False,
+            )
+            job.log("[Quick] Image generated")
+            job.emit(type="step_done", step=3, elapsed=time.monotonic() - t0, pct=100.0)
+
+            # ── Done ──────────────────────────────────────────────────────────
+            elapsed = time.monotonic() - t0
+            db_tracker.set_done(
+                db_video_id,
+                thumbnail_path=proj / "output" / "thumbnail.png",
+                script_path=script_path,
+                elapsed_seconds=elapsed,
+            )
+            job.status = "done"
+            job.finished_at = _now()
+            job.elapsed = elapsed
+            job.log(f"Done in {elapsed:.1f}s")
+            job.emit(type="done", elapsed=elapsed, db_video_id=db_video_id)
+
+        except asyncio.CancelledError:
+            elapsed = time.monotonic() - t0
+            job.status = "cancelled"
+            job.finished_at = _now()
+            job.elapsed = elapsed
+            db_tracker.set_failed(db_video_id, "cancelled", elapsed_seconds=elapsed)
+            job.emit(type="cancelled")
+            raise
+        except Exception as exc:
+            elapsed = time.monotonic() - t0
+            job.status = "failed"
+            job.finished_at = _now()
+            job.elapsed = elapsed
+            job.error = str(exc)[:500]
+            db_tracker.set_failed(db_video_id, str(exc), elapsed_seconds=elapsed)
+            job.log(f"Error: {exc}")
+            job.emit(type="error", message=str(exc)[:500])
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
