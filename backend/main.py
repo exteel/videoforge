@@ -69,10 +69,29 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow all origins for local dev — restrict in production
+# CORS — allow localhost + dynamic tunnel URL
+def _allowed_origins() -> list[str]:
+    origins = [
+        "http://localhost:8000",
+        "http://localhost:5173",
+        "http://127.0.0.1:8000",
+        "http://127.0.0.1:5173",
+    ]
+    # Add tunnel URL if available
+    try:
+        from tunnel_utils import get_tunnel_url
+        tunnel = get_tunnel_url("videoforge")
+        if tunnel:
+            origins.append(tunnel)
+    except Exception:
+        pass
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
+    allow_origin_regex=r"https://.*\.trycloudflare\.com",
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -83,9 +83,12 @@ CREATE TABLE IF NOT EXISTS costs (
     recorded_at  TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_videos_status  ON videos (status);
-CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos (channel);
-CREATE INDEX IF NOT EXISTS idx_costs_video_id ON costs (video_id);
+CREATE INDEX IF NOT EXISTS idx_videos_status     ON videos (status);
+CREATE INDEX IF NOT EXISTS idx_videos_channel    ON videos (channel);
+CREATE INDEX IF NOT EXISTS idx_videos_created_at ON videos (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_costs_video_id    ON costs (video_id);
+CREATE INDEX IF NOT EXISTS idx_costs_model       ON costs (model);
+CREATE INDEX IF NOT EXISTS idx_costs_vid_step    ON costs (video_id, step);
 """
 
 
@@ -145,7 +148,7 @@ class VideoTracker:
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
         """Yield a context-managed SQLite connection with row_factory."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
