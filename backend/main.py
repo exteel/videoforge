@@ -46,6 +46,13 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
             log.warning("Startup: cancelled %d orphaned job(s) from previous session", n)
     except Exception as exc:  # noqa: BLE001
         log.warning("Startup: could not cancel orphaned jobs: %s", exc)
+    try:
+        from backend.job_manager import manager
+        n = manager.restore_from_db(limit=50)
+        if n:
+            log.info("Startup: restored %d completed job(s) from DB", n)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Startup: could not restore jobs from DB: %s", exc)
     log.info("VideoForge API starting  (http://localhost:8000/docs)")
     yield
     log.info("VideoForge API shutting down")
@@ -72,6 +79,10 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
+from fastapi import Depends
+
+from backend.auth import verify_api_key
+from backend.routes import auth as auth_router
 from backend.routes import channels as channels_router
 from backend.routes import pipeline as pipeline_router
 from backend.routes import script as script_router
@@ -82,16 +93,27 @@ from backend.routes import style as style_router
 from backend.routes import youtube as youtube_router
 from backend.routes import fs as fs_router
 from backend.routes import music as music_router
+from backend.routes import presets as presets_router
+from backend.routes import drive as drive_router
+from backend.routes import status as status_router
 
-app.include_router(pipeline_router.router, prefix="/api")
-app.include_router(script_router.router, prefix="/api")
-app.include_router(videos_router.router, prefix="/api")
-app.include_router(channels_router.router, prefix="/api")
-app.include_router(youtube_router.router, prefix="/api")
-app.include_router(transcriber_router.router, prefix="/api")
-app.include_router(style_router.router, prefix="/api")
-app.include_router(fs_router.router, prefix="/api")
-app.include_router(music_router.router, prefix="/api")
+# Public routes (no auth required)
+app.include_router(auth_router.router, prefix="/api")
+
+# Protected routes — require X-API-Key if ACCESS_CODE is set
+_auth = [Depends(verify_api_key)]
+app.include_router(pipeline_router.router,     prefix="/api", dependencies=_auth)
+app.include_router(script_router.router,       prefix="/api", dependencies=_auth)
+app.include_router(videos_router.router,       prefix="/api", dependencies=_auth)
+app.include_router(channels_router.router,     prefix="/api", dependencies=_auth)
+app.include_router(youtube_router.router,      prefix="/api", dependencies=_auth)
+app.include_router(transcriber_router.router,  prefix="/api", dependencies=_auth)
+app.include_router(style_router.router,        prefix="/api", dependencies=_auth)
+app.include_router(fs_router.router,           prefix="/api", dependencies=_auth)
+app.include_router(music_router.router,        prefix="/api", dependencies=_auth)
+app.include_router(presets_router.router,      prefix="/api", dependencies=_auth)
+app.include_router(drive_router.router,        prefix="/api", dependencies=_auth)
+app.include_router(status_router.router,       prefix="/api", dependencies=_auth)
 app.include_router(ws_router.router)
 
 
@@ -101,6 +123,23 @@ app.include_router(ws_router.router)
 async def health() -> dict:
     """Liveness probe — returns 200 if the server is running."""
     return {"status": "ok", "service": "VideoForge API", "version": "1.0.0"}
+
+
+def _read_tunnel_url() -> dict:
+    from tunnel_utils import get_tunnel_url
+    return {"url": get_tunnel_url("videoforge")}
+
+
+@app.get("/api/tunnel", tags=["health"])
+async def tunnel_url() -> dict:
+    """Return the current public tunnel URL (cloudflared)."""
+    return _read_tunnel_url()
+
+
+@app.get("/api/ngrok", tags=["health"])
+async def ngrok_url_compat() -> dict:
+    """Backward-compatible alias for /api/tunnel."""
+    return _read_tunnel_url()
 
 
 # ── Static frontend (production / Docker) ─────────────────────────────────────
@@ -119,7 +158,10 @@ if _DIST.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
-        """Serve index.html for all non-API routes (SPA fallback)."""
+        """Serve static files from dist/ or fall back to index.html for SPA routing."""
+        fp = _DIST / full_path
+        if fp.is_file():
+            return FileResponse(str(fp))
         return FileResponse(str(_DIST / "index.html"))
 
 

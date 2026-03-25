@@ -8,6 +8,7 @@ nul
 .claude/launch.json
 projects/
 __pycache__/
+.tunnel_url_*
 *.py[cod]
 *.egg-info/
 dist/
