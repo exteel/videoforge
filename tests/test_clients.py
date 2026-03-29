@@ -751,3 +751,405 @@ class TestCostBudget:
         budget = CostBudget(limit=1.0, spent=1.0)
         # check() raises at >= limit, but over_budget() uses strict >
         assert budget.over_budget() is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VoidAI: _estimate_cost module-level function
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoidAIEstimateCost:
+    """Tests for the module-level _estimate_cost() in clients/voidai_client.py."""
+
+    def test_known_model_cost(self):
+        from clients.voidai_client import _estimate_cost
+        # gpt-4.1-nano: $0.1/M input, $0.4/M output
+        cost = _estimate_cost("gpt-4.1-nano", 1000, 500)
+        expected = (1000 / 1000) * 0.0001 + (500 / 1000) * 0.0004
+        assert abs(cost - expected) < 1e-12
+
+    def test_unknown_model_uses_default(self):
+        from clients.voidai_client import _estimate_cost
+        cost_known   = _estimate_cost("gpt-4.1", 1000, 500)
+        cost_unknown = _estimate_cost("totally-unknown-model", 1000, 500)
+        # Both use (0.002, 0.008) pricing (default matches gpt-4.1)
+        assert abs(cost_known - cost_unknown) < 1e-12
+
+    def test_zero_tokens_returns_zero(self):
+        from clients.voidai_client import _estimate_cost
+        assert _estimate_cost("gpt-4.1", 0, 0) == 0.0
+
+    def test_tts_model_input_only(self):
+        from clients.voidai_client import _estimate_cost
+        # tts-1-hd: $0.030/K chars input, no output cost
+        cost = _estimate_cost("tts-1-hd", 1000, 0)
+        assert abs(cost - 0.030) < 1e-9
+
+    def test_image_model_flat_per_unit(self):
+        from clients.voidai_client import _estimate_cost
+        # gpt-image-1.5: $0.04/1 unit
+        cost = _estimate_cost("gpt-image-1.5", 1, 0)
+        assert abs(cost - 0.00004) < 1e-9
+
+    def test_cost_scales_linearly_with_tokens(self):
+        from clients.voidai_client import _estimate_cost
+        cost1 = _estimate_cost("gpt-4.1-mini", 1000, 0)
+        cost2 = _estimate_cost("gpt-4.1-mini", 2000, 0)
+        assert abs(cost2 - cost1 * 2) < 1e-12
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VoidAI: session_cost accumulation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoidAISessionCost:
+
+    @pytest.mark.asyncio
+    async def test_session_cost_accumulates_across_calls(self):
+        """session_cost grows with each chat_completion call."""
+        with patch.dict("os.environ", {"VOIDAI_API_KEY": "test-key"}):
+            from clients.voidai_client import VoidAIClient
+
+            client = VoidAIClient(api_key="test-key")
+            await client.open()
+
+            # gpt-4.1: real pricing → cost will be non-zero
+            api_response = {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10_000, "completion_tokens": 5_000},
+            }
+            client._post = AsyncMock(return_value=api_response)
+
+            initial_cost = client.session_cost
+            await client.chat_completion("gpt-4.1", [{"role": "user", "content": "hi"}])
+            after_first = client.session_cost
+            await client.chat_completion("gpt-4.1", [{"role": "user", "content": "hi again"}])
+            after_second = client.session_cost
+
+            assert after_first > initial_cost
+            assert after_second > after_first
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_zero_token_call_does_not_inflate_session(self):
+        """A call that reports 0 prompt and 0 completion tokens adds $0 to session_cost."""
+        with patch.dict("os.environ", {"VOIDAI_API_KEY": "test-key"}):
+            from clients.voidai_client import VoidAIClient
+
+            client = VoidAIClient(api_key="test-key")
+            await client.open()
+
+            # Zero tokens reported — cost must be exactly $0 regardless of model
+            api_response = {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            }
+            client._post = AsyncMock(return_value=api_response)
+
+            await client.chat_completion("gpt-4.1", [{"role": "user", "content": "test"}])
+            assert client.session_cost == 0.0
+
+            await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VoidAI: chat_completion error handling paths
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoidAIChatCompletionErrors:
+
+    @pytest.mark.asyncio
+    async def test_client_error_4xx_raises_without_fallback_attempt(self):
+        """
+        A 4xx HTTPStatusError from _post propagates immediately.
+        With use_fallback=True, a 4xx means the request itself is bad — no point retrying
+        with a different model (the payload will fail the same way).
+        """
+        with patch.dict("os.environ", {"VOIDAI_API_KEY": "test-key"}):
+            from clients.voidai_client import VoidAIClient
+            import httpx
+
+            client = VoidAIClient(api_key="test-key")
+            await client.open()
+
+            request  = httpx.Request("POST", "https://api.voidai.app/v1/chat/completions")
+            response = httpx.Response(400, text="bad request", request=request)
+            err      = httpx.HTTPStatusError("400", request=request, response=response)
+
+            client._post = AsyncMock(side_effect=err)
+
+            with pytest.raises(Exception):
+                await client.chat_completion(
+                    "gpt-4.1-nano",
+                    [{"role": "user", "content": "bad input"}],
+                    use_fallback=True,
+                )
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_http_client_not_opened_raises_runtime_error(self):
+        """Calling chat_completion before open() raises RuntimeError."""
+        with patch.dict("os.environ", {"VOIDAI_API_KEY": "test-key"}):
+            from clients.voidai_client import VoidAIClient
+
+            client = VoidAIClient(api_key="test-key")
+            # Deliberately NOT calling open()
+
+            with pytest.raises(RuntimeError, match="not opened"):
+                await client.chat_completion(
+                    "gpt-4.1-nano",
+                    [{"role": "user", "content": "test"}],
+                    use_fallback=False,
+                )
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_forwarded_to_payload(self):
+        """Extra kwargs (e.g. top_p, stop) are forwarded to the API payload."""
+        with patch.dict("os.environ", {"VOIDAI_API_KEY": "test-key"}):
+            from clients.voidai_client import VoidAIClient
+
+            client = VoidAIClient(api_key="test-key")
+            await client.open()
+
+            api_response = {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            }
+            client._post = AsyncMock(return_value=api_response)
+
+            await client.chat_completion(
+                "gpt-4.1-nano",
+                [{"role": "user", "content": "test"}],
+                top_p=0.9,
+                stop=["\n"],
+            )
+
+            payload = client._post.call_args[0][1]
+            assert payload.get("top_p") == 0.9
+            assert payload.get("stop") == ["\n"]
+
+            await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VoidAI: encode_image and image_message static helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoidAIImageHelpers:
+
+    def test_encode_image_returns_base64_string(self, tmp_path):
+        from clients.voidai_client import VoidAIClient
+
+        img = tmp_path / "test.jpg"
+        img.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+        b64 = VoidAIClient.encode_image(img)
+        assert isinstance(b64, str)
+        import base64
+        decoded = base64.b64decode(b64)
+        assert decoded[:3] == b"\xff\xd8\xff"
+
+    def test_image_message_structure(self, tmp_path):
+        from clients.voidai_client import VoidAIClient
+
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        msg = VoidAIClient.image_message(img, "Describe this.")
+
+        assert msg["role"] == "user"
+        assert isinstance(msg["content"], list)
+        types = [item["type"] for item in msg["content"]]
+        assert "text" in types
+        assert "image_url" in types
+
+    def test_image_message_mime_type_jpeg(self, tmp_path):
+        from clients.voidai_client import VoidAIClient
+
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
+
+        msg = VoidAIClient.image_message(img, "test")
+        img_part = next(p for p in msg["content"] if p["type"] == "image_url")
+        assert "image/jpeg" in img_part["image_url"]["url"]
+
+    def test_image_message_mime_type_png(self, tmp_path):
+        from clients.voidai_client import VoidAIClient
+
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+
+        msg = VoidAIClient.image_message(img, "test")
+        img_part = next(p for p in msg["content"] if p["type"] == "image_url")
+        assert "image/png" in img_part["image_url"]["url"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WaveSpeed: _download — success and WebP detection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestWaveSpeedDownload:
+
+    @pytest.mark.asyncio
+    async def test_successful_download_saves_file(self, tmp_path):
+        """A sufficiently-large PNG response is saved to output_path."""
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient
+
+            client = WaveSpeedClient(api_key="test-key")
+            await client.open()
+
+            fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 10_000  # 10 KB PNG
+
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = fake_png
+
+            output = tmp_path / "image.png"
+
+            with patch("httpx.AsyncClient") as mock_dl_cls:
+                mock_dl = AsyncMock()
+                mock_dl.__aenter__ = AsyncMock(return_value=mock_dl)
+                mock_dl.__aexit__ = AsyncMock(return_value=False)
+                mock_dl.get = AsyncMock(return_value=mock_resp)
+                mock_dl_cls.return_value = mock_dl
+
+                result = await client._download("https://cdn.wavespeed.ai/img.png", output)
+
+            assert result == output
+            assert output.exists()
+            assert output.read_bytes() == fake_png
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_download_raises_if_too_small(self, tmp_path):
+        """Images smaller than 5 KB are rejected (likely an error page, not a real image)."""
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient
+
+            client = WaveSpeedClient(api_key="test-key")
+            await client.open()
+
+            tiny_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # only ~108 bytes
+
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = tiny_data
+
+            output = tmp_path / "small.png"
+
+            with patch("httpx.AsyncClient") as mock_dl_cls:
+                mock_dl = AsyncMock()
+                mock_dl.__aenter__ = AsyncMock(return_value=mock_dl)
+                mock_dl.__aexit__ = AsyncMock(return_value=False)
+                mock_dl.get = AsyncMock(return_value=mock_resp)
+                mock_dl_cls.return_value = mock_dl
+
+                with pytest.raises(RuntimeError, match="too small"):
+                    await client._download("https://cdn.wavespeed.ai/tiny.png", output)
+
+            # File must be cleaned up after a too-small error
+            assert not output.exists()
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_webp_detection_triggers_conversion(self, tmp_path):
+        """
+        Data starting with RIFF????WEBP header triggers WebP→PNG conversion.
+        """
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient
+
+            client = WaveSpeedClient(api_key="test-key")
+            await client.open()
+
+            # Craft minimal RIFF/WEBP magic bytes
+            webp_data = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 10_000
+
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = webp_data
+
+            output = tmp_path / "image.png"
+            fake_png_output = b"\x89PNG\r\n\x1a\n" + b"\x00" * 10_000
+
+            with patch("httpx.AsyncClient") as mock_dl_cls:
+                mock_dl = AsyncMock()
+                mock_dl.__aenter__ = AsyncMock(return_value=mock_dl)
+                mock_dl.__aexit__ = AsyncMock(return_value=False)
+                mock_dl.get = AsyncMock(return_value=mock_resp)
+                mock_dl_cls.return_value = mock_dl
+
+                import io
+                mock_img = MagicMock()
+                mock_img.mode = "RGB"
+                mock_buf = MagicMock()
+                mock_buf.getvalue.return_value = fake_png_output
+
+                with patch("PIL.Image.open", return_value=mock_img):
+                    with patch("io.BytesIO", side_effect=[io.BytesIO(webp_data), mock_buf]):
+                        result = await client._download("https://cdn.wavespeed.ai/img.webp", output)
+
+            # Conversion was triggered (Pillow was used)
+            assert result == output
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_non_webp_data_skips_conversion(self, tmp_path):
+        """PNG magic bytes do NOT trigger WebP conversion path."""
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient
+
+            client = WaveSpeedClient(api_key="test-key")
+            await client.open()
+
+            fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 15_000
+
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.content = fake_png
+
+            output = tmp_path / "image.png"
+
+            with patch("httpx.AsyncClient") as mock_dl_cls:
+                mock_dl = AsyncMock()
+                mock_dl.__aenter__ = AsyncMock(return_value=mock_dl)
+                mock_dl.__aexit__ = AsyncMock(return_value=False)
+                mock_dl.get = AsyncMock(return_value=mock_resp)
+                mock_dl_cls.return_value = mock_dl
+
+                # PIL should NOT be imported or called
+                with patch("PIL.Image.open") as mock_pil:
+                    result = await client._download("https://cdn.wavespeed.ai/img.png", output)
+                    mock_pil.assert_not_called()
+
+            assert output.read_bytes() == fake_png
+
+            await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WaveSpeed: session tracking
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestWaveSpeedSessionTracking:
+
+    def test_initial_session_cost_zero(self):
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient, COST_PER_IMAGE
+            client = WaveSpeedClient(api_key="test-key")
+            assert client.session_cost == 0.0
+            assert client.session_images == 0
+
+    def test_track_increments_cost_and_count(self):
+        with patch.dict("os.environ", {"WAVESPEED_API_KEY": "test-key"}):
+            from clients.wavespeed_client import WaveSpeedClient, COST_PER_IMAGE
+            client = WaveSpeedClient(api_key="test-key")
+            client._track()
+            client._track()
+            assert client.session_images == 2
+            assert abs(client.session_cost - COST_PER_IMAGE * 2) < 1e-9

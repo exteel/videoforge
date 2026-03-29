@@ -21,6 +21,15 @@ from typing import Any
 _STDERR = open(sys.stderr.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
 
 
+def _inc(name: str, value: int = 1) -> None:
+    """Deferred proxy for metrics.inc — avoids circular import at module load."""
+    try:
+        from backend.routes.metrics import inc
+        inc(name, value)
+    except Exception:
+        pass
+
+
 def _term_bar(pct: float, width: int = 28) -> str:
     """Return a Unicode progress bar string: [████░░░░] 62%"""
     filled = int(width * pct / 100)
@@ -236,6 +245,7 @@ class JobManager:
         job.status = "running"
         job.started_at = _now()
         job.emit(type="status", status="running")
+        _inc("jobs_total")
 
         t0 = time.monotonic()
 
@@ -363,6 +373,7 @@ class JobManager:
             )
             elapsed = time.monotonic() - t0
             job.status = "done"
+            _inc("jobs_completed")
             job.finished_at = _now()
             job.elapsed = elapsed
             job.log(f"Done in {elapsed:.1f}s")
@@ -384,6 +395,7 @@ class JobManager:
         except Exception as exc:
             elapsed = time.monotonic() - t0
             job.status = "failed"
+            _inc("jobs_failed")
             job.finished_at = _now()
             job.elapsed = elapsed
             job.error = str(exc)[:500]
@@ -440,6 +452,7 @@ class JobManager:
         job.status = "running"
         job.started_at = _now()
         job.emit(type="status", status="running")
+        _inc("jobs_total")
 
         t0 = time.monotonic()
         dry_run = kwargs.get("dry_run", False)
@@ -453,6 +466,7 @@ class JobManager:
             )
             elapsed = time.monotonic() - t0
             job.status = "done"
+            _inc("jobs_completed")
             job.finished_at = _now()
             job.elapsed = elapsed
             msg = (
@@ -474,6 +488,7 @@ class JobManager:
         except Exception as exc:
             elapsed = time.monotonic() - t0
             job.status = "failed"
+            _inc("jobs_failed")
             job.finished_at = _now()
             job.elapsed = elapsed
             job.error = str(exc)[:500]
@@ -681,6 +696,7 @@ class JobManager:
         job.status = "running"
         job.started_at = _now()
         job.emit(type="status", status="running")
+        _inc("jobs_total")
 
         t0 = time.monotonic()
         quality      = kwargs.get("quality", "balanced")
@@ -879,6 +895,7 @@ class JobManager:
                 elapsed_seconds=elapsed,
             )
             job.status = "done"
+            _inc("jobs_completed")
             job.finished_at = _now()
             job.elapsed = elapsed
             job.log(f"Done in {elapsed:.1f}s")
@@ -900,6 +917,7 @@ class JobManager:
         except Exception as exc:
             elapsed = time.monotonic() - t0
             job.status = "failed"
+            _inc("jobs_failed")
             job.finished_at = _now()
             job.elapsed = elapsed
             job.error = str(exc)[:500]

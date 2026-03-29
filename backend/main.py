@@ -168,9 +168,11 @@ from backend.routes import music as music_router
 from backend.routes import presets as presets_router
 from backend.routes import drive as drive_router
 from backend.routes import status as status_router
+from backend.routes import metrics as metrics_router
 
 # Public routes (no auth required)
 app.include_router(auth_router.router, prefix="/api")
+app.include_router(metrics_router.router, prefix="/api")
 
 # Protected routes — require X-API-Key if ACCESS_CODE is set
 _auth = [Depends(verify_api_key)]
