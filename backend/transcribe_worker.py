@@ -207,6 +207,10 @@ async def transcribe_url(
         audio_out = tmp_path / "audio.%(ext)s"
 
         def _download() -> Path:
+            import shutil as _shutil
+            _ffmpeg_dir = _shutil.which("ffmpeg")
+            _ffmpeg_location = str(Path(_ffmpeg_dir).parent) if _ffmpeg_dir else None
+
             opts = {
                 "format":       "bestaudio/best",
                 "outtmpl":      str(audio_out),
@@ -218,6 +222,8 @@ async def transcribe_url(
                 "quiet":       True,
                 "no_warnings": True,
             }
+            if _ffmpeg_location:
+                opts["ffmpeg_location"] = _ffmpeg_location
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             files = list(tmp_path.glob("audio.*"))
