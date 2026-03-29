@@ -3,6 +3,8 @@ import { type Job, type DriveUploadJob, api } from '../api'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useNotifications } from '../hooks/useNotifications'
 
+type BlockSummary = { id: string; type: string; title: string; word_count: number; image_count: number; narration: string; est_duration_sec?: number }
+
 const STEPS = ['', 'Script', 'Images + Voices', 'Subtitles', 'Video', 'Thumbnail', 'Metadata']
 
 // Estimated seconds per step (for time-based animation fallback)
@@ -88,6 +90,10 @@ export function JobCard({ job, onRefresh }: Props) {
   const [approving, setApproving] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
   const [regenScript, setRegenScript] = useState(false)
+  const [editingBlock, setEditingBlock] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [localBlocks, setLocalBlocks] = useState<BlockSummary[] | null>(null)
   const [liveSec, setLiveSec] = useState<number | null>(null)
 
   // ── Drive upload ───────────────────────────────────────────────────────────
@@ -292,6 +298,24 @@ export function JobCard({ job, onRefresh }: Props) {
     }
   }
 
+  async function handleSaveBlock(blockId: string, currentBlocks: BlockSummary[]) {
+    setSaving(true)
+    try {
+      await api.jobs.editBlock(job.job_id, blockId, editText)
+      // Update local block data so the narration reflects the edit immediately
+      setLocalBlocks(currentBlocks.map((b) =>
+        b.id === blockId
+          ? { ...b, narration: editText, word_count: editText.split(/\s+/).filter(Boolean).length }
+          : b
+      ))
+      setEditingBlock(null)
+    } catch (err) {
+      console.error('Block save failed:', err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
       {/* Header */}
@@ -381,7 +405,6 @@ export function JobCard({ job, onRefresh }: Props) {
         const d = liveReviewData ?? {}
 
         // ── Script data ───────────────────────────────────────────────────
-        type BlockSummary = { id: string; type: string; title: string; word_count: number; image_count: number; narration: string; est_duration_sec?: number }
         const scriptBlocks  = d.blocks as BlockSummary[] | undefined
         const blockCount    = (d.block_count as number) ?? scriptBlocks?.length ?? 0
         const wordCount     = d.word_count as number | undefined
@@ -489,33 +512,87 @@ export function JobCard({ job, onRefresh }: Props) {
                   <span className="text-gray-500 ml-auto tabular-nums">{blockCount} блоків</span>
                 </div>
 
-                {/* ── Block list (compact, scrollable) ─────────────────── */}
-                {scriptBlocks && scriptBlocks.length > 0 && (
-                  <div className="max-h-52 overflow-y-auto space-y-0.5 pr-1">
-                    {scriptBlocks.map((b) => (
-                      <details key={b.id} className="group">
-                        <summary className="flex items-center gap-2 text-xs cursor-pointer select-none hover:bg-gray-700/40 rounded px-1 py-0.5 list-none">
-                          {/* Type badge */}
-                          <span className={`shrink-0 px-1 py-px rounded text-[10px] font-medium w-14 text-center ${BLOCK_TYPE_COLOR[b.type] ?? 'bg-gray-700 text-gray-300'}`}>
-                            {b.type}
-                          </span>
-                          {/* Title or narration preview */}
-                          <span className="flex-1 text-gray-300 truncate">{b.title || b.narration.slice(0, 80)}</span>
-                          {/* Stats */}
-                          <span className="shrink-0 tabular-nums text-gray-500 text-[10px] flex gap-1.5">
-                            <span title="слів">{b.word_count}w</span>
-                            {b.est_duration_sec != null && <span className="text-gray-500">~{Math.round(b.est_duration_sec)}s</span>}
-                            {b.image_count > 0 && <span title="зображень" className="text-blue-400">🖼{b.image_count}</span>}
-                          </span>
-                        </summary>
-                        {/* Expanded narration */}
-                        <div className="text-[11px] text-gray-400 pl-16 pr-2 pb-1 pt-0.5 leading-relaxed">
-                          {b.narration || <span className="italic text-gray-600">пусто</span>}
-                        </div>
-                      </details>
-                    ))}
-                  </div>
-                )}
+                {/* ── Block list (compact, scrollable, editable) ───────── */}
+                {(() => {
+                  const displayBlocks = localBlocks ?? scriptBlocks
+                  if (!displayBlocks || displayBlocks.length === 0) return null
+                  return (
+                    <div className="max-h-72 overflow-y-auto space-y-0.5 pr-1">
+                      {displayBlocks.map((b) => (
+                        <details key={b.id} className="group" open={editingBlock === b.id}>
+                          <summary className="flex items-center gap-2 text-xs cursor-pointer select-none hover:bg-gray-700/40 rounded px-1 py-0.5 list-none">
+                            {/* Type badge */}
+                            <span className={`shrink-0 px-1 py-px rounded text-[10px] font-medium w-14 text-center ${BLOCK_TYPE_COLOR[b.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                              {b.type}
+                            </span>
+                            {/* Title or narration preview */}
+                            <span className="flex-1 text-gray-300 truncate">{b.title || b.narration.slice(0, 80)}</span>
+                            {/* Stats */}
+                            <span className="shrink-0 tabular-nums text-gray-500 text-[10px] flex gap-1.5">
+                              <span title="слів">{b.word_count}w</span>
+                              {b.est_duration_sec != null && <span className="text-gray-500">~{Math.round(b.est_duration_sec)}s</span>}
+                              {b.image_count > 0 && <span title="зображень" className="text-blue-400">🖼{b.image_count}</span>}
+                            </span>
+                            {/* Edit trigger */}
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault()
+                                if (editingBlock === b.id) {
+                                  setEditingBlock(null)
+                                } else {
+                                  setEditingBlock(b.id)
+                                  setEditText(b.narration)
+                                }
+                              }}
+                              className="shrink-0 text-[10px] px-1.5 py-px rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-200 transition-colors ml-1"
+                              title="Редагувати нарацію"
+                            >
+                              ✎
+                            </button>
+                          </summary>
+                          {/* Expanded: inline editor or read-only narration */}
+                          <div className="pl-16 pr-2 pb-1.5 pt-1">
+                            {editingBlock === b.id ? (
+                              <>
+                                <textarea
+                                  className="w-full bg-gray-900 text-gray-200 border border-gray-600 focus:border-blue-500 rounded p-2 text-[11px] font-mono leading-relaxed resize-y outline-none transition-colors"
+                                  rows={5}
+                                  value={editText}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                />
+                                <div className="flex gap-2 mt-1.5 items-center">
+                                  <button
+                                    onClick={() => handleSaveBlock(b.id, displayBlocks)}
+                                    disabled={saving}
+                                    className="px-2 py-1 text-xs bg-green-700 hover:bg-green-600 active:bg-green-800 rounded text-white disabled:opacity-50 transition-colors"
+                                  >
+                                    {saving ? 'Збереження…' : 'Зберегти'}
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingBlock(null)}
+                                    disabled={saving}
+                                    className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded text-white disabled:opacity-50 transition-colors"
+                                  >
+                                    Скасувати
+                                  </button>
+                                  <span className="text-[10px] text-gray-600 tabular-nums ml-auto">
+                                    {editText.split(/\s+/).filter(Boolean).length}w
+                                  </span>
+                                </div>
+                              </>
+                            ) : (
+                              <p className="text-[11px] text-gray-400 leading-relaxed">
+                                {b.narration || <span className="italic text-gray-600">пусто</span>}
+                              </p>
+                            )}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  )
+                })()}
               </>
             )}
 

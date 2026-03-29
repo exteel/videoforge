@@ -13,10 +13,16 @@ import re as _re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from backend.auth import check_rate_limit
 from backend.job_manager import manager
 from backend.models import BatchRunRequest, JobResponse, MultiBatchRequest, PipelineRunRequest, QuickBatchRequest, QuickRunRequest
+
+
+class BlockEditRequest(BaseModel):
+    block_id: str
+    narration: str
 
 router = APIRouter(tags=["jobs"])
 
@@ -342,6 +348,39 @@ async def cancel_job(job_id: str) -> dict:
     if not ok:
         raise HTTPException(404, f"Job not found or already finished: {job_id}")
     return {"job_id": job_id, "status": "cancelled"}
+
+
+@router.patch("/jobs/{job_id}/edit-block", status_code=200)
+async def edit_script_block(job_id: str, req: BlockEditRequest) -> dict:
+    """Edit a single block's narration while job is in script review."""
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "waiting_review":
+        raise HTTPException(400, "Job is not in review state")
+
+    script_path = Path(job.project_dir) / "script.json"
+    if not script_path.exists():
+        raise HTTPException(404, "script.json not found")
+
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    blocks = script.get("blocks", [])
+
+    found = False
+    for block in blocks:
+        if block.get("id") == req.block_id:
+            block["narration"] = req.narration
+            found = True
+            break
+
+    if not found:
+        raise HTTPException(404, f"Block {req.block_id} not found")
+
+    script_path.write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Recalculate word count
+    total_words = sum(len((b.get("narration") or "").split()) for b in blocks)
+    return {"ok": True, "block_id": req.block_id, "total_words": total_words}
 
 
 @router.post("/jobs/{job_id}/approve", status_code=200)

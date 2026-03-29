@@ -301,6 +301,11 @@ export const api = {
       req<{ job_id: string; validation: Record<string, unknown> }>(`/jobs/${id}/regen-images`, { method: 'POST' }),
     regenScript: (id: string) =>
       req<{ job_id: string; word_count: number; block_count: number }>(`/jobs/${id}/regen-script`, { method: 'POST' }),
+    editBlock: (jobId: string, blockId: string, narration: string) =>
+      req<{ ok: boolean; block_id: string; total_words: number }>(
+        `/jobs/${jobId}/edit-block`,
+        { method: 'PATCH', body: JSON.stringify({ block_id: blockId, narration }) }
+      ),
   },
 
   pipeline: {
