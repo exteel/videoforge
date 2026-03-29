@@ -338,7 +338,10 @@ async def generate_voices(
                 desc="Generating audio",
                 unit="block",
             ):
-                results.append(await fut)
+                try:
+                    results.append(await fut)
+                except Exception as _task_exc:
+                    log.error("Audio generation task raised unexpectedly: %s", _task_exc)
                 _voice_done[0] += 1
                 _emit_voice_progress(_voice_done[0])
 

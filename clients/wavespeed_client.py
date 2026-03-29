@@ -206,43 +206,46 @@ class WaveSpeedClient:
 
         # Poll for completion
         poll_url = f"{self.base_url}{POLL_ENDPOINT.format(task_id=task_id)}"
-        poll_client = httpx.AsyncClient(
-            headers=self._auth_headers(),
-            timeout=POLL_TIMEOUT,
-        )
+        pc = self._client()
 
-        async with poll_client as pc:
-            for poll_num in range(1, MAX_POLLS + 1):
-                await asyncio.sleep(POLL_INTERVAL)
-                try:
-                    poll_resp = await pc.get(poll_url)
-                    poll_resp.raise_for_status()
-                    poll_data = poll_resp.json()
-                except Exception as exc:
-                    log.warning("Poll %d error: %s", poll_num, exc)
-                    continue
+        for poll_num in range(1, MAX_POLLS + 1):
+            await asyncio.sleep(POLL_INTERVAL)
+            try:
+                poll_resp = await pc.get(poll_url, headers=self._auth_headers())
+                poll_resp.raise_for_status()
+                poll_data = poll_resp.json()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in (401, 403, 404):
+                    raise RuntimeError(
+                        f"WaveSpeed poll fatal HTTP {exc.response.status_code} for task {task_id}"
+                    ) from exc
+                log.warning("Poll %d HTTP error: %s", poll_num, exc)
+                continue
+            except Exception as exc:
+                log.warning("Poll %d error: %s", poll_num, exc)
+                continue
 
-                status = (
-                    poll_data.get("data", {}).get("status")
-                    or poll_data.get("status", "")
+            status = (
+                poll_data.get("data", {}).get("status")
+                or poll_data.get("status", "")
+            )
+
+            if status == "completed":
+                outputs = (
+                    poll_data.get("data", {}).get("outputs")
+                    or poll_data.get("outputs", [])
                 )
+                if outputs:
+                    log.debug("WaveSpeed task=%s completed after %d polls", task_id, poll_num)
+                    return outputs[0]
+                raise RuntimeError(f"WaveSpeed task {task_id} completed but no outputs")
 
-                if status == "completed":
-                    outputs = (
-                        poll_data.get("data", {}).get("outputs")
-                        or poll_data.get("outputs", [])
-                    )
-                    if outputs:
-                        log.debug("WaveSpeed task=%s completed after %d polls", task_id, poll_num)
-                        return outputs[0]
-                    raise RuntimeError(f"WaveSpeed task {task_id} completed but no outputs")
+            if status in ("failed", "error", "cancelled"):
+                error = poll_data.get("data", {}).get("error") or poll_data.get("error", "unknown")
+                raise RuntimeError(f"WaveSpeed task {task_id} {status}: {error}")
 
-                if status in ("failed", "error", "cancelled"):
-                    error = poll_data.get("data", {}).get("error") or poll_data.get("error", "unknown")
-                    raise RuntimeError(f"WaveSpeed task {task_id} {status}: {error}")
-
-                if poll_num % 10 == 0:
-                    log.debug("WaveSpeed task=%s status=%s (poll %d/%d)", task_id, status, poll_num, MAX_POLLS)
+            if poll_num % 10 == 0:
+                log.debug("WaveSpeed task=%s status=%s (poll %d/%d)", task_id, status, poll_num, MAX_POLLS)
 
         raise RuntimeError(
             f"WaveSpeed task {task_id} timed out after {MAX_POLLS * POLL_INTERVAL:.0f}s"
@@ -282,7 +285,8 @@ class WaveSpeedClient:
                 )
                 data = converted
             except Exception as exc:
-                log.warning("WebP→PNG conversion failed for %s: %s — saving WebP as-is", output_path.name, exc)
+                log.error("WebP→PNG conversion failed for %s: %s — cannot save as PNG", output_path.name, exc)
+                raise RuntimeError(f"WebP→PNG conversion failed for {output_path.name}: {exc}") from exc
 
         output_path.write_bytes(data)
         saved_size = output_path.stat().st_size

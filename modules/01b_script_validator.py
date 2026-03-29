@@ -47,7 +47,7 @@ log = setup_logging("script_validator")
 
 VOIDAI_BASE  = "https://api.voidai.app/v1"
 DETECT_MODEL = "gpt-4.1-mini"
-FIX_MODEL    = "claude-sonnet-4-5-20250929"
+FIX_MODEL    = "claude-sonnet-4-5"
 
 # Patterns that indicate a generic / placeholder image prompt
 _IMAGE_TAG_IN_NARRATION_RE = re.compile(r"\[IMAGE_PROMPT:", re.IGNORECASE)

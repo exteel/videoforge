@@ -51,7 +51,7 @@ POLL_INTERVAL = 2.0       # seconds between status checks
 POLL_TIMEOUT = 180.0      # max seconds to wait for a task
 
 # Task terminal states
-_DONE_STATUSES = {"done", "completed", "finished", "success", "ending"}
+_DONE_STATUSES = {"done", "completed", "finished", "success"}
 _ERROR_STATUSES = {"error", "failed", "cancelled"}
 
 # Text chunk size — split long texts to avoid API limits
@@ -175,9 +175,10 @@ class VoiceAPIClient:
         resp.raise_for_status()
 
         content_type = resp.headers.get("content-type", "")
-        if "audio" not in content_type and len(resp.content) < 100:
+        if "audio" not in content_type or len(resp.content) < 100:
             raise RuntimeError(
-                f"VoiceAPI result: unexpected content-type={content_type!r}"
+                f"VoiceAPI result: unexpected content-type={content_type!r}, "
+                f"size={len(resp.content)} bytes"
             )
 
         return resp.content
@@ -355,11 +356,12 @@ class VoiceAPIClient:
                             i + 1, len(chunks), type(exc).__name__,
                         )
                         use_fallback = True
-                        remaining_text = " ".join(chunks[i:])
-                        part = await self._voidai_tts_fallback(
-                            remaining_text, model=fallback_model, voice=fallback_voice
-                        )
-                        audio_parts.append(part)
+                        # Process each remaining chunk individually via VoidAI
+                        for remaining_chunk in chunks[i:]:
+                            part = await self._voidai_tts_fallback(
+                                remaining_chunk, model=fallback_model, voice=fallback_voice
+                            )
+                            audio_parts.append(part)
                         self._fallback_used += 1
                         break
                     else:

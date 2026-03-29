@@ -419,6 +419,7 @@ def generate_subtitles(
     ass_path = subs_dir / f"subtitles{suffix}.ass"
 
     # Build subtitle entries
+    transcript_entries: list[SubEntry] = []
     if from_transcript:
         transcript_path = Path(from_transcript)
         if not transcript_path.exists():

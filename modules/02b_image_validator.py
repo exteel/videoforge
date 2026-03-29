@@ -248,7 +248,7 @@ async def _wavespeed_generate(
                     },
                     json={
                         "prompt": prompt,
-                        "size": "1024x576",
+                        "size": "1024*576",
                         "num_inference_steps": 28,
                         "guidance_scale": 3.5,
                         "output_format": "png",

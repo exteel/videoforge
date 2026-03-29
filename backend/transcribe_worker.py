@@ -1,7 +1,7 @@
 """
 VideoForge — Transcription Worker.
 
-YouTube URL → yt-dlp download → VoidAI Whisper → Transcriber-compatible output files.
+YouTube URL → yt-dlp download → faster-whisper (local GPU/CPU) → Transcriber-compatible output files.
 
 Output structure (matches Transcriber exactly):
     {output_base}/{sanitized_title}/
@@ -11,33 +11,29 @@ Output structure (matches Transcriber exactly):
         title.txt            — video title
         description.txt      — video description
         thumbnail.jpg        — downloaded thumbnail
-
-VoidAI Whisper has 25 MB file limit — long audio is split into chunks via FFmpeg.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
-import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).parent.parent
 
-WHISPER_MODEL    = "whisper-1"
-MAX_BYTES        = 24 * 1024 * 1024   # 24 MB — stay under 25 MB API limit
-AUDIO_BITRATE    = "64k"              # ~480 KB/min → ~28 MB/hr; split if larger
-CHUNK_MINUTES    = 25                 # Split into 25-min chunks if needed
+WHISPER_MODEL_SIZE = "turbo"   # faster-whisper-large-v3-turbo-ct2 — fast + accurate
 
-# Retry config for transient Whisper API errors (502, 503, 429, 500, 504)
-WHISPER_RETRY_ATTEMPTS = 3
-WHISPER_RETRY_STATUSES = {429, 500, 502, 503, 504}
-WHISPER_RETRY_DELAYS   = [5, 10, 20]  # seconds between retries (exponential-ish backoff)
+# Only 1 GPU transcription at a time — prevents CUDA out-of-memory with parallel workers
+_GPU_TRANSCRIBE_LOCK = threading.Semaphore(1)
+
+log = logging.getLogger("transcribe")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -62,164 +58,66 @@ def _fmt_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def _segments_to_srt(segments: list[dict]) -> str:
+def _segments_to_srt(segments: list) -> str:
+    """Convert faster-whisper segment objects (or dicts) to SRT string."""
     parts = []
     for i, seg in enumerate(segments, 1):
-        start = _fmt_srt(seg.get("start", 0))
-        end   = _fmt_srt(seg.get("end", 0))
-        text  = seg.get("text", "").strip()
-        parts.append(f"{i}\n{start} --> {end}\n{text}\n")
+        if hasattr(seg, "start"):
+            start, end, text = seg.start, seg.end, seg.text
+        else:
+            start, end, text = seg.get("start", 0), seg.get("end", 0), seg.get("text", "")
+        parts.append(f"{i}\n{_fmt_srt(start)} --> {_fmt_srt(end)}\n{text.strip()}\n")
     return "\n".join(parts)
 
 
-def _ffmpeg_split(audio_path: Path, chunk_dir: Path, chunk_min: int) -> list[Path]:
-    """Split audio into N-minute chunks with FFmpeg. Returns list of chunk paths."""
-    chunk_dir.mkdir(exist_ok=True)
-    pattern = str(chunk_dir / "chunk_%03d.mp3")
-    cmd = [
-        "ffmpeg", "-y", "-i", str(audio_path),
-        "-f", "segment",
-        "-segment_time", str(chunk_min * 60),
-        "-c", "copy",
-        pattern,
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
-    return sorted(chunk_dir.glob("chunk_*.mp3"))
+def _segments_to_text(segments: list) -> str:
+    """Join segment text into plain transcript."""
+    parts = []
+    for seg in segments:
+        text = seg.text if hasattr(seg, "text") else seg.get("text", "")
+        parts.append(text.strip())
+    return " ".join(parts)
 
 
-async def _whisper_transcribe(
-    audio_path: Path,
-    api_key: str,
-    base_url: str,
-    language: str | None,
-) -> dict[str, Any]:
-    """
-    Transcribe a single audio file via VoidAI Whisper API.
+_whisper_model: Any = None  # lazy singleton — loaded once, reused across requests
 
-    Retries on transient errors (502, 503, 429, 500, 504) with backoff.
-    Raises RuntimeError on permanent failure or non-retryable status codes.
-    """
-    import httpx
+def _load_whisper_model() -> Any:
+    """Load faster-whisper model (CUDA → CPU fallback). Cached as singleton."""
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
 
-    with open(audio_path, "rb") as f:
-        content = f.read()
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
 
-    files = {"file": (audio_path.name, content, "audio/mpeg")}
-    data: dict[str, str] = {"model": WHISPER_MODEL, "response_format": "verbose_json"}
-    if language:
-        data["language"] = language
-
-    endpoint = f"{base_url}/audio/transcriptions"
-    last_error: Exception | None = None
-
-    for attempt in range(1, WHISPER_RETRY_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=600.0) as client:
-                resp = await client.post(
-                    endpoint,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    files=files,
-                    data=data,
-                )
-
-            if resp.status_code == 200:
-                return resp.json()
-
-            # Transient server error — retry with backoff
-            if resp.status_code in WHISPER_RETRY_STATUSES and attempt < WHISPER_RETRY_ATTEMPTS:
-                delay = WHISPER_RETRY_DELAYS[attempt - 1]
-                last_error = RuntimeError(
-                    f"Whisper API error {resp.status_code} (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): "
-                    f"{resp.text[:200]}"
-                )
-                await asyncio.sleep(delay)
-                continue
-
-            # Permanent error (400, 401, 403, 404, etc.) — fail immediately
-            raise RuntimeError(
-                f"Whisper API error {resp.status_code}: {resp.text[:300]}"
-            )
-
-        except httpx.TimeoutException as exc:
-            last_error = RuntimeError(f"Whisper API timeout (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): {exc}")
-            if attempt < WHISPER_RETRY_ATTEMPTS:
-                await asyncio.sleep(WHISPER_RETRY_DELAYS[attempt - 1])
-                continue
-        except httpx.RequestError as exc:
-            last_error = RuntimeError(f"Whisper API network error (attempt {attempt}/{WHISPER_RETRY_ATTEMPTS}): {exc}")
-            if attempt < WHISPER_RETRY_ATTEMPTS:
-                await asyncio.sleep(WHISPER_RETRY_DELAYS[attempt - 1])
-                continue
-
-    raise last_error or RuntimeError("Whisper API: all retry attempts exhausted")
+    try:
+        base = WhisperModel(WHISPER_MODEL_SIZE, device="cuda", compute_type="int8_float16")
+        _whisper_model = BatchedInferencePipeline(model=base)
+    except Exception:
+        base = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        _whisper_model = BatchedInferencePipeline(model=base)
+    log.info("Whisper model loaded: %s (cached for reuse)", WHISPER_MODEL_SIZE)
+    return _whisper_model
 
 
-async def _transcribe_file(
-    audio_path: Path,
-    api_key: str,
-    base_url: str,
-    language: str | None,
-    log: Callable[[str], None],
-) -> tuple[str, list[dict], str]:
-    """
-    Transcribe audio file, splitting into chunks if too large.
-    Returns (full_text, all_segments, detected_language).
-    """
-    size = audio_path.stat().st_size
-    log(f"Audio size: {size / 1e6:.1f} MB")
+def _run_transcription(audio_path: Path, language: str | None) -> tuple[list, Any]:
+    """Run faster-whisper transcription synchronously (GPU-locked). Returns (segments, info)."""
+    with _GPU_TRANSCRIBE_LOCK:
+        log.info("GPU lock acquired — starting transcription")
+        model = _load_whisper_model()
+        opts: dict[str, Any] = {
+            "beam_size": 5,
+            "batch_size": 16,
+            "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": 500, "speech_pad_ms": 200},
+            "word_timestamps": False,
+            "condition_on_previous_text": False,
+            "hallucination_silence_threshold": 2.0,
+        }
+        if language:
+            opts["language"] = language
 
-    if size <= MAX_BYTES:
-        log("Transcribing (single pass)…")
-        result = await _whisper_transcribe(audio_path, api_key, base_url, language)
-        return (
-            result.get("text", ""),
-            result.get("segments", []),
-            result.get("language", language or ""),
-        )
-
-    # ── Split into chunks ─────────────────────────────────────────────────────
-    log(f"Audio > 24 MB — splitting into {CHUNK_MINUTES}-min chunks…")
-    with tempfile.TemporaryDirectory() as tmp:
-        chunk_dir  = Path(tmp) / "chunks"
-        chunks     = _ffmpeg_split(audio_path, chunk_dir, CHUNK_MINUTES)
-        log(f"Split into {len(chunks)} chunks.")
-
-        all_text: list[str] = []
-        all_segs: list[dict] = []
-        detected_lang = language or ""
-        time_offset   = 0.0
-
-        for i, chunk in enumerate(chunks, 1):
-            log(f"Transcribing chunk {i}/{len(chunks)}…")
-            result = await _whisper_transcribe(chunk, api_key, base_url, language)
-            text   = result.get("text", "")
-            segs   = result.get("segments", [])
-            lang   = result.get("language", "")
-
-            all_text.append(text)
-            if not detected_lang and lang:
-                detected_lang = lang
-
-            # Offset segment timestamps
-            for seg in segs:
-                seg = dict(seg)
-                seg["start"] = seg.get("start", 0) + time_offset
-                seg["end"]   = seg.get("end",   0) + time_offset
-                all_segs.append(seg)
-
-            # Advance offset by chunk duration
-            probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "csv=p=0", str(chunk),
-            ]
-            try:
-                dur_str = subprocess.check_output(probe_cmd, text=True).strip()
-                time_offset += float(dur_str)
-            except Exception:
-                time_offset += CHUNK_MINUTES * 60
-
-    return " ".join(all_text), all_segs, detected_lang
+        segments_gen, info = model.transcribe(str(audio_path), **opts)
+        return list(segments_gen), info
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
@@ -233,7 +131,7 @@ async def transcribe_url(
     pipeline_kwargs: dict[str, Any] | None = None,
 ) -> Path:
     """
-    Download YouTube video and transcribe it via VoidAI Whisper.
+    Download YouTube video and transcribe it via local faster-whisper.
 
     Args:
         url:            YouTube (or other yt-dlp-supported) URL.
@@ -246,16 +144,11 @@ async def transcribe_url(
         Path to the output directory (Transcriber-compatible).
     """
     sys.path.insert(0, str(ROOT))
-    from modules.common import load_env
-    load_env()
 
-    api_key  = os.environ.get("VOIDAI_API_KEY", "")
-    base_url = os.environ.get("VOIDAI_BASE_URL", "https://api.voidai.app/v1")
-
-    if not api_key:
-        raise RuntimeError("VOIDAI_API_KEY not set in .env")
+    _log = logging.getLogger("transcribe")
 
     def log(msg: str) -> None:
+        _log.info(msg)
         if on_progress:
             on_progress(msg)
 
@@ -266,7 +159,7 @@ async def transcribe_url(
     except ImportError:
         raise RuntimeError("yt-dlp not installed. Run: pip install yt-dlp")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _get_info() -> dict:
         opts = {"quiet": True, "no_warnings": True, "skip_download": True}
@@ -300,40 +193,44 @@ async def transcribe_url(
 
     # ── 3. Download audio ─────────────────────────────────────────────────────
     log("Downloading audio…")
-    audio_path = out_dir / "audio.mp3"
 
-    def _download() -> None:
-        opts = {
-            "format":       "bestaudio/best",
-            "outtmpl":      str(out_dir / "audio.%(ext)s"),
-            "postprocessors": [{
-                "key":              "FFmpegExtractAudio",
-                "preferredcodec":   "mp3",
-                "preferredquality": "64",   # 64 kbps — minimise file size
-            }],
-            "quiet":       True,
-            "no_warnings": True,
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path  = Path(tmp)
+        audio_out = tmp_path / "audio.%(ext)s"
 
-    await loop.run_in_executor(None, _download)
+        def _download() -> Path:
+            opts = {
+                "format":       "bestaudio/best",
+                "outtmpl":      str(audio_out),
+                "postprocessors": [{
+                    "key":              "FFmpegExtractAudio",
+                    "preferredcodec":   "mp3",
+                    "preferredquality": "128",
+                }],
+                "quiet":       True,
+                "no_warnings": True,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            files = list(tmp_path.glob("audio.*"))
+            if not files:
+                raise RuntimeError("Audio download failed")
+            return files[0]
 
-    # Find downloaded file (extension may vary before postprocessing)
-    mp3_files = list(out_dir.glob("audio.*"))
-    if not mp3_files:
-        raise RuntimeError("Audio download failed")
-    audio_path = mp3_files[0]
+        audio_path = await loop.run_in_executor(None, _download)
 
-    # ── 4. Transcribe ─────────────────────────────────────────────────────────
-    log("Transcribing…")
-    full_text, segments, detected_lang = await _transcribe_file(
-        audio_path, api_key, base_url, language, log
-    )
+        # ── 4. Transcribe ─────────────────────────────────────────────────────
+        log(f"Transcribing with faster-whisper ({WHISPER_MODEL_SIZE})…")
+        segments, fw_info = await loop.run_in_executor(
+            None, _run_transcription, audio_path, language
+        )
+        detected_lang = fw_info.language if hasattr(fw_info, "language") else (language or "")
+        log(f"Transcription done — {len(segments)} segments, lang={detected_lang}")
 
     # ── 5. Write output files ─────────────────────────────────────────────────
     log("Saving output files…")
 
+    full_text = _segments_to_text(segments)
     (out_dir / "transcript.txt").write_text(full_text, encoding="utf-8")
 
     if segments:
@@ -356,12 +253,6 @@ async def transcribe_url(
     (out_dir / "title.txt").write_text(title, encoding="utf-8")
     (out_dir / "description.txt").write_text(description, encoding="utf-8")
 
-    # Clean up audio
-    try:
-        audio_path.unlink()
-    except Exception:
-        pass
-
     log(f"Done → {out_dir}")
 
     # ── 6. (Optional) Auto-start pipeline ────────────────────────────────────
@@ -372,7 +263,6 @@ async def transcribe_url(
         channel_path = _P(pipeline_kwargs.get("channel", "config/channels/history.json"))
         if not channel_path.is_absolute():
             channel_path = ROOT / channel_path
-        # 'channel' is already resolved to channel_config_path — exclude it from kwargs
         extra = {k: v for k, v in (pipeline_kwargs or {}).items() if k != "channel"}
         await manager.start_pipeline(
             source_dir=out_dir,
