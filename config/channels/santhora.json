@@ -1,10 +1,10 @@
 {
-  "channel_name": "History Explained",
-  "niche": "history",
+  "channel_name": "Santhora",
+  "niche": "psychology",
   "language": "en",
   "voice_id": "a4CnuaYbALRvW39mDitg",
-  "image_style": "cinematic, photorealistic, dramatic lighting, 8k, high detail",
-  "thumbnail_style": "bold text overlay, dramatic imagery, high contrast, vibrant colors",
+  "image_style": "mystical atmospheric art, dark ethereal aesthetic, soft purple and indigo palette, flowing feminine figures, symbolic archetypes, dreamlike surrealism, introspective mood, spiritual depth, cinematic lighting, painterly digital art, deep shadow with luminous highlights",
+  "thumbnail_style": "bold text overlay, dramatic imagery, high contrast, mystical aesthetic",
   "subtitle_style": {
     "font": "Arial Bold",
     "size": 48,
@@ -51,8 +51,28 @@
     "fallback": "tts-1-hd"
   },
   "images": {
-    "provider": "wavespeed",
+    "provider": "voiceimage",
     "fallback": "gpt-image-1.5"
   },
-  "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}"
+  "transcriber_output_dir": "${TRANSCRIBER_OUTPUT_DIR}",
+  "background_music": {
+    "tracks_dir": "assets/music",
+    "random": false,
+    "volume_db": -20
+  },
+  "branding": {
+    "description": "Exploring psychology, Jungian archetypes, and the depths of the human mind.\n\nNew videos every week.",
+    "keywords": [
+      "psychology",
+      "Carl Jung",
+      "archetypes",
+      "individuation",
+      "shadow self",
+      "subconscious",
+      "self-discovery"
+    ],
+    "country": "UA",
+    "banner_path": "",
+    "trailer_video_id": ""
+  }
 }

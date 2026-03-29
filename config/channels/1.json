@@ -1,6 +1,6 @@
 {
-  "channel_name": "History Explained",
-  "niche": "history",
+  "channel_name": "My Channel",
+  "niche": "psychology",
   "language": "en",
   "voice_id": "a4CnuaYbALRvW39mDitg",
   "image_style": "cinematic, photorealistic, dramatic lighting, 8k, high detail",
@@ -40,8 +40,8 @@
         "thumbnail": "gemini-2.5-flash"
       },
       "test": {
-        "script": "deepseek-v3.1",
-        "metadata": "gpt-4.1-nano",
+        "script": "mistral-small-latest",
+        "metadata": "gemma-3n-e4b-it",
         "thumbnail": "gemini-2.5-flash"
       }
     }

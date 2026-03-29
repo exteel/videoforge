@@ -1,9 +1,9 @@
 {
-  "channel_name": "History Explained",
+  "channel_name": "Dark Mind Institute",
   "niche": "history",
   "language": "en",
   "voice_id": "a4CnuaYbALRvW39mDitg",
-  "image_style": "cinematic, photorealistic, dramatic lighting, 8k, high detail",
+  "image_style": "oil painting realism, soft diffused light, warm golden tones, medium shot with balanced composition, ornate baroque palace interior, high detail, smooth textures",
   "thumbnail_style": "bold text overlay, dramatic imagery, high contrast, vibrant colors",
   "subtitle_style": {
     "font": "Arial Bold",
@@ -40,8 +40,8 @@
         "thumbnail": "gemini-2.5-flash"
       },
       "test": {
-        "script": "deepseek-v3.1",
-        "metadata": "gpt-4.1-nano",
+        "script": "mistral-small-latest",
+        "metadata": "gemma-3n-e4b-it",
         "thumbnail": "gemini-2.5-flash"
       }
     }
