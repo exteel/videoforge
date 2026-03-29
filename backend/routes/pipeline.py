@@ -38,7 +38,13 @@ ROOT = Path(__file__).parent.parent.parent
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-@router.post("/pipeline/run", response_model=JobResponse, status_code=202)
+@router.post(
+    "/pipeline/run",
+    response_model=JobResponse,
+    status_code=202,
+    summary="Start single-video pipeline",
+    description="Start a full video-generation pipeline job (script → voice → images → compile → upload). Returns a job_id for polling or WebSocket streaming.",
+)
 async def run_pipeline(request: Request, req: PipelineRunRequest) -> dict:
     """Start a single-video pipeline job. Returns a job_id for polling / WebSocket."""
     check_rate_limit(request.client.host if request.client else "unknown")
@@ -91,7 +97,13 @@ async def run_pipeline(request: Request, req: PipelineRunRequest) -> dict:
 
 # ── Quick ─────────────────────────────────────────────────────────────────────
 
-@router.post("/pipeline/quick", response_model=JobResponse, status_code=202)
+@router.post(
+    "/pipeline/quick",
+    response_model=JobResponse,
+    status_code=202,
+    summary="Start quick job",
+    description="Start a lightweight job that generates script + voice + a single thumbnail image. Skips full video compilation — useful for content previews.",
+)
 async def run_quick(request: Request, req: QuickRunRequest) -> dict:
     """Start a quick job: script + voice + 1 thumbnail image. No full video compilation."""
     check_rate_limit(request.client.host if request.client else "unknown")
@@ -116,7 +128,13 @@ async def run_quick(request: Request, req: QuickRunRequest) -> dict:
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
 
 
-@router.post("/pipeline/quick-batch", response_model=list[JobResponse], status_code=202)
+@router.post(
+    "/pipeline/quick-batch",
+    response_model=list[JobResponse],
+    status_code=202,
+    summary="Start N quick jobs in parallel",
+    description="Submit multiple quick jobs at once. All items are visible immediately; only `parallel` run concurrently. Returns one JobResponse per item.",
+)
 async def run_quick_batch(request: Request, req: QuickBatchRequest) -> list[dict]:
     """Start N quick jobs with parallel limit. All items visible immediately; only `parallel` run at once."""
     check_rate_limit(request.client.host if request.client else "unknown")
@@ -147,7 +165,13 @@ async def run_quick_batch(request: Request, req: QuickBatchRequest) -> list[dict
 
 # ── Batch ─────────────────────────────────────────────────────────────────────
 
-@router.post("/batch/run", response_model=JobResponse, status_code=202)
+@router.post(
+    "/batch/run",
+    response_model=JobResponse,
+    status_code=202,
+    summary="Start batch pipeline from directory",
+    description="Start a batch job that runs the full pipeline over all source directories inside `input_dir`. Returns a single parent job_id.",
+)
 async def run_batch(req: BatchRunRequest) -> dict:
     """Start a batch job. Returns a job_id for polling / WebSocket."""
     input_dir = Path(req.input_dir)
@@ -173,7 +197,13 @@ async def run_batch(req: BatchRunRequest) -> dict:
 
 # ── Multi-Topic Batch ──────────────────────────────────────────────────────────
 
-@router.post("/batch/multi", response_model=list[JobResponse], status_code=202)
+@router.post(
+    "/batch/multi",
+    response_model=list[JobResponse],
+    status_code=202,
+    summary="Start N independent pipeline jobs from a topic queue",
+    description="Each item in `items` becomes a separate full pipeline job. Jobs run in parallel up to `parallel` at a time. Returns one JobResponse per item.",
+)
 async def run_multi_batch(request: Request, req: MultiBatchRequest) -> list[dict]:
     """
     Start N independent pipeline jobs from a topic queue.
@@ -255,7 +285,13 @@ async def run_multi_batch(request: Request, req: MultiBatchRequest) -> list[dict
     return [manager.get(jid).to_response() for jid in job_ids]  # type: ignore[union-attr]
 
 
-@router.post("/batch/append", response_model=list[JobResponse], status_code=202)
+@router.post(
+    "/batch/append",
+    response_model=list[JobResponse],
+    status_code=202,
+    summary="Append jobs to the active queue",
+    description="Add more pipeline jobs to the currently running queue. New jobs share the existing concurrency semaphore. Falls back to creating a new queue when none is active.",
+)
 async def append_to_queue(request: Request, req: MultiBatchRequest) -> list[dict]:
     """
     Append more jobs to the currently running queue (shared semaphore).
@@ -326,13 +362,23 @@ async def append_to_queue(request: Request, req: MultiBatchRequest) -> list[dict
 
 # ── Job management ────────────────────────────────────────────────────────────
 
-@router.get("/jobs", response_model=list[JobResponse])
+@router.get(
+    "/jobs",
+    response_model=list[JobResponse],
+    summary="List recent jobs",
+    description="Return up to `limit` jobs ordered by creation time descending (newest first).",
+)
 async def list_jobs(limit: int = 50) -> list[dict]:
     """List recent jobs (newest first)."""
     return [j.to_response() for j in manager.list_jobs(limit=limit)]
 
 
-@router.get("/jobs/{job_id}", response_model=JobResponse)
+@router.get(
+    "/jobs/{job_id}",
+    response_model=JobResponse,
+    summary="Get job status",
+    description="Return full status, progress log, and metadata for a single job. Returns 404 if the job ID is unknown.",
+)
 async def get_job(job_id: str) -> dict:
     """Get status and logs for a specific job."""
     job = manager.get(job_id)
@@ -341,7 +387,12 @@ async def get_job(job_id: str) -> dict:
     return job.to_response()
 
 
-@router.delete("/jobs/{job_id}", status_code=200)
+@router.delete(
+    "/jobs/{job_id}",
+    status_code=200,
+    summary="Cancel a job",
+    description="Cancel a running or queued job. Returns 404 if the job does not exist or has already finished.",
+)
 async def cancel_job(job_id: str) -> dict:
     """Cancel a running or queued job."""
     ok = await manager.cancel(job_id)
@@ -350,7 +401,12 @@ async def cancel_job(job_id: str) -> dict:
     return {"job_id": job_id, "status": "cancelled"}
 
 
-@router.patch("/jobs/{job_id}/edit-block", status_code=200)
+@router.patch(
+    "/jobs/{job_id}/edit-block",
+    status_code=200,
+    summary="Edit a script block narration",
+    description="Overwrite the narration text of a single script block while the job is paused at `waiting_review`. Recalculates and returns the updated word count.",
+)
 async def edit_script_block(job_id: str, req: BlockEditRequest) -> dict:
     """Edit a single block's narration while job is in script review."""
     job = manager.get(job_id)
@@ -383,7 +439,12 @@ async def edit_script_block(job_id: str, req: BlockEditRequest) -> dict:
     return {"ok": True, "block_id": req.block_id, "total_words": total_words}
 
 
-@router.post("/jobs/{job_id}/approve", status_code=200)
+@router.post(
+    "/jobs/{job_id}/approve",
+    status_code=200,
+    summary="Approve a review checkpoint",
+    description="Signal approval for a review stage (`script` or `images`) to resume the pipeline. Returns 400 if the job is not in `waiting_review` or the stage has no pending review.",
+)
 async def approve_job(job_id: str, stage: str = "script") -> dict:
     """Approve a review checkpoint and continue the pipeline."""
     job = manager.get(job_id)
@@ -397,7 +458,12 @@ async def approve_job(job_id: str, stage: str = "script") -> dict:
     return {"job_id": job_id, "stage": stage, "approved": True}
 
 
-@router.post("/jobs/{job_id}/regen-images", status_code=200)
+@router.post(
+    "/jobs/{job_id}/regen-images",
+    status_code=200,
+    summary="Regenerate failed images",
+    description="Re-run the image validator to regenerate any images that failed quality checks. Job must be in `waiting_review` at the `images` stage.",
+)
 async def regen_failed_images(job_id: str) -> dict:
     """Re-run image validator (regenerate failed images) while job waits for review."""
     import importlib.util
@@ -476,7 +542,12 @@ async def regen_failed_images(job_id: str) -> dict:
     return {"job_id": job_id, "validation": val_data}
 
 
-@router.post("/jobs/{job_id}/regen-script", status_code=200)
+@router.post(
+    "/jobs/{job_id}/regen-script",
+    status_code=200,
+    summary="Regenerate script",
+    description="Re-run script generation (step 1) while the job is paused at the script review stage. Updates `review_data` and pushes a new `review_required` WebSocket event.",
+)
 async def regen_script(job_id: str) -> dict:
     """Re-run script generation (step 1) while job waits at script review."""
     import importlib.util
@@ -630,7 +701,11 @@ async def regen_script(job_id: str) -> dict:
 
 # ── Project Folders ───────────────────────────────────────────────────────────
 
-@router.get("/projects/folders")
+@router.get(
+    "/projects/folders",
+    summary="List channel project folders",
+    description="List top-level channel subfolders under `projects/`. Only folders that have a matching channel config are returned. Each entry includes the video count (directories containing a compiled `final.mp4`).",
+)
 async def list_project_folders() -> list[dict]:
     """
     List true channel subfolders in projects/ (new-style: projects/{channel}/{title}/).
@@ -664,7 +739,11 @@ async def list_project_folders() -> list[dict]:
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
-@router.get("/metrics/scripts")
+@router.get(
+    "/metrics/scripts",
+    summary="Script generation metrics",
+    description="Return recent script generation records for A/B analysis. Max 200 records per call.",
+)
 async def get_script_metrics(limit: int = 50) -> list[dict]:
     """Get recent script generation metrics for A/B analysis."""
     from utils.db import VideoTracker

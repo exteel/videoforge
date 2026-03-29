@@ -31,10 +31,11 @@ def inc(name: str, value: int = 1) -> None:
     _counters[name] = _counters.get(name, 0) + value
 
 
-@router.get("/metrics", response_class=None)
+from fastapi.responses import PlainTextResponse
+
+@router.get("/metrics", response_class=PlainTextResponse)
 async def prometheus_metrics():
     """Return metrics in Prometheus text exposition format."""
-    from fastapi.responses import PlainTextResponse
     from backend.job_manager import manager
 
     # Compute live gauges

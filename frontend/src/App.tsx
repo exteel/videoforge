@@ -9,6 +9,7 @@ import { PresetsPanel } from './components/PresetsPanel'
 import { Login } from './components/Login'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { useNotifications } from './hooks/useNotifications'
+import { useTheme } from './hooks/useTheme'
 
 type Tab = 'jobs' | 'script' | 'channels' | 'presets' | 'history' | 'youtube' | 'stats'
 
@@ -98,13 +99,14 @@ function AppMain() {
   const { title, desc } = TAB_DESC[tab]
   const { permission, requestPermission } = useNotifications()
   const ngrok = useTunnelUrl()
+  const { theme, toggle } = useTheme()
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className={`min-h-screen ${theme === 'dark' ? 'bg-gray-950 text-gray-100' : 'bg-gray-50 text-gray-900'}`}>
       {/* Navbar */}
-      <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-10">
+      <header className={`${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b sticky top-0 z-10`}>
         <div className="max-w-5xl mx-auto px-3 md:px-4 flex items-center gap-3 md:gap-6 h-12">
-          <span className="font-bold text-sm tracking-tight text-white shrink-0">
+          <span className={`font-bold text-sm tracking-tight shrink-0 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
             🎬 <span className="hidden sm:inline">VideoForge</span>
           </span>
 
@@ -135,8 +137,8 @@ function AppMain() {
                 onClick={() => setTab(t.id)}
                 className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                   tab === t.id
-                    ? 'bg-gray-700 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                    ? theme === 'dark' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-900'
+                    : theme === 'dark' ? 'text-gray-400 hover:text-white hover:bg-gray-700/50' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
                 }`}
               >
                 {t.emoji} {t.label}
@@ -145,6 +147,15 @@ function AppMain() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2 md:gap-3">
+            {/* Theme toggle */}
+            <button
+              onClick={toggle}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className={`p-1.5 rounded-lg transition-colors ${theme === 'dark' ? 'text-gray-400 hover:text-white hover:bg-gray-700/50' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+            >
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </button>
+
             {/* Notification bell */}
             {permission !== 'granted' && (
               <button
@@ -164,12 +175,12 @@ function AppMain() {
                 {permission === 'denied' ? '🔕' : '🔔'}
               </button>
             )}
-            <span className="text-xs text-gray-500 hidden md:inline">
+            <span className={`text-xs hidden md:inline ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
               <a
                 href="http://localhost:8000/docs"
                 target="_blank"
                 rel="noreferrer"
-                className="hover:text-gray-300 transition-colors"
+                className={`transition-colors ${theme === 'dark' ? 'hover:text-gray-300' : 'hover:text-gray-700'}`}
               >
                 API docs ↗
               </a>
@@ -189,18 +200,18 @@ function AppMain() {
       </header>
 
       {/* Page description banner — hidden on mobile */}
-      <div className="hidden md:block bg-gray-800/50 border-b border-gray-700/50">
+      <div className={`hidden md:block border-b ${theme === 'dark' ? 'bg-gray-800/50 border-gray-700/50' : 'bg-gray-100/80 border-gray-200/80'}`}>
         <div className="max-w-5xl mx-auto px-4 py-3">
           <div className="flex items-baseline gap-3">
-            <span className="text-sm font-semibold text-white">{title}</span>
-            <span className="text-xs text-gray-400 leading-relaxed">{desc}</span>
+            <span className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{title}</span>
+            <span className={`text-xs leading-relaxed ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>{desc}</span>
           </div>
         </div>
       </div>
 
       {/* Mobile tab title */}
-      <div className="md:hidden bg-gray-800/30 border-b border-gray-700/30 px-3 py-2">
-        <span className="text-sm font-semibold text-white">{TAB_DESC[tab].title}</span>
+      <div className={`md:hidden border-b px-3 py-2 ${theme === 'dark' ? 'bg-gray-800/30 border-gray-700/30' : 'bg-gray-100/60 border-gray-200/60'}`}>
+        <span className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{TAB_DESC[tab].title}</span>
       </div>
 
       {/* Content — bottom padding on mobile for bottom nav */}
@@ -215,15 +226,15 @@ function AppMain() {
       </main>
 
       {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-gray-700 z-20 flex">
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 border-t z-20 flex ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${
               tab === t.id
-                ? 'text-white bg-gray-700/50'
-                : 'text-gray-500 hover:text-gray-300'
+                ? theme === 'dark' ? 'text-white bg-gray-700/50' : 'text-gray-900 bg-gray-100'
+                : theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-700'
             }`}
           >
             <span className="text-base leading-none">{t.emoji}</span>

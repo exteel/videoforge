@@ -105,12 +105,10 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 
 app = FastAPI(
     title="VideoForge API",
-    version="1.0.0",
-    description=(
-        "REST + WebSocket API for the VideoForge pipeline.\n\n"
-        "Start jobs via POST, poll status via GET /api/jobs/{id}, "
-        "or stream real-time progress via WebSocket /ws/{job_id}."
-    ),
+    description="Video generation pipeline API — script, voice, images, compilation, YouTube upload",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
@@ -207,7 +205,7 @@ async def health() -> dict:
     return {
         "status": "ok",
         "service": "VideoForge API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "uptime_seconds": round(_time.monotonic() - _startup_time, 1),
         "active_jobs": active,
     }
