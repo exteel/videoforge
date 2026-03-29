@@ -263,6 +263,18 @@ class JobManager:
             )
             job.db_video_id = db_video_id
 
+        import json as _json
+        if db_tracker and db_video_id:
+            try:
+                _serializable = {
+                    k: str(v) if isinstance(v, Path) else v
+                    for k, v in kwargs.items()
+                    if k not in ("progress_callback", "review_callback")
+                }
+                db_tracker.save_pipeline_kwargs(db_video_id, _json.dumps(_serializable, default=str))
+            except Exception:
+                pass
+
         _bar_active = [False]   # True while a \r progress line is on stderr
 
         def _term(text: str, *, newline: bool = True, overwrite: bool = False) -> None:
@@ -291,6 +303,16 @@ class JobManager:
                     job.pct = float(event["pct"])
                 job.log(f"[Step {event.get('step', job.step)} done] {elapsed_s:.1f}s")
                 _term(f"✓  Step {event.get('step', job.step)} done  {elapsed_s:.1f}s")
+                if db_tracker and db_video_id:
+                    try:
+                        db_tracker.update_job_progress(
+                            db_video_id,
+                            event.get("step", 0),
+                            event.get("name", ""),
+                            event.get("pct", 0),
+                        )
+                    except Exception:
+                        pass
             elif evt_type == "sub_progress":
                 # Fine-grained within-step progress — in-place bar on stderr
                 if "pct" in event:

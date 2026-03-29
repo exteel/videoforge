@@ -97,6 +97,22 @@ CREATE TABLE IF NOT EXISTS transcription_cache (
     output_dir TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS script_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER,
+    model TEXT NOT NULL DEFAULT '',
+    template TEXT NOT NULL DEFAULT 'auto',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    temperature REAL DEFAULT 0.7,
+    word_count INTEGER DEFAULT 0,
+    block_count INTEGER DEFAULT 0,
+    hook_score INTEGER DEFAULT 0,
+    review_pass INTEGER DEFAULT 0,
+    duration_est_min REAL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (video_id) REFERENCES videos(id)
+);
 """
 
 
@@ -173,6 +189,21 @@ class VideoTracker:
         """Create tables if they don't exist."""
         with self._conn() as conn:
             conn.executescript(_DDL)
+        self._ensure_columns()
+
+    def _ensure_columns(self) -> None:
+        """Add columns for job persistence if they don't exist yet (safe migration)."""
+        for col, typedef in [
+            ("current_step", "INTEGER DEFAULT 0"),
+            ("step_name", "TEXT DEFAULT ''"),
+            ("pct", "REAL DEFAULT 0"),
+            ("pipeline_kwargs", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                with self._conn() as conn:
+                    conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass  # column already exists
 
     # ── Create ────────────────────────────────────────────────────────────────
 
@@ -308,6 +339,38 @@ class VideoTracker:
                 (now,),
             )
             return cur.rowcount
+
+    def update_job_progress(self, video_id: int, step: int, step_name: str, pct: float) -> None:
+        """Update current step/progress for job resumption."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE videos SET current_step = ?, step_name = ?, pct = ?, updated_at = datetime('now') WHERE id = ?",
+                (step, step_name, pct, video_id),
+            )
+
+    def save_pipeline_kwargs(self, video_id: int, kwargs_json: str) -> None:
+        """Save serialized pipeline kwargs for resume on restart."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE videos SET pipeline_kwargs = ? WHERE id = ?",
+                (kwargs_json, video_id),
+            )
+
+    def get_resumable_jobs(self) -> list[dict]:
+        """Get jobs that were running when backend stopped (for resume on restart)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, source_dir, channel, quality_preset, current_step, step_name, pct, pipeline_kwargs, project_dir "
+                "FROM videos WHERE status = 'running' ORDER BY id DESC LIMIT 10"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "source_dir": r[1], "channel": r[2], "quality": r[3],
+                "current_step": r[4], "step_name": r[5], "pct": r[6],
+                "pipeline_kwargs": r[7], "project_dir": r[8],
+            }
+            for r in rows
+        ]
 
     def set_youtube_url(
         self,
@@ -468,6 +531,57 @@ class VideoTracker:
             "by_preset": [dict(r) for r in by_preset],
         }
 
+
+    # ── Script metrics (A/B analysis) ────────────────────────────────────────
+
+    def record_script_metrics(
+        self,
+        video_id: int | None,
+        model: str,
+        template: str,
+        prompt_version: str,
+        temperature: float,
+        word_count: int,
+        block_count: int,
+        hook_score: int = 0,
+        duration_est_min: float = 0,
+    ) -> int:
+        """Record script generation metrics. Returns the metric row id."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO script_metrics "
+                "(video_id, model, template, prompt_version, temperature, word_count, block_count, hook_score, duration_est_min) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (video_id, model, template, prompt_version, temperature, word_count, block_count, hook_score, duration_est_min),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def update_script_review(self, video_id: int, passed: bool) -> None:
+        """Mark script as review-passed or rejected."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE script_metrics SET review_pass = ? WHERE video_id = ?",
+                (1 if passed else 0, video_id),
+            )
+
+    def get_script_metrics(self, limit: int = 50) -> list[dict]:
+        """Get recent script metrics for A/B analysis."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, video_id, model, template, prompt_version, temperature, "
+                "word_count, block_count, hook_score, review_pass, duration_est_min, created_at "
+                "FROM script_metrics ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "video_id": r[1], "model": r[2], "template": r[3],
+                "prompt_version": r[4], "temperature": r[5], "word_count": r[6],
+                "block_count": r[7], "hook_score": r[8], "review_pass": bool(r[9]),
+                "duration_est_min": r[10], "created_at": r[11],
+            }
+            for r in rows
+        ]
 
     # ── Transcription cache ───────────────────────────────────────────────────
 

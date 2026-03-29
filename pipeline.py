@@ -52,7 +52,7 @@ sys.path.insert(0, str(ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
-from modules.common import load_env, setup_logging
+from modules.common import get_llm_preset, load_channel_config, load_env, setup_logging
 from utils.cost_tracker import estimate_cost
 
 log = setup_logging("pipeline")
@@ -801,6 +801,35 @@ async def run_pipeline(
         else:
             log.info("Script quality gate OK: %d words (threshold: %d)", _gate_words, _gate_threshold)
 
+    # ── Record script metrics for A/B analysis ─────────────────────────────
+    if not dry_run and db_tracker and db_video_id:
+        try:
+            _sd_metrics = _load_script(s_path)
+            _m_blocks = _sd_metrics.get("blocks", [])
+            _m_words = sum(len((b.get("narration") or "").split()) for b in _m_blocks)
+            _m_hook = 0
+            _intro = [b for b in _m_blocks if b.get("type") == "intro"]
+            if _intro:
+                _hm = _intro[0].get("hook")
+                if isinstance(_hm, dict):
+                    _m_hook = _hm.get("validation_score", 0) or 0
+            _chan_cfg_m = load_channel_config(channel_config_path)
+            _prompt_ver = Path(_chan_cfg_m.get("master_prompt_path", "")).stem
+            _script_model = get_llm_preset(_chan_cfg_m, quality).get("script", "unknown")
+            db_tracker.record_script_metrics(
+                video_id=db_video_id,
+                model=_script_model,
+                template=template,
+                prompt_version=_prompt_ver,
+                temperature=0.7,
+                word_count=_m_words,
+                block_count=len(_m_blocks),
+                hook_score=_m_hook,
+                duration_est_min=round(_m_words / 170, 1),
+            )
+        except Exception as _me:
+            log.warning("Script metrics recording failed (non-fatal): %s", _me)
+
     # Review pause — CLI (--review flag) or WebSocket (review_callback)
     if not dry_run and from_step <= STEP_SCRIPT:
         if review:
@@ -916,6 +945,13 @@ async def run_pipeline(
 
             if not _script_auto_ok:
                 await review_callback("script", _review_data)
+
+    # ── Mark script review as passed in metrics ─────────────────────────────
+    if not dry_run and db_tracker and db_video_id:
+        try:
+            db_tracker.update_script_review(db_video_id, passed=True)
+        except Exception:
+            pass
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 2 — IMAGES + VOICES (parallel)

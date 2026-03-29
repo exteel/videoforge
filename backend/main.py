@@ -39,9 +39,50 @@ log = setup_logging("backend")
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     """Load environment on startup."""
+    import json
     load_env()
-    # Cancel any jobs left in running/waiting_review/queued from a previous
-    # backend session (they are orphaned — no in-memory job exists for them).
+
+    # Resume jobs that were running when backend stopped — must happen BEFORE
+    # cancel_orphaned_jobs() so these rows are not marked cancelled.
+    try:
+        from utils.db import VideoTracker
+        from backend.job_manager import manager as _mgr
+        _db = VideoTracker()
+        resumable = _db.get_resumable_jobs()
+        for rj in resumable:
+            _kwargs: dict = {}
+            if rj["pipeline_kwargs"]:
+                try:
+                    _kwargs = json.loads(rj["pipeline_kwargs"])
+                except Exception:
+                    pass
+            _source = Path(rj["source_dir"]) if rj["source_dir"] else None
+            _channel = Path(f"config/channels/{rj['channel']}.json")
+            if _channel.exists():
+                _kwargs["from_step"] = (rj["current_step"] or 0) + 1
+                if rj["project_dir"]:
+                    _kwargs["project_dir"] = Path(rj["project_dir"])
+                await _mgr.start_pipeline(
+                    source_dir=_source,
+                    channel_config_path=_channel,
+                    **_kwargs,
+                )
+                log.info(
+                    "Startup: resumed job from DB: video_id=%d, from_step=%d",
+                    rj["id"],
+                    _kwargs["from_step"],
+                )
+            else:
+                log.warning(
+                    "Startup: could not resume video_id=%d — channel config missing: %s",
+                    rj["id"],
+                    _channel,
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Startup: job resume failed (non-fatal): %s", exc)
+
+    # Cancel any remaining jobs left in running/waiting_review/queued that were
+    # not resumed (e.g. channel config missing, resume failed).
     try:
         from utils.db import VideoTracker
         n = VideoTracker().cancel_orphaned_jobs()
@@ -49,6 +90,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
             log.warning("Startup: cancelled %d orphaned job(s) from previous session", n)
     except Exception as exc:  # noqa: BLE001
         log.warning("Startup: could not cancel orphaned jobs: %s", exc)
+
     try:
         from backend.job_manager import manager
         n = manager.restore_from_db(limit=50)

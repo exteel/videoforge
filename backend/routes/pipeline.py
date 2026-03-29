@@ -602,6 +602,15 @@ async def list_project_folders() -> list[dict]:
     return result
 
 
+# ── Metrics ───────────────────────────────────────────────────────────────────
+
+@router.get("/metrics/scripts")
+async def get_script_metrics(limit: int = 50) -> list[dict]:
+    """Get recent script generation metrics for A/B analysis."""
+    from utils.db import VideoTracker
+    return VideoTracker().get_script_metrics(limit=min(limit, 200))
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_channel(channel: str) -> Path:
