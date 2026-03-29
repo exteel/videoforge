@@ -639,9 +639,9 @@ def _build_user_prompt(
     # Block targets — injected for v3 and v4 master prompts
     master_prompt_path = channel_config.get("master_prompt_path", "")
     _prompt_name = Path(master_prompt_path).name
-    has_block_targets = "v3" in _prompt_name or "v4" in _prompt_name
+    # Always inject block word targets — without them LLM produces short scripts
     block_section = ""
-    if has_block_targets:
+    if True:  # was: v3/v4 only — now all prompt versions get targets
         targets = _calc_block_targets(duration_min, duration_max)
         word_lines = "\n".join(
             f"Block {i + 1} {t['name']}: {t['words_min']}–{t['words_max']} words "
