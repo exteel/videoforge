@@ -633,19 +633,19 @@ async def _step_script(
     _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SCRIPT][1])
 
     # ── Script quality gate ─────────────────────────────────────────────
+    _quality_gate_failed = False
     if not dry_run:
         _sd_gate = _load_script(s_path)
         _gate_blocks = _sd_gate.get("blocks", [])
         _gate_words = sum(len((b.get("narration") or "").split()) for b in _gate_blocks)
         _gate_threshold = int(duration_min * 130 * 0.8)  # 80% of min target at slowest rate
         if _gate_words < _gate_threshold:
-            _msg = (
-                f"Script quality gate FAILED: {_gate_words} words "
-                f"(need {_gate_threshold} for {duration_min}-min video). "
-                f"Script is too short — aborting to save voice/image credits."
+            _quality_gate_failed = True
+            log.warning(
+                "Script quality gate WARNING: %d words (need %d for %d-min video) — "
+                "will show in review for regen decision",
+                _gate_words, _gate_threshold, duration_min,
             )
-            log.error(_msg)
-            raise RuntimeError(_msg)
         else:
             log.info("Script quality gate OK: %d words (threshold: %d)", _gate_words, _gate_threshold)
 
@@ -749,6 +749,7 @@ async def _step_script(
                 "type_counts":   _type_counts,
                 "image_prompt_count": _total_imgs,
                 "has_hook":      _has_hook,
+                "quality_gate_failed": _quality_gate_failed if '_quality_gate_failed' in dir() else False,
                 "blocks":        _block_summaries,
                 # Regen params — used by /jobs/{id}/regen-script
                 "_regen": {
@@ -777,6 +778,7 @@ async def _step_script(
                     and _word_count <= _max_words
                     and _total_imgs >= len(_blocks)
                     and not _has_critical
+                    and not _quality_gate_failed
                 )
                 if _script_auto_ok:
                     log.warning(
@@ -1726,6 +1728,7 @@ async def run_pipeline(
                 "type_counts":   _type_counts,
                 "image_prompt_count": _total_imgs,
                 "has_hook":      _has_hook,
+                "quality_gate_failed": _quality_gate_failed if '_quality_gate_failed' in dir() else False,
                 "blocks":        _block_summaries,
                 # Regen params — used by /jobs/{id}/regen-script
                 "_regen": {
@@ -1754,6 +1757,7 @@ async def run_pipeline(
                     and _word_count <= _max_words
                     and _total_imgs >= len(_blocks)
                     and not _has_critical
+                    and not _quality_gate_failed
                 )
                 if _script_auto_ok:
                     log.warning(

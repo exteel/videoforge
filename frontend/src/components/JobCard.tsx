@@ -413,6 +413,7 @@ export function JobCard({ job, onRefresh }: Props) {
         const typeCounts    = (d.type_counts ?? {}) as Record<string, number>
         const imgCount      = d.image_prompt_count as number | undefined
         const hasHook       = d.has_hook as boolean | undefined
+        const qualityGateFailed = d.quality_gate_failed as boolean | undefined
         const scriptTitle   = d.title as string | undefined
 
         // ── Image data ────────────────────────────────────────────────────
@@ -430,6 +431,13 @@ export function JobCard({ job, onRefresh }: Props) {
 
         return (
           <div className="border border-amber-600/50 bg-amber-950/40 rounded-lg p-3 space-y-3">
+
+            {/* ── Quality gate warning ──────────────────────────────────── */}
+            {qualityGateFailed && (
+              <div className="bg-red-900/60 border border-red-500/50 rounded-md px-3 py-2 text-sm text-red-200">
+                <span className="font-bold text-red-400">Script too short!</span> Word count below target. Recommend: <strong>Regenerate</strong>.
+              </div>
+            )}
 
             {/* ── Header row ──────────────────────────────────────────────── */}
             <div className="flex items-start justify-between gap-3">
