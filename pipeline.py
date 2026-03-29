@@ -462,6 +462,831 @@ async def _retry_step(
             await asyncio.sleep(3)
 
 
+# ─── Step implementations ──────────────────────────────────────────────────────
+
+async def _step_script(
+    s_path: Path,
+    proj: Path,
+    source_dir: Path | None,
+    channel_config_path: Path,
+    chan_cfg: dict,
+    cost: CostBudget,
+    quality: str,
+    template: str,
+    duration_min: int,
+    duration_max: int,
+    *,
+    progress_callback: Any = None,
+    review_callback: Any = None,
+    review: bool = False,
+    dry_run: bool = False,
+    force: bool = False,
+    image_style: str = "",
+    custom_topic: str = "",
+    master_prompt: str | None = None,
+    auto_approve: bool = False,
+    db_tracker: Any = None,
+    db_video_id: int | None = None,
+    **kwargs: Any,
+) -> tuple[Any, int]:
+    """
+    STEP 1 — SCRIPT.
+
+    Returns (val_result, new_from_step).
+    new_from_step is STEP_MEDIA when auto-skip fires (script.json already exists),
+    otherwise STEP_SCRIPT (caller uses this to decide whether quality gate runs).
+    """
+    new_from_step = STEP_SCRIPT
+
+    # Auto-skip: if script.json already exists and has valid blocks, don't re-generate.
+    # This prevents burning expensive Opus credits on repeated runs.
+    if s_path.exists() and not dry_run:
+        try:
+            _existing = json.loads(s_path.read_text(encoding="utf-8"))
+            if _existing.get("blocks"):
+                log.warning(
+                    "script.json already exists with %d blocks — SKIPPING Step 1 to save credits. "
+                    "Delete %s to force regeneration.",
+                    len(_existing["blocks"]),
+                    s_path,
+                )
+                _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
+                _emit(progress_callback, type="step_done",  step=STEP_SCRIPT, elapsed=0.0,                        pct=STEP_WEIGHTS[STEP_SCRIPT][1])
+                new_from_step = STEP_MEDIA  # signal to caller: continue from step 2
+
+                # 01c catch-up: run Image Planner if image_prompts lists are missing.
+                # Happens when auto-skip fires on a fresh script that only has
+                # image_prompt (singular, 1 per block from step 01) but 01c never ran.
+                _needs_01c = any(
+                    not _b.get("image_prompts")
+                    for _b in _existing["blocks"]
+                )
+                if _needs_01c:
+                    try:
+                        _plan_images_catchup = _fn("modules/01c_image_planner.py", "plan_images")
+                        _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                              pct=17.0, message="Art Director: planning image positions (catch-up)…")
+                        await _plan_images_catchup(
+                            s_path,
+                            chan_cfg,
+                            preset_name="high",
+                            image_style=image_style or "",
+                            progress_callback=progress_callback,
+                        )
+                        cost.add("Image Planner (Art Director catch-up)", round(17_000 * VOIDAI_PER_TOKEN, 5))
+                        log.info("Image Planner catch-up: done")
+                    except Exception as _iexc:
+                        log.exception("Image Planner catch-up failed (non-fatal): %s", _iexc)
+
+                # Skip generation — return early; quality gate will be bypassed by caller
+                return None, new_from_step
+        except Exception:
+            pass  # corrupt JSON → regenerate normally
+
+    _step_header(STEP_SCRIPT, STEP_NAMES[STEP_SCRIPT])
+    _emit(progress_callback, type="step_start", step=STEP_SCRIPT, name=STEP_NAMES[STEP_SCRIPT], pct=STEP_WEIGHTS[STEP_SCRIPT][0])
+    t0 = time.monotonic()
+
+    if source_dir is None and not (custom_topic or "").strip():
+        raise ValueError(
+            "--source is required for step 1 unless --custom-topic is provided"
+        )
+
+    generate_scripts = _fn("modules/01_script_generator.py", "generate_scripts")
+    script_paths: list[Path] = await generate_scripts(
+        source_dir,
+        channel_config_path,
+        template=template,
+        preset=quality,
+        dry_run=dry_run,
+        output_dir=proj,
+        duration_min=duration_min,
+        duration_max=duration_max,
+        master_prompt_path=master_prompt or None,
+        image_style=image_style or "",
+        custom_topic=custom_topic or "",
+    )
+
+    val_result: Any = None
+
+    if not dry_run:
+        if not script_paths:
+            raise RuntimeError("generate_scripts returned an empty list")
+        # Update s_path in-place is not possible via return; caller must update s_path
+        # from script_paths[0] — we signal via returned val_result which carries the path
+        # HOWEVER: the caller already has s_path = proj / "script.json" and generate_scripts
+        # writes there, so script_paths[0] == s_path in practice.  We keep the require-files
+        # check here for safety.
+        _generated_path = script_paths[0]
+        _require_files([_generated_path], min_bytes=200, step="Script")
+        log.info("Script saved: %s  (%.1fs)", _generated_path, time.monotonic() - t0)
+
+        # ── Script validation + auto-fix ───────────────────────────────
+        def _script_val_cb(ev: dict) -> None:
+            _emit(progress_callback, **ev)
+        try:
+            _validate_script = _fn("modules/01b_script_validator.py", "validate_and_fix_script")
+            val_result = await _validate_script(_generated_path, chan_cfg, progress_callback=_script_val_cb)
+            if val_result.issues:
+                log.info(
+                    "Script validator: %d issues found, %d fixed",
+                    len(val_result.issues), len(val_result.fixes_applied),
+                )
+            # Track LLM costs from auto-fix
+            if val_result.fixes_applied:
+                _bad_prompt_fixes = sum(1 for f in val_result.fixes_applied if "prompt" in f.lower())
+                if _bad_prompt_fixes:
+                    cost.add("Script validator (prompts)", _bad_prompt_fixes * round(5_000 * VOIDAI_PER_TOKEN, 6))
+                if any("cont" in f.lower() for f in val_result.fixes_applied):
+                    cost.add("Script validator (cut-off)", round(10_000 * VOIDAI_PER_TOKEN, 6))
+        except Exception as _vexc:
+            log.exception("Script validation skipped (non-fatal): %s", _vexc)
+
+        # VoidAI subscription: ~20K input + 8K output tokens (flat rate regardless of model)
+        cost.add("Script LLM", round(28_000 * VOIDAI_PER_TOKEN, 5))
+        cost.check(progress_callback)
+
+        # ── Image Planner (Art Director pass — Step 1c) ─────────────────
+        # Always runs: positions are calculated algorithmically (2-tier density
+        # model), then Art Director LLM writes one structured prompt per position.
+        # Does NOT rely on __MARKER__ sentinels — those are legacy and ignored.
+        try:
+            _plan_images = _fn("modules/01c_image_planner.py", "plan_images")
+            _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                  pct=17.0, message="Art Director: planning image positions…")
+            await _plan_images(
+                _generated_path,
+                chan_cfg,
+                preset_name="high",          # Sonnet — sufficient for visual creativity
+                image_style=image_style or "",
+                progress_callback=progress_callback,
+            )
+            # VoidAI subscription: ~7K input + 10K output tokens (flat rate)
+            cost.add("Image Planner (Art Director)", round(17_000 * VOIDAI_PER_TOKEN, 5))
+            log.info("Image Planner: done")
+        except Exception as _iexc:
+            log.exception("Image Planner failed (non-fatal, continuing): %s", _iexc)
+
+    else:
+        log.info("[DRY RUN] Script step complete (no file written)")
+
+    _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SCRIPT][1])
+
+    # ── Script quality gate ─────────────────────────────────────────────
+    if not dry_run:
+        _sd_gate = _load_script(s_path)
+        _gate_blocks = _sd_gate.get("blocks", [])
+        _gate_words = sum(len((b.get("narration") or "").split()) for b in _gate_blocks)
+        _gate_threshold = int(duration_min * 130 * 0.8)  # 80% of min target at slowest rate
+        if _gate_words < _gate_threshold:
+            _msg = (
+                f"Script quality gate FAILED: {_gate_words} words "
+                f"(need {_gate_threshold} for {duration_min}-min video). "
+                f"Script is too short — aborting to save voice/image credits."
+            )
+            log.error(_msg)
+            raise RuntimeError(_msg)
+        else:
+            log.info("Script quality gate OK: %d words (threshold: %d)", _gate_words, _gate_threshold)
+
+    # ── Record script metrics for A/B analysis ─────────────────────────────
+    if not dry_run and db_tracker and db_video_id:
+        try:
+            _sd_metrics = _load_script(s_path)
+            _m_blocks = _sd_metrics.get("blocks", [])
+            _m_words = sum(len((b.get("narration") or "").split()) for b in _m_blocks)
+            _m_hook = 0
+            _intro = [b for b in _m_blocks if b.get("type") == "intro"]
+            if _intro:
+                _hm = _intro[0].get("hook")
+                if isinstance(_hm, dict):
+                    _m_hook = _hm.get("validation_score", 0) or 0
+            _chan_cfg_m = load_channel_config(channel_config_path)
+            _prompt_ver = Path(_chan_cfg_m.get("master_prompt_path", "")).stem
+            _script_model = get_llm_preset(_chan_cfg_m, quality).get("script", "unknown")
+            db_tracker.record_script_metrics(
+                video_id=db_video_id,
+                model=_script_model,
+                template=template,
+                prompt_version=_prompt_ver,
+                temperature=0.7,
+                word_count=_m_words,
+                block_count=len(_m_blocks),
+                hook_score=_m_hook,
+                duration_est_min=round(_m_words / 170, 1),
+            )
+        except Exception as _me:
+            log.warning("Script metrics recording failed (non-fatal): %s", _me)
+
+    # Review pause — CLI (--review flag) or WebSocket (review_callback)
+    if not dry_run:
+        if review:
+            _review_pause(s_path)
+        elif review_callback is not None:
+            _sd = _load_script(s_path)
+            _blocks = _sd.get("blocks", [])
+
+            # ── Compute rich review stats ──────────────────────────────────
+            # Word count + duration (audio_duration is null before TTS)
+            _word_count = sum(len((b.get("narration") or "").split()) for b in _blocks)
+            _dur_min = round(_word_count / 150, 1)   # ~150 wpm reading
+            _dur_max = round(_word_count / 130, 1)   # ~130 wpm slow reading
+
+            # Block type breakdown
+            _type_counts: dict[str, int] = {}
+            for _b in _blocks:
+                _t = _b.get("type", "section")
+                _type_counts[_t] = _type_counts.get(_t, 0) + 1
+
+            # Total image prompts (sum image_prompts lists, fallback image_prompt)
+            _total_imgs = sum(
+                len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0)
+                for _b in _blocks
+            )
+
+            # Hook detection: prefer hook.validation_score from script (set by LLM validator).
+            # Falls back to keyword heuristic only if hook metadata is absent (old scripts).
+            _intro_blocks = [_b for _b in _blocks if _b.get("type") == "intro"]
+            _has_hook = False
+            if _intro_blocks:
+                _intro = _intro_blocks[0]
+                _hook_meta = _intro.get("hook")
+                if isinstance(_hook_meta, dict):
+                    # LLM-validated: score ≥ 3/4 = passed; score absent = just generated (trust it)
+                    _score = _hook_meta.get("validation_score")
+                    _has_hook = (_score is None or _score >= 3)
+                else:
+                    # Fallback: simple keyword heuristic (older script format)
+                    _intro_text = (_intro.get("narration") or "").strip()
+                    _hook_signals = [
+                        "?", "Що якби", "Уявіть", "Як", "Чому",
+                        "Imagine", "What if", "Why", "You've", "Most ",
+                        "Nobody", "Everyone", "Here's", "The truth",
+                    ]
+                    _has_hook = any(sig in _intro_text[:200] for sig in _hook_signals)
+
+            # Per-block summary (compact — title + type + word count + image count)
+            _block_summaries = [
+                {
+                    "id":          _b.get("id", ""),
+                    "type":        _b.get("type", "section"),
+                    "title":       _b.get("title", ""),
+                    "word_count":      len((_b.get("narration") or "").split()),
+                    "image_count":     len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0),
+                    "narration":       (_b.get("narration") or "")[:120],
+                    "est_duration_sec": round(len((_b.get("narration") or "").split()) / 170 * 60, 1),
+                }
+                for _b in _blocks
+            ]
+
+            _review_data = {
+                "script_path":   str(s_path),
+                "title":         _sd.get("title", ""),
+                "block_count":   len(_blocks),
+                "word_count":    _word_count,
+                "duration_min":  _dur_min,
+                "duration_max":  _dur_max,
+                "type_counts":   _type_counts,
+                "image_prompt_count": _total_imgs,
+                "has_hook":      _has_hook,
+                "blocks":        _block_summaries,
+                # Regen params — used by /jobs/{id}/regen-script
+                "_regen": {
+                    "channel_config_path": str(channel_config_path),
+                    "source_dir":    str(source_dir) if source_dir else "",
+                    "output_dir":    str(proj),
+                    "quality":       quality,
+                    "template":      template,
+                    "duration_min":  duration_min,
+                    "duration_max":  duration_max,
+                    "master_prompt": master_prompt or "",
+                    "image_style":   image_style or "",
+                    "custom_topic":  custom_topic or "",
+                },
+            }
+
+            # Auto-approve: skip review if all quality criteria met
+            _script_auto_ok = False
+            if auto_approve:
+                _min_words = int(duration_min * 130 * 0.9)   # slowest rate − 10% tolerance
+                _max_words = int(duration_max * 170 * 1.1)   # fastest rate + 10% tolerance
+                _has_critical = getattr(val_result, "has_critical", False) if val_result else False
+                _script_auto_ok = (
+                    _has_hook
+                    and _word_count >= _min_words
+                    and _word_count <= _max_words
+                    and _total_imgs >= len(_blocks)
+                    and not _has_critical
+                )
+                if _script_auto_ok:
+                    log.warning(
+                        "Auto-approve script OK: hook=%s, words=%d (%d-%d), imgs=%d, blocks=%d",
+                        _has_hook, _word_count, _min_words, _max_words, _total_imgs, len(_blocks),
+                    )
+                    _emit(progress_callback, type="auto_approved", stage="script")
+                else:
+                    log.warning(
+                        "Auto-approve FAILED for script (hook=%s, words=%d, range=%d-%d, imgs=%d, critical=%s)"
+                        " — falling back to manual review",
+                        _has_hook, _word_count, _min_words, _max_words, _total_imgs, _has_critical,
+                    )
+
+            if not _script_auto_ok:
+                await review_callback("script", _review_data)
+
+    # ── Mark script review as passed in metrics ─────────────────────────────
+    if not dry_run and db_tracker and db_video_id:
+        try:
+            db_tracker.update_script_review(db_video_id, passed=True)
+        except Exception:
+            pass
+
+    return val_result, new_from_step
+
+
+async def _step_media(
+    s_path: Path,
+    proj: Path,
+    source_dir: Path | None,
+    channel_config_path: Path,
+    chan_cfg: dict,
+    cost: CostBudget,
+    quality: str,
+    *,
+    progress_callback: Any = None,
+    review_callback: Any = None,
+    voice_id: str | None = None,
+    image_style: str = "",
+    image_backend: str | None = None,
+    vision_model: str | None = None,
+    auto_approve: bool = False,
+    dry_run: bool = False,
+    langs: list[str] | None = None,
+    **kwargs: Any,
+) -> None:
+    """STEP 2 — IMAGES + VOICES (parallel)."""
+    _step_header(STEP_MEDIA, STEP_NAMES[STEP_MEDIA])
+    _emit(progress_callback, type="step_start", step=STEP_MEDIA, name=STEP_NAMES[STEP_MEDIA], pct=STEP_WEIGHTS[STEP_MEDIA][0])
+    t0 = time.monotonic()
+
+    if dry_run and not s_path.exists():
+        # No real script — provide estimated costs for a typical 10-block video
+        log.info("[DRY RUN] No script.json (step 1 was also dry-run); using typical 10-block estimate")
+        n_langs = len(langs) if langs else 1
+        cost.add("Images estimate (10 blocks, WaveSpeed)", 10 * 0.005)
+        cost.add("Voice estimate (5000 chars/lang)", n_langs * 5000 * 0.0000038)
+    else:
+        generate_images = _fn("modules/02_image_generator.py", "generate_images")
+        generate_voices = _fn("modules/03_voice_generator.py", "generate_voices")
+
+        # Primary language for voices
+        primary_lang = langs[0] if langs else None
+
+        # ── Sub-progress for Images + Voices (step 2, global 15-55%) ──
+        # Images track local 0-100%, voices track local 0-100%.
+        # Combined bar = avg(img_pct, voice_pct) mapped to global range.
+        _m_start, _m_end = STEP_WEIGHTS[STEP_MEDIA]
+        _media_local: dict[str, float] = {"img": 0.0, "voice": 0.0}
+
+        def _emit_media_pct(msg: str = "") -> None:
+            combined = (_media_local["img"] + _media_local["voice"]) / 2.0
+            global_pct = _m_start + (combined / 100.0) * (_m_end - _m_start)
+            _emit(
+                progress_callback,
+                type="sub_progress",
+                step=STEP_MEDIA,
+                pct=round(global_pct, 1),
+                message=msg,
+            )
+
+        def _img_sub_cb(event: dict) -> None:
+            if event.get("type") == "sub_progress":
+                _media_local["img"] = float(event.get("pct", 0.0))
+                _emit_media_pct(event.get("message", ""))
+
+        def _voice_sub_cb(event: dict) -> None:
+            if event.get("type") == "sub_progress":
+                _media_local["voice"] = float(event.get("pct", 0.0))
+                _emit_media_pct(event.get("message", ""))
+
+        # Images + primary voice in parallel
+        img_task = generate_images(
+            s_path,
+            channel_config_path,
+            dry_run=dry_run,
+            skip_existing=True,
+            image_style=image_style or None,
+            validate=False,   # Inline validation disabled — 02b handles all validation/regen
+            image_backend=image_backend or None,
+            progress_callback=_img_sub_cb,
+        )
+        voice_task = generate_voices(
+            s_path,
+            channel_config_path,
+            lang=primary_lang,
+            voice_id_override=voice_id or None,
+            dry_run=dry_run,
+            skip_existing=True,
+            progress_callback=_voice_sub_cb,
+        )
+
+        img_summary, voice_summary = await asyncio.gather(img_task, voice_task)
+
+        # ── Image validation + auto-regen ──────────────────────────────
+        _img_val_data: dict = {}
+        try:
+            _validate_images = _fn("modules/02b_image_validator.py", "validate_and_fix_images")
+            _images_dir = proj / "images"
+            _img_threshold = float(chan_cfg.get("image_validation_threshold", 7.0))
+            _img_val = await _validate_images(
+                s_path, _images_dir, chan_cfg,
+                threshold=_img_threshold,
+                vision_model=vision_model or None,
+                progress_callback=_img_sub_cb,
+            )
+            _img_val_data = _img_val.to_dict()
+            # Add image URLs for frontend preview (/projects is a static mount)
+            # Use relative path from projects root to include channel subfolder
+            # e.g. proj = .../projects/1/VideoTitle → rel = "1/VideoTitle"
+            try:
+                _rel_parts = proj.relative_to(ROOT / "projects").parts
+                _enc_name = "/".join(_url_quote(p, safe="") for p in _rel_parts)
+            except ValueError:
+                _enc_name = _url_quote(proj.name, safe="")
+            for _sc in _img_val_data.get("scores", []):
+                _idx = _sc.get("image_index", 0)
+                _fname = f"{_sc['block_id']}.png" if _idx == 0 else f"{_sc['block_id']}_{_idx}.png"
+                _sc["image_url"] = f"/projects/{_enc_name}/images/{_fname}"
+            # Track scoring + regen costs
+            # VoidAI vision: ~2K tokens per image scored (flat rate)
+            cost.add("Image validator (scoring)", _img_val.total * round(2_000 * VOIDAI_PER_TOKEN, 6))
+            if _img_val.regenerated > 0:
+                cost.add("Image validator (regen)", _img_val.regenerated * 0.005)
+            log.info(
+                "Image validator: %d/%d OK, %d regen, %d failed",
+                _img_val.ok_count, _img_val.total,
+                _img_val.regenerated, _img_val.failed,
+            )
+        except Exception as _ivexc:
+            log.exception("Image validation skipped (non-fatal): %s", _ivexc)
+
+        # Review checkpoint after images
+        _img_review_data = {
+            "images_dir": str(proj / "images"),
+            "script_path": str(s_path),
+            "source_name": proj.name,
+            "validation": _img_val_data,
+        }
+
+        _img_auto_ok = False
+        if auto_approve and _img_val_data:
+            _iv = _img_val_data
+            _total = max(_iv.get("total", 1), 1)
+            _ok = _iv.get("ok", _iv.get("ok_count", 0))  # to_dict() uses "ok"
+            _ok_pct = (_ok + _iv.get("regenerated", 0)) / _total
+            _fail_pct = _iv.get("failed", 0) / _total
+            _img_auto_ok = (
+                _ok_pct >= 0.90          # at least 90% OK/regenerated
+                and _fail_pct <= 0.10    # at most 10% failed
+            )
+            if _img_auto_ok:
+                log.warning(
+                    "Auto-approve images OK: %d/%d OK, %d regen, %d failed, %d skipped",
+                    _ok, _iv.get("total", 0),
+                    _iv.get("regenerated", 0), _iv.get("failed", 0), _iv.get("skipped", 0),
+                )
+                _emit(progress_callback, type="auto_approved", stage="images")
+            else:
+                log.warning(
+                    "Auto-approve FAILED for images (ok=%d, total=%d, failed=%d, skipped=%d)"
+                    " — falling back to manual review",
+                    _ok, _iv.get("total", 0),
+                    _iv.get("failed", 0), _iv.get("skipped", 0),
+                )
+
+        if not _img_auto_ok and review_callback is not None:
+            await review_callback("images", _img_review_data)
+
+        # Additional language voices (sequential to respect rate limits)
+        if langs and len(langs) > 1:
+            for lang_code in langs[1:]:
+                log.info("Generating voice for language: %s", lang_code)
+                await generate_voices(
+                    s_path,
+                    channel_config_path,
+                    lang=lang_code,
+                    dry_run=dry_run,
+                    skip_existing=True,
+                )
+
+    if not dry_run:
+        elapsed = time.monotonic() - t0
+
+        # Validate audio files exist — retry missing ones up to 2 times
+        script_data = _load_script(s_path)
+        blocks = script_data["blocks"]
+        audio_subdir = "audio"
+        audio_dir = proj / audio_subdir
+        voiced_blocks = [b for b in blocks if (b.get("narration") or "").strip()]
+        audio_files = [audio_dir / f"{b['id']}.mp3" for b in voiced_blocks]
+
+        _missing = [p for p in audio_files if not p.exists() or p.stat().st_size < 500]
+        if _missing and not dry_run:
+            _max_voice_retries = 2
+            # Re-load helpers that were defined in the else branch above.
+            # They may not exist if dry_run=True branched away, but we're inside
+            # `if not dry_run` so they are guaranteed to be defined.
+            primary_lang = langs[0] if langs else None
+            generate_voices = _fn("modules/03_voice_generator.py", "generate_voices")
+            _media_local_retry: dict[str, float] = {"img": 100.0, "voice": 0.0}
+            _m_start_r, _m_end_r = STEP_WEIGHTS[STEP_MEDIA]
+
+            def _voice_sub_cb_retry(event: dict) -> None:
+                if event.get("type") == "sub_progress":
+                    _media_local_retry["voice"] = float(event.get("pct", 0.0))
+                    combined = (_media_local_retry["img"] + _media_local_retry["voice"]) / 2.0
+                    global_pct = _m_start_r + (combined / 100.0) * (_m_end_r - _m_start_r)
+                    _emit(progress_callback, type="sub_progress", step=STEP_MEDIA,
+                          pct=round(global_pct, 1), message=event.get("message", ""))
+
+            for _retry_i in range(1, _max_voice_retries + 1):
+                log.warning(
+                    "Audio retry %d/%d — %d missing block(s): %s",
+                    _retry_i, _max_voice_retries,
+                    len(_missing), [p.stem for p in _missing],
+                )
+                _emit(
+                    progress_callback, type="sub_progress",
+                    step=STEP_MEDIA, pct=85.0,
+                    message=f"Retrying {len(_missing)} failed audio block(s) ({_retry_i}/{_max_voice_retries})…",
+                )
+                # Re-run voice generation (skip_existing=True will only redo missing)
+                await generate_voices(
+                    s_path, channel_config_path,
+                    lang=primary_lang,
+                    voice_id_override=voice_id or None,
+                    dry_run=False,
+                    skip_existing=True,
+                    progress_callback=_voice_sub_cb_retry,
+                )
+                _missing = [p for p in audio_files if not p.exists() or p.stat().st_size < 500]
+                if not _missing:
+                    log.info("Audio retry %d: all blocks recovered", _retry_i)
+                    break
+
+        _require_files(audio_files, min_bytes=500, step="Media/Audio")
+
+        n_gen = getattr(img_summary, "generated", 0)
+        n_chars = getattr(voice_summary, "total_chars", 0)
+        log.info(
+            "Media done (%.1fs) | Images generated: %d | Voice chars: %d",
+            elapsed, n_gen, n_chars,
+        )
+
+        # Use actual costs from summaries where available
+        ws_cost = getattr(img_summary, "wavespeed_cost", n_gen * 0.005)
+        va_cost = getattr(img_summary, "voidai_cost", 0.0)
+        cost.add("Images (WaveSpeed)", ws_cost)
+        if va_cost > 0:
+            cost.add("Images (VoidAI fallback)", va_cost)
+        # Voice: VoiceAPI rate = $19 / 5,000,000 chars = $0.0000038/char
+        cost.add("Voice (VoiceAPI)", n_chars * 0.0000038)
+        if langs and len(langs) > 1:
+            for _ in langs[1:]:
+                cost.add("Voice extra lang", n_chars * 0.0000038)
+
+        cost.check(progress_callback)
+    _emit(progress_callback, type="step_done", step=STEP_MEDIA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_MEDIA][1])
+
+
+async def _step_subtitles(
+    s_path: Path,
+    proj: Path,
+    channel_config_path: Path,
+    *,
+    progress_callback: Any = None,
+    dry_run: bool = False,
+    langs: list[str] | None = None,
+    **kwargs: Any,
+) -> None:
+    """STEP 3 — SUBTITLES."""
+    _step_header(STEP_SUBTITLES, STEP_NAMES[STEP_SUBTITLES])
+    _emit(progress_callback, type="step_start", step=STEP_SUBTITLES, name=STEP_NAMES[STEP_SUBTITLES], pct=STEP_WEIGHTS[STEP_SUBTITLES][0])
+    t0 = time.monotonic()
+
+    if dry_run and not s_path.exists():
+        log.info("[DRY RUN] Subtitles: no script.json — step skipped (no API cost)")
+    else:
+        generate_subtitles = _fn("modules/04_subtitle_generator.py", "generate_subtitles")
+
+        # Always use block audio_duration timing (TTS-accurate).
+        # from_transcript (original video's transcript.srt) is intentionally NOT used here:
+        # it contains the source video's text & timing, not the new AI-generated narration,
+        # so it would show wrong text at wrong timestamps.
+        # Primary language subtitles
+        srt_path, ass_path = generate_subtitles(
+            s_path,
+            channel_config_path,
+        )
+
+        # Additional language subtitles
+        if langs and len(langs) > 1:
+            for lang_code in langs[1:]:
+                log.info("Generating subtitles for language: %s", lang_code)
+                generate_subtitles(s_path, channel_config_path, lang=lang_code)
+
+        if not dry_run:
+            _require_files([srt_path, ass_path], min_bytes=10, step="Subtitles")
+            log.info(
+                "Subtitles: %s, %s  (%.1fs)",
+                srt_path.name, ass_path.name, time.monotonic() - t0,
+            )
+    _emit(progress_callback, type="step_done", step=STEP_SUBTITLES, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SUBTITLES][1])
+
+
+async def _step_video(
+    s_path: Path,
+    proj: Path,
+    channel_config_path: Path,
+    *,
+    progress_callback: Any = None,
+    dry_run: bool = False,
+    draft: bool = False,
+    burn_subtitles: bool = False,
+    background_music: bool = True,
+    no_ken_burns: bool = False,
+    music_volume: float | None = None,
+    music_track: str | None = None,
+    **kwargs: Any,
+) -> "Path | None":
+    """STEP 4 — VIDEO. Returns the output video path, or None on dry-run / skip."""
+    _step_header(STEP_VIDEO, STEP_NAMES[STEP_VIDEO])
+    _emit(progress_callback, type="step_start", step=STEP_VIDEO, name=STEP_NAMES[STEP_VIDEO], pct=STEP_WEIGHTS[STEP_VIDEO][0])
+    t0 = time.monotonic()
+
+    video_path_result: "Path | None" = None
+
+    # compile_video needs full_narration.mp3 even in dry_run
+    audio_dir_path = proj / "audio"
+    narration_candidates = list(audio_dir_path.glob("full_narration*.mp3")) if audio_dir_path.exists() else []
+    if dry_run and not narration_candidates:
+        log.info("[DRY RUN] Video: no full_narration.mp3 yet — step skipped (FFmpeg, no API cost)")
+    else:
+        compile_video = _fn("modules/05_video_compiler.py", "compile_video")
+
+        # Sub-progress: map local 0–100 from compile_video → global pct range for step 4
+        _vid_start, _vid_end = STEP_WEIGHTS[STEP_VIDEO]
+        _loop = asyncio.get_event_loop()
+
+        def _video_sub_cb(event: dict) -> None:
+            if event.get("type") == "sub_progress" and "pct" in event:
+                local_pct = float(event["pct"])
+                global_pct = _vid_start + (local_pct / 100.0) * (_vid_end - _vid_start)
+                new_ev = {
+                    "type":    "sub_progress",
+                    "pct":     round(global_pct, 1),
+                    "step":    STEP_VIDEO,
+                    "message": event.get("message", ""),
+                }
+                # Thread-safe: schedule emit back on the event loop
+                _loop.call_soon_threadsafe(lambda e=new_ev: _emit(progress_callback, **e))
+
+        # compile_video is synchronous — run in executor to avoid blocking the loop
+        video_path: Path = await _loop.run_in_executor(
+            None,
+            lambda: compile_video(
+                s_path,
+                channel_config_path,
+                draft=draft,
+                dry_run=dry_run,
+                no_subs=not burn_subtitles,
+                no_music=not background_music,
+                no_ken_burns=no_ken_burns,
+                music_volume_override=music_volume,
+                music_track_override=music_track,
+                progress_callback=_video_sub_cb,
+            ),
+        )
+
+        if not dry_run:
+            _require_files([video_path], min_bytes=50_000, step="Video")
+            video_path_result = video_path
+            size_mb = video_path.stat().st_size / 1_048_576
+            log.info(
+                "Video: %s  (%.1f MB, %.1fs)",
+                video_path.name, size_mb, time.monotonic() - t0,
+            )
+    _emit(progress_callback, type="step_done", step=STEP_VIDEO, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_VIDEO][1])
+    return video_path_result
+
+
+async def _step_thumbnail(
+    s_path: Path,
+    proj: Path,
+    channel_config_path: Path,
+    cost: CostBudget,
+    quality: str,
+    *,
+    progress_callback: Any = None,
+    dry_run: bool = False,
+    skip_thumbnail: bool = False,
+    source_dir: Path | None = None,
+    **kwargs: Any,
+) -> "Path | None":
+    """STEP 5 — THUMBNAIL. Returns the best thumbnail path, or None on skip/dry-run."""
+    _step_header(STEP_THUMBNAIL, STEP_NAMES[STEP_THUMBNAIL])
+    _emit(progress_callback, type="step_start", step=STEP_THUMBNAIL, name=STEP_NAMES[STEP_THUMBNAIL], pct=STEP_WEIGHTS[STEP_THUMBNAIL][0])
+    t0 = time.monotonic()
+
+    thumb_path_result: "Path | None" = None
+
+    if skip_thumbnail:
+        log.info("Thumbnail generation SKIPPED (skip_thumbnail=True)")
+    elif dry_run and not s_path.exists():
+        log.info("[DRY RUN] Thumbnail estimate: ~$0.010 (2 WaveSpeed attempts avg)")
+        cost.add("Thumbnail estimate (WaveSpeed)", 2 * 0.005)
+    else:
+        generate_thumbnail_variants = _fn(
+            "modules/06_thumbnail_generator.py", "generate_thumbnail_variants"
+        )
+
+        # Use Transcriber thumbnail_prompt.txt if available
+        transcriber_dir: Path | None = None
+        if source_dir and (source_dir / "thumbnail_prompt.txt").exists():
+            transcriber_dir = source_dir
+
+        # Generate 3 thumbnail variants for A/B testing
+        thumb_results = await generate_thumbnail_variants(
+            s_path,
+            channel_config_path,
+            count=3,
+            transcriber_dir=transcriber_dir,
+            dry_run=dry_run,
+            preset=quality,
+        )
+
+        if not dry_run and thumb_results:
+            # Best is already copied to thumbnail.png by generate_thumbnail_variants
+            best = max(thumb_results, key=lambda r: getattr(r, "score", -1))
+            thumb_path = getattr(best, "output_path", None)
+            if thumb_path:
+                _require_files([Path(thumb_path)], min_bytes=1_000, step="Thumbnail")
+                thumb_path_result = Path(thumb_path)
+                total_attempts = sum(getattr(r, "attempts", 1) for r in thumb_results)
+                best_score = getattr(best, "score", -1)
+                log.info(
+                    "Thumbnails: %d variants | best score=%d | total_attempts=%d | %.1fs",
+                    len(thumb_results), best_score, total_attempts, time.monotonic() - t0,
+                )
+                cost.add("Thumbnails (WaveSpeed ×3)", len(thumb_results) * 0.005)
+                cost.check(progress_callback)
+
+    if not skip_thumbnail:
+        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
+    else:
+        _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=0.0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
+
+    return thumb_path_result
+
+
+async def _step_metadata(
+    s_path: Path,
+    proj: Path,
+    channel_config_path: Path,
+    cost: CostBudget,
+    quality: str,
+    *,
+    progress_callback: Any = None,
+    dry_run: bool = False,
+    **kwargs: Any,
+) -> None:
+    """STEP 6 — METADATA."""
+    _step_header(STEP_METADATA, STEP_NAMES[STEP_METADATA])
+    _emit(progress_callback, type="step_start", step=STEP_METADATA, name=STEP_NAMES[STEP_METADATA], pct=STEP_WEIGHTS[STEP_METADATA][0])
+    t0 = time.monotonic()
+
+    if dry_run and not s_path.exists():
+        log.info("[DRY RUN] Metadata estimate: ~$0.001 (VoidAI flat rate, ~5K tokens)")
+        cost.add("Metadata LLM estimate", round(5_000 * VOIDAI_PER_TOKEN, 5))
+    else:
+        generate_metadata = _fn("modules/07_metadata_generator.py", "generate_metadata")
+
+        meta_path: Path = await generate_metadata(
+            s_path,
+            channel_config_path,
+            preset=quality,
+            title_count=3,   # Generate 3 title variants for A/B testing
+            dry_run=dry_run,
+        )
+
+        if not dry_run:
+            _require_files([meta_path], min_bytes=50, step="Metadata")
+            log.info("Metadata: %s  (%.1fs)", meta_path.name, time.monotonic() - t0)
+            cost.add("Metadata LLM", round(5_000 * VOIDAI_PER_TOKEN, 5))
+            cost.check(progress_callback)
+    _emit(progress_callback, type="step_done", step=STEP_METADATA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_METADATA][1])
+
+
 # ─── Main pipeline ─────────────────────────────────────────────────────────────
 
 async def run_pipeline(

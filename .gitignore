@@ -35,3 +35,4 @@ htmlcov/
 !prompts/**/*
 !tests/test_data/**/*
 logs/
+data/backups/
