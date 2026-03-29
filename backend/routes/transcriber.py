@@ -141,7 +141,11 @@ async def start_transcribe(req: TranscribeRequest) -> dict[str, Any]:
 
     async def _run() -> None:
         sys.path.insert(0, str(ROOT))
-        from backend.transcribe_worker import transcribe_url
+        # Force reload to pick up code changes without backend restart
+        import importlib
+        import backend.transcribe_worker as _tw_mod
+        importlib.reload(_tw_mod)
+        transcribe_url = _tw_mod.transcribe_url
 
         job.status = "running"
 
