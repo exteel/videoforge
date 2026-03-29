@@ -174,6 +174,14 @@ async def transcribe_url(
 
     log(f"Video: {title} ({duration}s)")
 
+    # ── Cache check: skip if already transcribed ───────────────────────────────
+    from utils.db import VideoTracker
+    _db = VideoTracker()
+    _cached = _db.get_cached_transcription(video_id)
+    if _cached:
+        log("Transcript cache hit — skipping download + transcription")
+        return Path(_cached)
+
     safe_name = _sanitize(title)
     out_dir   = _output_base() / safe_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +262,13 @@ async def transcribe_url(
     (out_dir / "description.txt").write_text(description, encoding="utf-8")
 
     log(f"Done → {out_dir}")
+
+    # ── Cache result ───────────────────────────────────────────────────────────
+    try:
+        from utils.db import VideoTracker
+        VideoTracker().cache_transcription(video_id, url, safe_name, str(out_dir))
+    except Exception as _cache_err:
+        log(f"Cache write failed (non-fatal): {_cache_err}")
 
     # ── 6. (Optional) Auto-start pipeline ────────────────────────────────────
     if start_pipeline:

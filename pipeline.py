@@ -136,6 +136,7 @@ class CostBudget:
     limit: float | None = None
     spent: float = 0.0
     breakdown: list[tuple[str, float]] = field(default_factory=list)
+    _warned: bool = False
 
     def add(self, label: str, amount: float) -> None:
         """Record a cost entry."""
@@ -150,6 +151,28 @@ class CostBudget:
         if self.limit is None:
             return False
         return self.spent > self.limit
+
+    def check(self, progress_callback: Any = None) -> None:
+        """Raise RuntimeError if over budget; emit a warning event at 80% threshold.
+
+        Replaces the old pattern of `if cost.over_budget(): sys.exit(1)` so that
+        budget violations raise an exception (caught by the API layer) instead of
+        killing the entire uvicorn server process.
+        """
+        if self.limit is None:
+            return
+        if self.spent >= self.limit:
+            raise RuntimeError(
+                f"Budget exceeded: ${self.spent:.2f} / ${self.limit:.2f}"
+            )
+        if self.spent >= self.limit * 0.8 and not self._warned:
+            _pct = (self.spent / self.limit) * 100
+            log.warning(
+                "[COST] Budget warning: $%.4f of $%.2f spent (%.0f%%).",
+                self.spent, self.limit, _pct,
+            )
+            _emit(progress_callback, type="cost_warning", spent=self.spent, limit=self.limit, pct=round(_pct, 1))
+            self._warned = True
 
     def summary(self) -> str:
         if not self.breakdown:
@@ -398,6 +421,45 @@ def _review_pause(script_path: Path) -> None:
         print("  Aborted by user. Edit script.json and re-run with --from-step 2.")
         sys.exit(0)
     print()
+
+
+# ─── Step retry helper ────────────────────────────────────────────────────────
+
+async def _retry_step(
+    step_name: str,
+    fn,
+    *,
+    max_retries: int = 1,
+    progress_callback=None,
+):
+    """Run an async step function with retry. Don't retry budget/cancel errors."""
+    for attempt in range(1, max_retries + 2):  # 1 initial + max_retries
+        try:
+            return await fn()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except RuntimeError as exc:
+            if "budget" in str(exc).lower() or "quality gate" in str(exc).lower():
+                raise  # don't retry budget exceeded or quality gate failures
+            if attempt > max_retries:
+                raise
+            log.warning(
+                "Step '%s' failed (attempt %d/%d): %s — retrying in 3s",
+                step_name, attempt, max_retries + 1, exc,
+            )
+            if progress_callback:
+                _emit(progress_callback, type="step_retry", step_name=step_name, attempt=attempt)
+            await asyncio.sleep(3)
+        except Exception as exc:
+            if attempt > max_retries:
+                raise
+            log.warning(
+                "Step '%s' failed (attempt %d/%d): %s — retrying in 3s",
+                step_name, attempt, max_retries + 1, exc,
+            )
+            if progress_callback:
+                _emit(progress_callback, type="step_retry", step_name=step_name, attempt=attempt)
+            await asyncio.sleep(3)
 
 
 # ─── Main pipeline ─────────────────────────────────────────────────────────────
@@ -695,9 +757,7 @@ async def run_pipeline(
 
             # VoidAI subscription: ~20K input + 8K output tokens (flat rate regardless of model)
             cost.add("Script LLM", round(28_000 * VOIDAI_PER_TOKEN, 5))
-            if cost.over_budget():
-                log.error("Budget exceeded after Script! %s", cost.summary())
-                sys.exit(1)
+            cost.check(progress_callback)
 
             # ── Image Planner (Art Director pass — Step 1c) ─────────────────
             # Always runs: positions are calculated algorithmically (2-tier density
@@ -723,6 +783,23 @@ async def run_pipeline(
         else:
             log.info("[DRY RUN] Script step complete (no file written)")
         _emit(progress_callback, type="step_done", step=STEP_SCRIPT, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_SCRIPT][1])
+
+    # ── Script quality gate ─────────────────────────────────────────────
+    if not dry_run and from_step <= STEP_SCRIPT:
+        _sd_gate = _load_script(s_path)
+        _gate_blocks = _sd_gate.get("blocks", [])
+        _gate_words = sum(len((b.get("narration") or "").split()) for b in _gate_blocks)
+        _gate_threshold = int(duration_min * 130 * 0.8)  # 80% of min target at slowest rate
+        if _gate_words < _gate_threshold:
+            _msg = (
+                f"Script quality gate FAILED: {_gate_words} words "
+                f"(need {_gate_threshold} for {duration_min}-min video). "
+                f"Script is too short — aborting to save voice/image credits."
+            )
+            log.error(_msg)
+            raise RuntimeError(_msg)
+        else:
+            log.info("Script quality gate OK: %d words (threshold: %d)", _gate_words, _gate_threshold)
 
     # Review pause — CLI (--review flag) or WebSocket (review_callback)
     if not dry_run and from_step <= STEP_SCRIPT:
@@ -1058,9 +1135,7 @@ async def run_pipeline(
                 for _ in langs[1:]:
                     cost.add(f"Voice extra lang", n_chars * 0.0000038)
 
-            if cost.over_budget():
-                log.error("Budget exceeded after Media! %s", cost.summary())
-                sys.exit(1)
+            cost.check(progress_callback)
         _emit(progress_callback, type="step_done", step=STEP_MEDIA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_MEDIA][1])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1207,9 +1282,7 @@ async def run_pipeline(
                         len(thumb_results), best_score, total_attempts, time.monotonic() - t0,
                     )
                     cost.add("Thumbnails (WaveSpeed ×3)", len(thumb_results) * 0.005)
-                    if cost.over_budget():
-                        log.error("Budget exceeded after Thumbnail! %s", cost.summary())
-                        sys.exit(1)
+                    cost.check(progress_callback)
         if not skip_thumbnail:
             _emit(progress_callback, type="step_done", step=STEP_THUMBNAIL, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_THUMBNAIL][1])
         else:
@@ -1241,9 +1314,7 @@ async def run_pipeline(
                 _require_files([meta_path], min_bytes=50, step="Metadata")
                 log.info("Metadata: %s  (%.1fs)", meta_path.name, time.monotonic() - t0)
                 cost.add("Metadata LLM", round(5_000 * VOIDAI_PER_TOKEN, 5))
-                if cost.over_budget():
-                    log.error("Budget exceeded after Metadata! %s", cost.summary())
-                    sys.exit(1)
+                cost.check(progress_callback)
         _emit(progress_callback, type="step_done", step=STEP_METADATA, elapsed=time.monotonic() - t0, pct=STEP_WEIGHTS[STEP_METADATA][1])
 
     # ══════════════════════════════════════════════════════════════════════════

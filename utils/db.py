@@ -89,6 +89,14 @@ CREATE INDEX IF NOT EXISTS idx_videos_created_at ON videos (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_costs_video_id    ON costs (video_id);
 CREATE INDEX IF NOT EXISTS idx_costs_model       ON costs (model);
 CREATE INDEX IF NOT EXISTS idx_costs_vid_step    ON costs (video_id, step);
+
+CREATE TABLE IF NOT EXISTS transcription_cache (
+    video_id   TEXT PRIMARY KEY,
+    url        TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    output_dir TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -459,6 +467,27 @@ class VideoTracker:
             "by_model": [dict(r) for r in by_model],
             "by_preset": [dict(r) for r in by_preset],
         }
+
+
+    # ── Transcription cache ───────────────────────────────────────────────────
+
+    def get_cached_transcription(self, video_id: str) -> str | None:
+        """Return cached output_dir for a video_id, or None if not cached or dir doesn't exist."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT output_dir FROM transcription_cache WHERE video_id = ?", (video_id,)
+            ).fetchone()
+        if row and Path(row[0]).is_dir():
+            return row[0]
+        return None
+
+    def cache_transcription(self, video_id: str, url: str, title: str, output_dir: str) -> None:
+        """Cache a transcription result. Upsert by video_id."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO transcription_cache (video_id, url, title, output_dir) VALUES (?, ?, ?, ?)",
+                (video_id, url, title, str(output_dir)),
+            )
 
 
 # ─── CLI display helpers ───────────────────────────────────────────────────────

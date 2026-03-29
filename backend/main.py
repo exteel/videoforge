@@ -13,8 +13,11 @@ API docs at: http://localhost:8000/docs
 from __future__ import annotations
 
 import sys
+import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+_startup_time = _time.monotonic()
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -141,7 +144,21 @@ app.include_router(ws_router.router)
 @app.get("/api/health", tags=["health"])
 async def health() -> dict:
     """Liveness probe — returns 200 if the server is running."""
-    return {"status": "ok", "service": "VideoForge API", "version": "1.0.0"}
+    try:
+        from backend.job_manager import manager
+        active = sum(
+            1 for j in manager._jobs.values()
+            if j.status in ("running", "queued", "waiting_review")
+        )
+    except Exception:
+        active = 0
+    return {
+        "status": "ok",
+        "service": "VideoForge API",
+        "version": "1.0.0",
+        "uptime_seconds": round(_time.monotonic() - _startup_time, 1),
+        "active_jobs": active,
+    }
 
 
 def _read_tunnel_url() -> dict:
