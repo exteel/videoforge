@@ -337,6 +337,28 @@ def _fix_sections_after_outro(
     if first_outro_idx is None:
         return blocks, issues
 
+    # Count words before and after the first outro — don't strip content
+    # if it would make the script critically short (expansion continuation blocks).
+    words_before = sum(len((b.get("narration") or "").split()) for b in blocks[:first_outro_idx + 1])
+    words_after = sum(len((b.get("narration") or "").split()) for b in blocks[first_outro_idx + 1:] if b.get("type") not in ("cta", "outro"))
+    total_words = words_before + words_after
+
+    # If post-outro sections contain significant content (>500 words),
+    # they're likely continuation chunks, not double-ending artefacts.
+    # Retype the premature outro as a section instead of removing valid content.
+    if words_after > 500:
+        log.warning(
+            "[validator] SECTIONS_AFTER_OUTRO: %d words after first outro — "
+            "keeping as continuation content (retyping outro → section)",
+            words_after,
+        )
+        blocks[first_outro_idx] = {**blocks[first_outro_idx], "type": "section"}
+        issues.append(ValidationIssue(
+            "SECTIONS_AFTER_OUTRO", blocks[first_outro_idx].get("id", "?"),
+            f"retyped premature outro → section (continuation has {words_after} words)",
+        ))
+        return blocks, issues
+
     clean = list(blocks[: first_outro_idx + 1])
     for block in blocks[first_outro_idx + 1:]:
         btype = block.get("type", "section")
