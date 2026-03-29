@@ -224,11 +224,15 @@ async def transcribe_url(
             }
             if _ffmpeg_location:
                 opts["ffmpeg_location"] = _ffmpeg_location
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([url])
+            except Exception as _dl_err:
+                # yt-dlp may throw on ffprobe warnings even if the file was produced
+                _log.warning("yt-dlp download raised: %s — checking if audio file exists anyway", _dl_err)
             files = list(tmp_path.glob("audio.*"))
             if not files:
-                raise RuntimeError("Audio download failed")
+                raise RuntimeError("Audio download failed — no audio file produced")
             return files[0]
 
         audio_path = await loop.run_in_executor(None, _download)
