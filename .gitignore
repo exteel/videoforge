@@ -34,3 +34,4 @@ htmlcov/
 !config/**/*
 !prompts/**/*
 !tests/test_data/**/*
+logs/

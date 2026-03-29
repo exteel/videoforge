@@ -777,9 +777,10 @@ async def run_pipeline(
                     "id":          _b.get("id", ""),
                     "type":        _b.get("type", "section"),
                     "title":       _b.get("title", ""),
-                    "word_count":  len((_b.get("narration") or "").split()),
-                    "image_count": len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0),
-                    "narration":   (_b.get("narration") or "")[:120],
+                    "word_count":      len((_b.get("narration") or "").split()),
+                    "image_count":     len(_b.get("image_prompts") or []) or (1 if (_b.get("image_prompt") or "").strip() else 0),
+                    "narration":       (_b.get("narration") or "")[:120],
+                    "est_duration_sec": round(len((_b.get("narration") or "").split()) / 170 * 60, 1),
                 }
                 for _b in _blocks
             ]

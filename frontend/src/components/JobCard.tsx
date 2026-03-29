@@ -381,7 +381,7 @@ export function JobCard({ job, onRefresh }: Props) {
         const d = liveReviewData ?? {}
 
         // ── Script data ───────────────────────────────────────────────────
-        type BlockSummary = { id: string; type: string; title: string; word_count: number; image_count: number; narration: string }
+        type BlockSummary = { id: string; type: string; title: string; word_count: number; image_count: number; narration: string; est_duration_sec?: number }
         const scriptBlocks  = d.blocks as BlockSummary[] | undefined
         const blockCount    = (d.block_count as number) ?? scriptBlocks?.length ?? 0
         const wordCount     = d.word_count as number | undefined
@@ -504,6 +504,7 @@ export function JobCard({ job, onRefresh }: Props) {
                           {/* Stats */}
                           <span className="shrink-0 tabular-nums text-gray-500 text-[10px] flex gap-1.5">
                             <span title="слів">{b.word_count}w</span>
+                            {b.est_duration_sec != null && <span className="text-gray-500">~{Math.round(b.est_duration_sec)}s</span>}
                             {b.image_count > 0 && <span title="зображень" className="text-blue-400">🖼{b.image_count}</span>}
                           </span>
                         </summary>

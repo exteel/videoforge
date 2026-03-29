@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,23 @@ def setup_logging(name: str = "videoforge", level: int = logging.INFO) -> loggin
         )
     )
     logger.addHandler(handler)
+
+    LOG_DIR = Path(__file__).parent.parent / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+    file_handler = RotatingFileHandler(
+        LOG_DIR / "videoforge.log",
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logger.addHandler(file_handler)
+
     logger.setLevel(level)
     return logger
 

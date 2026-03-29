@@ -317,6 +317,11 @@ class JobManager:
             job.status = "waiting_review"
             job.emit(type="review_required", stage=stage, data=data)
             job.log(f"[Review] Waiting for approval at stage: {stage}")
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"⏸ <b>Review needed</b>: {job.source}\n{job.channel} • stage: {stage}")
+            except Exception:
+                pass
             await ev.wait()
             job._review_events.pop(stage, None)
             job.review_stage = None
@@ -340,6 +345,11 @@ class JobManager:
             job.elapsed = elapsed
             job.log(f"Done in {elapsed:.1f}s")
             job.emit(type="done", elapsed=elapsed, db_video_id=db_video_id)
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"✅ <b>{job.source}</b>\n{job.channel} • {job.elapsed:.0f}s")
+            except Exception:
+                pass
         except asyncio.CancelledError:
             elapsed = time.monotonic() - t0
             job.status = "cancelled"
@@ -359,6 +369,11 @@ class JobManager:
                 db_tracker.set_failed(db_video_id, str(exc), elapsed_seconds=elapsed)
             job.log(f"Error: {exc}")
             job.emit(type="error", message=str(exc)[:500])
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"❌ <b>{job.source}</b>\n{job.channel} • {job.error[:200]}")
+            except Exception:
+                pass
 
     # ── Batch ─────────────────────────────────────────────────────────────────
 
@@ -760,9 +775,10 @@ class JobManager:
                     "id":          b.get("id", ""),
                     "type":        b.get("type", "section"),
                     "title":       b.get("title", ""),
-                    "word_count":  len((b.get("narration") or "").split()),
-                    "image_count": len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0),
-                    "narration":   (b.get("narration") or "")[:120],
+                    "word_count":      len((b.get("narration") or "").split()),
+                    "image_count":     len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0),
+                    "narration":       (b.get("narration") or "")[:120],
+                    "est_duration_sec": round(len((b.get("narration") or "").split()) / 170 * 60, 1),
                 }
                 for b in _blocks
             ]
@@ -785,6 +801,11 @@ class JobManager:
             job.status = "waiting_review"
             job.emit(type="review_required", stage="script", data=_review_data)
             job.log(f"[Quick] Waiting for script approval ({len(_blocks)} blocks, {_word_count} words)…")
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"⏸ <b>Review needed</b>: {job.source}\n{job.channel} • stage: script")
+            except Exception:
+                pass
             await _rev_ev.wait()
             job._review_events.pop("script", None)
             job.review_stage = None
@@ -840,6 +861,11 @@ class JobManager:
             job.elapsed = elapsed
             job.log(f"Done in {elapsed:.1f}s")
             job.emit(type="done", elapsed=elapsed, db_video_id=db_video_id)
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"✅ <b>{job.source}</b>\n{job.channel} • {job.elapsed:.0f}s")
+            except Exception:
+                pass
 
         except asyncio.CancelledError:
             elapsed = time.monotonic() - t0
@@ -858,6 +884,11 @@ class JobManager:
             db_tracker.set_failed(db_video_id, str(exc), elapsed_seconds=elapsed)
             job.log(f"Error: {exc}")
             job.emit(type="error", message=str(exc)[:500])
+            try:
+                from utils.telegram_notify import notify_telegram
+                await notify_telegram(f"❌ <b>{job.source}</b>\n{job.channel} • {job.error[:200]}")
+            except Exception:
+                pass
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
