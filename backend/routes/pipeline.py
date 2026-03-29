@@ -9,14 +9,23 @@ DELETE /api/jobs/{job_id} → cancel job
 """
 
 import json
+import re as _re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from backend.auth import check_rate_limit
 from backend.job_manager import manager
 from backend.models import BatchRunRequest, JobResponse, MultiBatchRequest, PipelineRunRequest, QuickBatchRequest, QuickRunRequest
 
 router = APIRouter(tags=["jobs"])
+
+
+def _sanitize_input(text: str, max_length: int = 500) -> str:
+    """Sanitize user input — strip control chars, limit length."""
+    # Remove control characters (except newline \n=0x0a and tab \t=0x09)
+    cleaned = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    return cleaned[:max_length].strip()
 
 ROOT = Path(__file__).parent.parent.parent
 
@@ -24,8 +33,10 @@ ROOT = Path(__file__).parent.parent.parent
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 @router.post("/pipeline/run", response_model=JobResponse, status_code=202)
-async def run_pipeline(req: PipelineRunRequest) -> dict:
+async def run_pipeline(request: Request, req: PipelineRunRequest) -> dict:
     """Start a single-video pipeline job. Returns a job_id for polling / WebSocket."""
+    check_rate_limit(request.client.host if request.client else "unknown")
+
     source_dir = Path(req.source_dir)
     if not source_dir.is_dir():
         raise HTTPException(400, f"source_dir not found: {source_dir}")
@@ -63,7 +74,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         duration_max=req.duration_max if req.duration_max is not None else 12,
         music_volume=req.music_volume,
         music_track=req.music_track,
-        custom_topic=req.custom_topic,
+        custom_topic=_sanitize_input(req.custom_topic or ""),
         image_backend=req.image_backend,
         vision_model=req.vision_model,
         auto_approve=req.auto_approve,
@@ -75,16 +86,19 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
 # ── Quick ─────────────────────────────────────────────────────────────────────
 
 @router.post("/pipeline/quick", response_model=JobResponse, status_code=202)
-async def run_quick(req: QuickRunRequest) -> dict:
+async def run_quick(request: Request, req: QuickRunRequest) -> dict:
     """Start a quick job: script + voice + 1 thumbnail image. No full video compilation."""
-    if not req.topic.strip():
+    check_rate_limit(request.client.host if request.client else "unknown")
+
+    topic = _sanitize_input(req.topic)
+    if not topic:
         raise HTTPException(400, "topic is required")
 
     channel_path = _resolve_channel(req.channel)
 
     job_id = await manager.start_quick(
         transcription_url=req.transcription_url.strip(),
-        topic=req.topic.strip(),
+        topic=topic,
         channel_config_path=channel_path,
         quality=req.quality,
         voice_id=req.voice_id,
@@ -97,18 +111,21 @@ async def run_quick(req: QuickRunRequest) -> dict:
 
 
 @router.post("/pipeline/quick-batch", response_model=list[JobResponse], status_code=202)
-async def run_quick_batch(req: QuickBatchRequest) -> list[dict]:
+async def run_quick_batch(request: Request, req: QuickBatchRequest) -> list[dict]:
     """Start N quick jobs with parallel limit. All items visible immediately; only `parallel` run at once."""
+    check_rate_limit(request.client.host if request.client else "unknown")
+
     if not req.items:
         raise HTTPException(400, "items is required")
 
     specs = []
     for it in req.items:
-        if not it.topic.strip():
-            raise HTTPException(400, f"topic is required for every item (got empty)")
+        topic = _sanitize_input(it.topic)
+        if not topic:
+            raise HTTPException(400, "topic is required for every item (got empty)")
         specs.append({
             "transcription_url": it.transcription_url.strip(),
-            "topic":             it.topic.strip(),
+            "topic":             topic,
             "channel_config_path": _resolve_channel(it.channel),
             "quality":           it.quality,
             "voice_id":          req.voice_id,
@@ -151,7 +168,7 @@ async def run_batch(req: BatchRunRequest) -> dict:
 # ── Multi-Topic Batch ──────────────────────────────────────────────────────────
 
 @router.post("/batch/multi", response_model=list[JobResponse], status_code=202)
-async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
+async def run_multi_batch(request: Request, req: MultiBatchRequest) -> list[dict]:
     """
     Start N independent pipeline jobs from a topic queue.
 
@@ -159,6 +176,8 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
     Jobs run in parallel up to `req.parallel` at a time.
     Returns a list of JobResponse objects — one per item.
     """
+    check_rate_limit(request.client.host if request.client else "unknown")
+
     if not req.items:
         raise HTTPException(400, "items list is empty")
 
@@ -196,7 +215,7 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
             "kwargs": {
                 # Per-item overrides
                 "quality":            item.quality,
-                "custom_topic":       item.custom_topic or "",
+                "custom_topic":       _sanitize_input(item.custom_topic or ""),
                 "image_style":        resolved_style,
                 # Pipeline control
                 "dry_run":            req.dry_run,
@@ -231,7 +250,7 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
 
 
 @router.post("/batch/append", response_model=list[JobResponse], status_code=202)
-async def append_to_queue(req: MultiBatchRequest) -> list[dict]:
+async def append_to_queue(request: Request, req: MultiBatchRequest) -> list[dict]:
     """
     Append more jobs to the currently running queue (shared semaphore).
 
@@ -239,6 +258,8 @@ async def append_to_queue(req: MultiBatchRequest) -> list[dict]:
     existing active queue instead of creating a new one.
     If no active queue exists, behaves identically to /batch/multi.
     """
+    check_rate_limit(request.client.host if request.client else "unknown")
+
     if not req.items:
         raise HTTPException(400, "items list is empty")
 
@@ -269,7 +290,7 @@ async def append_to_queue(req: MultiBatchRequest) -> list[dict]:
             "channel_config_path": channel_path,
             "kwargs": {
                 "quality":            item.quality,
-                "custom_topic":       item.custom_topic or "",
+                "custom_topic":       _sanitize_input(item.custom_topic or ""),
                 "image_style":        resolved_style,
                 "dry_run":            req.dry_run,
                 "draft":              req.draft,

@@ -19,6 +19,29 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+
+# ─── JSON log formatter ───────────────────────────────────────────────────────
+
+class JSONFormatter(logging.Formatter):
+    """Structured JSON log formatter for production.
+
+    Activate by setting the environment variable LOG_FORMAT=json.
+    Each log line is a single JSON object with keys: ts, level, logger, msg.
+    An optional 'exc' key is added when an exception is attached to the record.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_data: dict[str, Any] = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_data["exc"] = self.formatException(record.exc_info)
+        return json.dumps(log_data, ensure_ascii=False)
+
+
 # ─── Root paths ──────────────────────────────────────────────────────────────
 
 ROOT = Path(__file__).parent.parent
@@ -38,12 +61,14 @@ def setup_logging(name: str = "videoforge", level: int = logging.INFO) -> loggin
     # Use UTF-8 on Windows to avoid cp1252 UnicodeEncodeError
     stream = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
     handler = logging.StreamHandler(stream)
-    handler.setFormatter(
-        logging.Formatter(
-            fmt="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+    _standard_fmt = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
+    if os.getenv("LOG_FORMAT") == "json":
+        handler.setFormatter(JSONFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
+    else:
+        handler.setFormatter(_standard_fmt)
     logger.addHandler(handler)
 
     LOG_DIR = Path(__file__).parent.parent / "logs"

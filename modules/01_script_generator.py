@@ -40,6 +40,15 @@ from modules.common import (
     load_transcriber_output,
     setup_logging,
 )
+from modules.constants import (
+    MAX_EXPANSION_ROUNDS,
+    MAX_FIRST_CHUNK_TOKENS,
+    MAX_SCRIPT_CHUNKS,
+    MAX_TOKENS_PER_CHUNK,
+    TOKEN_WORD_MULTIPLIER,
+    TTS_WPM,
+    TTS_WPM_FAST,
+)
 
 log = setup_logging("script_gen")
 
@@ -52,11 +61,9 @@ HOOK_ROUND_SIZE   = 5   # after round 1, pick best ≥3/4 before continuing roun
 MAX_TRANSCRIPT_CHARS = 14_000   # ~10K tokens — keeps total prompt manageable for Opus
 MAX_HOOKS_GUIDE_CHARS = 8_000   # hooks_guide.md is now compact (~4KB), allow full pass-through
 
-# Chunked generation constants — caps are DYNAMIC (see _call_llm).
+# Chunked generation constants — imported from modules.constants.
 # These are upper bounds; actual tokens are min(cap, duration-based calculation).
-MAX_FIRST_CHUNK_TOKENS = 32_000  # first chunk cap — Opus supports up to 32K output tokens
-MAX_TOKENS_PER_CHUNK   = 16_000  # continuation chunks cap — must be large enough for long scripts
-MAX_SCRIPT_CHUNKS = 8            # max continuation attempts (raised for 45-60+ min scripts)
+# MAX_FIRST_CHUNK_TOKENS, MAX_TOKENS_PER_CHUNK, MAX_SCRIPT_CHUNKS — see modules/constants.py
 
 BlockType = Literal["intro", "section", "cta", "outro"]
 
@@ -109,8 +116,8 @@ def _calc_block_targets(duration_min: int, duration_max: int) -> list[dict]:
     Uses midpoint of the duration range for image-tier calculation.
     Returns list of dicts: [{name, words_min, words_max, images}, ...].
     """
-    words_min = duration_min * 170   # calibrated: measured 168-172 wpm on real tts-1-hd/onyx output
-    words_max = duration_max * 170
+    words_min = duration_min * TTS_WPM   # calibrated: measured 168-172 wpm on real tts-1-hd/onyx output
+    words_max = duration_max * TTS_WPM
     total_mid = (words_min + words_max) // 2
 
     results: list[dict] = []
@@ -616,8 +623,8 @@ def _build_user_prompt(
 
     # Compute target word count range — measured TTS speed: ~170 wpm (tts-1-hd/onyx)
     # All three calibration constants must match: 160 → 170 everywhere.
-    target_words_min = duration_min * 170
-    target_words_max = duration_max * 170
+    target_words_min = duration_min * TTS_WPM
+    target_words_max = duration_max * TTS_WPM
 
     # Image style — injected so the LLM applies it to every [IMAGE_PROMPT:] tag.
     # The 5-element formula in the master prompt has a "Style" slot; this replaces the
@@ -795,7 +802,7 @@ async def _call_llm(
     - Call 1: normal prompt → max tokens calibrated to duration_max
     - If no final CTA found AND word count < budget → continuation call (up to MAX_SCRIPT_CHUNKS)
     - Continuation provides last 2K chars + "continue from Section N" instruction
-    - Hard stop: if accumulated word count exceeds duration_max * 150 * 1.15, no more chunks.
+    - Hard stop: if accumulated word count exceeds duration_max * TTS_WPM_FAST * 1.15, no more chunks.
     """
     full_output = ""
 
@@ -804,15 +811,15 @@ async def _call_llm(
     #
     # word_budget: ceiling — stop requesting more chunks once narration reaches this.
     #   +15% headroom so the LLM can round off the last block cleanly.
-    word_budget = int(duration_max * 170 * 1.15)   # calibrated to measured ~170 wpm (tts-1-hd/onyx)
+    word_budget = int(duration_max * TTS_WPM * 1.15)   # calibrated to measured ~170 wpm (tts-1-hd/onyx)
     # min_words_for_cta: floor — LLM must NOT write [CTA_SUBSCRIBE_FINAL] before this many
     #   narration words. Set to 100% of min-duration target (no haircut).
-    min_words_for_cta = int(duration_min * 170)    # calibrated to measured ~170 wpm (tts-1-hd/onyx)
+    min_words_for_cta = int(duration_min * TTS_WPM)    # calibrated to measured ~170 wpm (tts-1-hd/onyx)
 
-    # First chunk: multiplier 2.5 accounts for inline IMAGE_PROMPT overhead + token/word ratio.
-    # Narration words × 2.5 ≈ total output tokens (narration + image prompts + structural markers).
+    # First chunk: TOKEN_WORD_MULTIPLIER accounts for inline IMAGE_PROMPT overhead + token/word ratio.
+    # Narration words × TOKEN_WORD_MULTIPLIER ≈ total output tokens (narration + image prompts + structural markers).
     # For 60-min scripts: 60×170×2.5 = 25 500 tokens — needs a large first chunk.
-    tokens_first_chunk = min(MAX_FIRST_CHUNK_TOKENS, int(duration_max * 170 * 2.5))
+    tokens_first_chunk = min(MAX_FIRST_CHUNK_TOKENS, int(duration_max * TTS_WPM * TOKEN_WORD_MULTIPLIER))
     log.info(
         "Token budget: first_chunk=%d, word_budget=%d narration words, min_words_for_cta=%d",
         tokens_first_chunk, word_budget, min_words_for_cta,
@@ -843,7 +850,7 @@ async def _call_llm(
             remaining_words = max(0, word_budget - current_words)
             # remaining_words is narration-only; total output (narration + image prompts) is
             # ~1.5× narration, at ~1.4 tokens/word → effective multiplier ≈ 2.1
-            remaining_tokens = min(MAX_TOKENS_PER_CHUNK, int(remaining_words * 2.5))
+            remaining_tokens = min(MAX_TOKENS_PER_CHUNK, int(remaining_words * TOKEN_WORD_MULTIPLIER))
 
             # Detect cut-off: use finish_reason from VoidAI (authoritative), fall back
             # to punctuation heuristic if finish_reason unavailable.
@@ -957,7 +964,7 @@ async def _call_llm(
     # Key fix: check word count FIRST; if short AND CTA marker is already present,
     # strip it before expansion — otherwise the guard was silently skipped when LLM
     # added [CTA_SUBSCRIBE_FINAL] prematurely (causing 7-min scripts instead of 25+).
-    MAX_EXPANSION_ROUNDS = 3
+    # MAX_EXPANSION_ROUNDS imported from modules.constants
     for _exp_round in range(1, MAX_EXPANSION_ROUNDS + 1):
         _final_narration = _count_narration_words(full_output)
         if _final_narration >= min_words_for_cta:
@@ -994,7 +1001,7 @@ async def _call_llm(
                     {"role": "user",      "content": _expansion_msg},
                 ],
                 temperature=temperature,
-                max_tokens=min(MAX_TOKENS_PER_CHUNK, int(_shortage * 2.5)),
+                max_tokens=min(MAX_TOKENS_PER_CHUNK, int(_shortage * TOKEN_WORD_MULTIPLIER)),
             )
             full_output += "\n" + _expansion_chunk
             _new_total = _count_narration_words(full_output)
@@ -1086,7 +1093,7 @@ async def _call_llm(
     final_words = len(full_output.split())
     log.info(
         "LLM output: %d words (target: ≤%d, budget: %d)",
-        final_words, duration_max * 150, word_budget,
+        final_words, duration_max * TTS_WPM_FAST, word_budget,
     )
     return full_output
 

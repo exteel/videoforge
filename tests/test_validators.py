@@ -175,16 +175,16 @@ class TestScriptLength:
         assert too_short_issues[0].severity == "critical"
 
     def test_too_short_threshold_is_90_percent(self):
-        """Verify the threshold is exactly floor(duration_min * 140 * 0.90).
+        """Verify the threshold is exactly floor(duration_min * TTS_WPM_SLOW * TOO_SHORT_RATIO).
 
-        duration_min=10 → threshold = floor(10 * 140 * 0.90) = 1 260.
+        duration_min=10 → threshold = floor(10 * 130 * 0.90) = 1 170.
 
         total_words is the sum across ALL blocks including the CTA ("Subscribe." = 1 word).
         So the intro narration must have (threshold - 1) words for the total to hit threshold,
         and (threshold - 2) words for the total to be one below threshold.
         """
         duration_min = 10
-        threshold = int(duration_min * 140 * 0.90)  # 1 260
+        threshold = int(duration_min * 130 * 0.90)  # 1 170 (TTS_WPM_SLOW * TOO_SHORT_RATIO)
         # CTA contributes 1 word ("Subscribe.") — account for it when building intro narration
         CTA_WORD_COUNT = 1
 

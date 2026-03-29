@@ -114,29 +114,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow localhost + dynamic tunnel URL
-def _allowed_origins() -> list[str]:
-    origins = [
-        "http://localhost:8000",
-        "http://localhost:5173",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:5173",
-    ]
-    # Add tunnel URL if available
+# CORS — whitelist localhost + dynamic tunnel URL only
+_allowed_origins: list[str] = [
+    "http://localhost:5173",    # Vite dev server
+    "http://localhost:8000",    # Backend serves frontend
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8000",
+]
+
+# Read tunnel URL from file if available
+_tunnel_file = ROOT / ".tunnel_url_videoforge"
+if _tunnel_file.exists():
     try:
-        from tunnel_utils import get_tunnel_url
-        tunnel = get_tunnel_url("videoforge")
-        if tunnel:
-            origins.append(tunnel)
+        _tunnel_url = _tunnel_file.read_text(encoding="utf-8").strip()
+        if _tunnel_url:
+            _allowed_origins.append(_tunnel_url)
     except Exception:
         pass
-    return origins
 
+# Also try runtime tunnel utility (cloudflared)
+try:
+    from tunnel_utils import get_tunnel_url as _get_tunnel_url
+    _live_tunnel = _get_tunnel_url("videoforge")
+    if _live_tunnel and _live_tunnel not in _allowed_origins:
+        _allowed_origins.append(_live_tunnel)
+except Exception:
+    pass
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins(),
-    allow_origin_regex=r"https://.*\.trycloudflare\.com",
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
