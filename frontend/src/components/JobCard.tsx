@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { type Job, api } from '../api'
+import { type Job, type DriveUploadJob, api } from '../api'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useNotifications } from '../hooks/useNotifications'
 
@@ -86,7 +86,43 @@ export function JobCard({ job, onRefresh }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const [regenScript, setRegenScript] = useState(false)
   const [liveSec, setLiveSec] = useState<number | null>(null)
+
+  // ── Drive upload ───────────────────────────────────────────────────────────
+  const [driveJob,     setDriveJob]     = useState<DriveUploadJob | null>(null)
+  const [driveLoading, setDriveLoading] = useState(false)
+  const driveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  async function uploadToDrive() {
+    if (!job.project_dir) return
+    setDriveLoading(true)
+    try {
+      const { upload_id } = await api.drive.upload({
+        project_dir: job.project_dir,
+        channel: job.channel ? `config/channels/${job.channel}.json` : undefined,
+      })
+      // Poll until done
+      driveTimerRef.current = setInterval(async () => {
+        try {
+          const status = await api.drive.uploadStatus(upload_id)
+          setDriveJob(status)
+          if (status.status !== 'running') {
+            clearInterval(driveTimerRef.current!)
+            driveTimerRef.current = null
+            setDriveLoading(false)
+          }
+        } catch { /* ignore poll error */ }
+      }, 2000)
+    } catch (e) {
+      setDriveJob({ upload_id: '', status: 'failed', project_dir: job.project_dir,
+        channel_name: '', folder_url: null, uploaded_files: [], error: String(e) })
+      setDriveLoading(false)
+    }
+  }
+
+  useEffect(() => () => { if (driveTimerRef.current) clearInterval(driveTimerRef.current) }, [])
 
   // ── Browser notifications ──────────────────────────────────────────────────
   const { notify } = useNotifications()
@@ -232,6 +268,30 @@ export function JobCard({ job, onRefresh }: Props) {
     }
   }
 
+  async function handleRegenImages() {
+    setRegenerating(true)
+    try {
+      await api.jobs.regenImages(job.job_id)
+      // WS will push updated review_data automatically
+    } catch (err) {
+      console.error('Regen failed:', err)
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  async function handleRegenScript() {
+    setRegenScript(true)
+    try {
+      await api.jobs.regenScript(job.job_id)
+      // WS will push review_required with new review_data
+    } catch (err) {
+      console.error('Script regen failed:', err)
+    } finally {
+      setRegenScript(false)
+    }
+  }
+
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
       {/* Header */}
@@ -355,13 +415,33 @@ export function JobCard({ job, onRefresh }: Props) {
                 {scriptTitle && <div className="text-xs text-white mt-0.5 truncate">«{scriptTitle}»</div>}
                 {!scriptTitle && <div className="text-xs text-amber-400/70 mt-0.5">{info.hint}</div>}
               </div>
-              <button
-                onClick={handleApprove}
-                disabled={approving}
-                className="shrink-0 px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-amber-950 disabled:opacity-50 transition-colors"
-              >
-                {approving ? 'Approving…' : 'Approve & Continue →'}
-              </button>
+              <div className="flex gap-2 shrink-0 flex-wrap">
+                {liveReviewStage === 'script' && (
+                  <button
+                    onClick={handleRegenScript}
+                    disabled={regenScript || approving}
+                    className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-blue-700 hover:bg-blue-600 active:bg-blue-800 text-white disabled:opacity-50 transition-colors"
+                  >
+                    {regenScript ? '↻ Генерація…' : '↻ Перегенерувати'}
+                  </button>
+                )}
+                {liveReviewStage === 'images' && validation && validation.failed > 0 && (
+                  <button
+                    onClick={handleRegenImages}
+                    disabled={regenerating || approving}
+                    className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white disabled:opacity-50 transition-colors"
+                  >
+                    {regenerating ? '↻ Генерація…' : `↻ Перегенерувати (${validation.failed})`}
+                  </button>
+                )}
+                <button
+                  onClick={handleApprove}
+                  disabled={approving || regenerating}
+                  className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-amber-950 disabled:opacity-50 transition-colors"
+                >
+                  {approving ? 'Approving…' : 'Approve & Continue →'}
+                </button>
+              </div>
             </div>
 
             {/* ══════════════════════════════════════════════════════════════
@@ -480,7 +560,7 @@ export function JobCard({ job, onRefresh }: Props) {
 
                 {/* ── Image grid with inline score labels ───────────────── */}
                 {validation.scores && validation.scores.length > 0 && (
-                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
                     {validation.scores.slice(0, 36).map((s) => (
                       <div key={s.block_id + s.label} className="relative group">
                         {s.skipped ? (
@@ -596,26 +676,50 @@ export function JobCard({ job, onRefresh }: Props) {
         )}
       </div>
 
-      {/* Folder shortcuts */}
-      {(job.source_dir || job.project_dir) && (
+      {/* Drive upload */}
+      {job.project_dir && (
         <div className="flex gap-2 flex-wrap">
-          {job.source_dir && (
+          {/* Drive upload — only for completed jobs with a project dir */}
+          {job.status === 'done' && job.project_dir && !driveJob && (
             <button
-              onClick={() => api.fs.open(job.source_dir)}
-              className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
-              title={job.source_dir}
+              onClick={uploadToDrive}
+              disabled={driveLoading}
+              className="text-xs px-2 py-1 rounded bg-green-900/60 hover:bg-green-800/70 text-green-300 disabled:opacity-50 transition-colors"
             >
-              📁 Транскрибація
+              {driveLoading ? '⏳ Uploading…' : '☁ Drive'}
             </button>
           )}
-          {job.project_dir && (
-            <button
-              onClick={() => api.fs.open(job.project_dir)}
-              className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
-              title={job.project_dir}
-            >
-              🎬 Відео
-            </button>
+          {driveJob && driveJob.status === 'running' && (
+            <span className="text-xs text-blue-300">☁ Uploading to Drive…</span>
+          )}
+          {driveJob && driveJob.status === 'done' && driveJob.folder_url && (
+            <div className="flex items-center gap-1">
+              <a
+                href={driveJob.folder_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs px-2 py-1 rounded bg-green-900/60 text-green-300 hover:bg-green-800/70 transition-colors"
+              >
+                ☁ Drive ✓ ({driveJob.uploaded_files.length} files) ↗
+              </a>
+              <button
+                onClick={() => setDriveJob(null)}
+                className="text-xs px-1.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 transition-colors"
+                title="Завантажити знову"
+              >↺</button>
+            </div>
+          )}
+          {driveJob && driveJob.status === 'failed' && (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-red-300" title={driveJob.error ?? ''}>
+                ☁ Drive failed
+              </span>
+              <button
+                onClick={() => setDriveJob(null)}
+                className="text-xs px-1.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 transition-colors"
+                title="Спробувати знову"
+              >↺</button>
+            </div>
           )}
         </div>
       )}

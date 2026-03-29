@@ -638,6 +638,8 @@ class JobManager:
         from modules.common import load_env
         from utils.db import VideoTracker
 
+        import shutil as _shutil
+
         load_env()
         job.status = "running"
         job.started_at = _now()
@@ -648,9 +650,28 @@ class JobManager:
         voice_id     = kwargs.get("voice_id") or None
         duration_min = kwargs.get("duration_min", 25)
         duration_max = kwargs.get("duration_max", 30)
+        force        = kwargs.get("force", False)
 
         _safe = _re.sub(r'[\\/:*?"<>|]', "_", topic.strip())[:200].strip(". ")
         proj = ROOT / "projects" / channel_config_path.stem / (_safe or "quick")
+
+        # ── Force: nuke project dir + transcription dir ─────────────────────
+        if force and proj.exists():
+            job.log(f"[Force] Deleting project dir: {proj}")
+            _shutil.rmtree(proj, ignore_errors=True)
+
+        if force and transcription_url.startswith("http"):
+            # Transcription will be re-downloaded; also nuke cached transcription
+            import os as _os
+            _trans_base = Path(
+                _os.environ.get("TRANSCRIBER_OUTPUT", r"D:\transscript batch\output\output")
+            )
+            # Try to find matching dir by topic name
+            for _cand in (_trans_base / _safe, _trans_base / topic.strip()):
+                if _cand.exists():
+                    job.log(f"[Force] Deleting transcription dir: {_cand}")
+                    _shutil.rmtree(_cand, ignore_errors=True)
+
         proj.mkdir(parents=True, exist_ok=True)
         job.project_dir = str(proj)
 
@@ -668,6 +689,11 @@ class JobManager:
 
         def _load_mod(name: str, rel_path: str) -> Any:
             full = ROOT / rel_path
+            # Evict cached dependency modules so code changes take effect
+            # without restarting the backend (especially clients/*).
+            for _dep in list(sys.modules):
+                if _dep.startswith("clients.") or _dep.startswith("modules."):
+                    del sys.modules[_dep]
             spec = importlib.util.spec_from_file_location(name, str(full))
             mod  = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
             sys.modules[name] = mod
@@ -719,6 +745,52 @@ class JobManager:
             script_path = proj / "script.json"
             job.log(f"[Quick] Script → {script_path}")
             job.emit(type="step_done", step=1, elapsed=time.monotonic() - t0, pct=50.0)
+
+            # ── 1b: Script review ─────────────────────────────────────────────
+            import json as _json
+            _sd = _json.loads(script_path.read_text(encoding="utf-8"))
+            _blocks = _sd.get("blocks", [])
+            _word_count = sum(len((b.get("narration") or "").split()) for b in _blocks)
+            _total_imgs = sum(
+                len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0)
+                for b in _blocks
+            )
+            _block_summaries = [
+                {
+                    "id":          b.get("id", ""),
+                    "type":        b.get("type", "section"),
+                    "title":       b.get("title", ""),
+                    "word_count":  len((b.get("narration") or "").split()),
+                    "image_count": len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0),
+                    "narration":   (b.get("narration") or "")[:120],
+                }
+                for b in _blocks
+            ]
+            _review_data = {
+                "script_path":        str(script_path),
+                "title":              _sd.get("title", ""),
+                "block_count":        len(_blocks),
+                "word_count":         _word_count,
+                "duration_min":       round(_word_count / 150, 1),
+                "duration_max":       round(_word_count / 130, 1),
+                "image_prompt_count": _total_imgs,
+                "blocks":             _block_summaries,
+            }
+
+            # Pause and wait for user approval via WebSocket / REST
+            _rev_ev = asyncio.Event()
+            job._review_events["script"] = _rev_ev
+            job.review_stage = "script"
+            job.review_data = _review_data
+            job.status = "waiting_review"
+            job.emit(type="review_required", stage="script", data=_review_data)
+            job.log(f"[Quick] Waiting for script approval ({len(_blocks)} blocks, {_word_count} words)…")
+            await _rev_ev.wait()
+            job._review_events.pop("script", None)
+            job.review_stage = None
+            job.status = "running"
+            job.emit(type="review_approved", stage="script")
+            job.log("[Quick] Script approved — continuing")
 
             # ── 2: Voice ──────────────────────────────────────────────────────
             job.step = 2

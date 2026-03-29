@@ -429,13 +429,14 @@ async def run_pipeline(
     duration_min: int = 8,             # Minimum target video duration in minutes
     duration_max: int = 12,            # Maximum target video duration in minutes
     skip_thumbnail: bool = False,      # Skip thumbnail generation (Step 5)
-    burn_subtitles: bool = True,       # Burn generated subtitles into video (Step 4 must have run)
+    burn_subtitles: bool = False,      # Burn generated subtitles into video (Step 4 must have run)
     music_volume: float | None = None, # BGM volume in dB override; None = channel config (-28)
     music_track: str | None = None,    # Explicit music file path; None = channel config random pick
     custom_topic: str | None = None,   # Override topic for new script (replaces reference video title)
     image_backend: str | None = None,  # Image provider: "wavespeed" | "betatest" | "voidai"
     vision_model: str | None = None,   # Vision model for image analysis: "gpt-4.1" | "gpt-4.1-mini"
     auto_approve: bool = False,       # Auto-approve script/image review if quality criteria met
+    force: bool = False,              # Force regenerate from scratch — nuke project dir first
 ) -> None:
     """
     Run the full VideoForge pipeline.
@@ -462,6 +463,8 @@ async def run_pipeline(
     t_pipeline = time.monotonic()
 
     # ── Resolve project directory ──────────────────────────────────────────────
+    _channel_name = channel_config_path.stem or "unknown"
+
     if project_dir:
         proj = project_dir
     elif source_dir:
@@ -471,13 +474,19 @@ async def run_pipeline(
             folder_name = _safe_topic or source_dir.name
         else:
             folder_name = source_dir.name
-        proj = ROOT / "projects" / folder_name
+        proj = ROOT / "projects" / _channel_name / folder_name
     elif custom_topic and custom_topic.strip():
         # Topic-only mode: no reference video, derive project dir from topic name
         _safe_topic = re.sub(r'[\\/:*?"<>|]', "_", custom_topic.strip())[:200].strip(". ")
-        proj = ROOT / "projects" / _safe_topic
+        proj = ROOT / "projects" / _channel_name / _safe_topic
     else:
         raise ValueError("Either source_dir or project_dir must be provided")
+
+    # ── Force: nuke project dir so everything regenerates from scratch ────────
+    if force and proj.exists():
+        import shutil as _shutil
+        log.warning("[Force] Deleting project dir for clean regeneration: %s", proj)
+        _shutil.rmtree(proj, ignore_errors=True)
 
     proj.mkdir(parents=True, exist_ok=True)
 
@@ -786,6 +795,19 @@ async def run_pipeline(
                 "image_prompt_count": _total_imgs,
                 "has_hook":      _has_hook,
                 "blocks":        _block_summaries,
+                # Regen params — used by /jobs/{id}/regen-script
+                "_regen": {
+                    "channel_config_path": str(channel_config_path),
+                    "source_dir":    str(source_dir) if source_dir else "",
+                    "output_dir":    str(proj),
+                    "quality":       quality,
+                    "template":      template,
+                    "duration_min":  duration_min,
+                    "duration_max":  duration_max,
+                    "master_prompt": master_prompt or "",
+                    "image_style":   image_style or "",
+                    "custom_topic":  custom_topic or "",
+                },
             }
 
             # Auto-approve: skip review if all quality criteria met
@@ -802,13 +824,13 @@ async def run_pipeline(
                     and not _has_critical
                 )
                 if _script_auto_ok:
-                    log.info(
-                        "Auto-approve script: hook=%s, words=%d (%d-%d), imgs=%d, blocks=%d",
+                    log.warning(
+                        "Auto-approve script OK: hook=%s, words=%d (%d-%d), imgs=%d, blocks=%d",
                         _has_hook, _word_count, _min_words, _max_words, _total_imgs, len(_blocks),
                     )
                     _emit(progress_callback, type="auto_approved", stage="script")
                 else:
-                    log.info(
+                    log.warning(
                         "Auto-approve FAILED for script (hook=%s, words=%d, range=%d-%d, imgs=%d, critical=%s)"
                         " — falling back to manual review",
                         _has_hook, _word_count, _min_words, _max_words, _total_imgs, _has_critical,
@@ -902,9 +924,13 @@ async def run_pipeline(
                 )
                 _img_val_data = _img_val.to_dict()
                 # Add image URLs for frontend preview (/projects is a static mount)
-                # URL-encode the project name (may contain spaces, em-dashes, apostrophes, etc.)
-                _src_name = proj.name
-                _enc_name = _url_quote(_src_name, safe="")
+                # Use relative path from projects root to include channel subfolder
+                # e.g. proj = .../projects/1/VideoTitle → rel = "1/VideoTitle"
+                try:
+                    _rel_parts = proj.relative_to(ROOT / "projects").parts
+                    _enc_name = "/".join(_url_quote(p, safe="") for p in _rel_parts)
+                except ValueError:
+                    _enc_name = _url_quote(proj.name, safe="")
                 for _sc in _img_val_data.get("scores", []):
                     _idx = _sc.get("image_index", 0)
                     _fname = f"{_sc['block_id']}.png" if _idx == 0 else f"{_sc['block_id']}_{_idx}.png"
@@ -933,24 +959,26 @@ async def run_pipeline(
             _img_auto_ok = False
             if auto_approve and _img_val_data:
                 _iv = _img_val_data
+                _total = max(_iv.get("total", 1), 1)
+                _ok = _iv.get("ok", _iv.get("ok_count", 0))  # to_dict() uses "ok"
+                _ok_pct = (_ok + _iv.get("regenerated", 0)) / _total
+                _fail_pct = _iv.get("failed", 0) / _total
                 _img_auto_ok = (
-                    _iv.get("failed", 999) == 0
-                    and _iv.get("skipped", 999) == 0
-                    and (_iv.get("ok_count", 0) + _iv.get("regenerated", 0))
-                        >= _iv.get("total", 1) * 0.95
+                    _ok_pct >= 0.90          # at least 90% OK/regenerated
+                    and _fail_pct <= 0.10    # at most 10% failed
                 )
                 if _img_auto_ok:
-                    log.info(
-                        "Auto-approve images: %d/%d OK, %d regen, %d failed, %d skipped",
-                        _iv.get("ok_count", 0), _iv.get("total", 0),
+                    log.warning(
+                        "Auto-approve images OK: %d/%d OK, %d regen, %d failed, %d skipped",
+                        _ok, _iv.get("total", 0),
                         _iv.get("regenerated", 0), _iv.get("failed", 0), _iv.get("skipped", 0),
                     )
                     _emit(progress_callback, type="auto_approved", stage="images")
                 else:
-                    log.info(
+                    log.warning(
                         "Auto-approve FAILED for images (ok=%d, total=%d, failed=%d, skipped=%d)"
                         " — falling back to manual review",
-                        _iv.get("ok_count", 0), _iv.get("total", 0),
+                        _ok, _iv.get("total", 0),
                         _iv.get("failed", 0), _iv.get("skipped", 0),
                     )
 
@@ -972,13 +1000,42 @@ async def run_pipeline(
         if not dry_run:
             elapsed = time.monotonic() - t0
 
-            # Validate audio files exist
+            # Validate audio files exist — retry missing ones up to 2 times
             script_data = _load_script(s_path)
             blocks = script_data["blocks"]
             audio_subdir = "audio"
             audio_dir = proj / audio_subdir
             voiced_blocks = [b for b in blocks if (b.get("narration") or "").strip()]
             audio_files = [audio_dir / f"{b['id']}.mp3" for b in voiced_blocks]
+
+            _missing = [p for p in audio_files if not p.exists() or p.stat().st_size < 500]
+            if _missing and not dry_run:
+                _max_voice_retries = 2
+                for _retry_i in range(1, _max_voice_retries + 1):
+                    log.warning(
+                        "Audio retry %d/%d — %d missing block(s): %s",
+                        _retry_i, _max_voice_retries,
+                        len(_missing), [p.stem for p in _missing],
+                    )
+                    _emit(
+                        progress_callback, type="sub_progress",
+                        step=STEP_MEDIA, pct=85.0,
+                        message=f"Retrying {len(_missing)} failed audio block(s) ({_retry_i}/{_max_voice_retries})…",
+                    )
+                    # Re-run voice generation (skip_existing=True will only redo missing)
+                    voice_summary = await generate_voices(
+                        s_path, channel_config_path,
+                        lang=primary_lang,
+                        voice_id_override=voice_id or None,
+                        dry_run=False,
+                        skip_existing=True,
+                        progress_callback=_voice_sub_cb,
+                    )
+                    _missing = [p for p in audio_files if not p.exists() or p.stat().st_size < 500]
+                    if not _missing:
+                        log.info("Audio retry %d: all blocks recovered ✓", _retry_i)
+                        break
+
             _require_files(audio_files, min_bytes=500, step="Media/Audio")
 
             n_gen = getattr(img_summary, "generated", 0)

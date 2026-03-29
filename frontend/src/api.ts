@@ -2,6 +2,10 @@
 
 const BASE = '/api'
 
+// ── Auth key (set by AuthContext on login) ─────────────────────────────────────
+let _apiKey = ''
+export function setApiKey(key: string) { _apiKey = key }
+
 export interface Job {
   job_id: string
   kind: 'pipeline' | 'batch'
@@ -114,6 +118,36 @@ export interface PipelineRunRequest {
   image_backend?: string | null
   vision_model?: string | null
   auto_approve?: boolean
+  force?: boolean
+}
+
+export interface QuickRunRequest {
+  topic: string
+  transcription_url?: string
+  channel?: string
+  quality?: string
+  voice_id?: string | null
+  image_backend?: string | null
+  duration_min?: number | null
+  duration_max?: number | null
+  force?: boolean
+}
+
+export interface QuickBatchItem {
+  topic: string
+  transcription_url?: string
+  channel?: string
+  quality?: string
+}
+
+export interface QuickBatchRequest {
+  items: QuickBatchItem[]
+  parallel?: number
+  voice_id?: string | null
+  image_backend?: string | null
+  duration_min?: number | null
+  duration_max?: number | null
+  force?: boolean
 }
 
 export interface MusicTrack {
@@ -173,6 +207,8 @@ export interface MultiBatchRequest {
   vision_model?: string | null
   // Review
   auto_approve?: boolean
+  // Regeneration
+  force?: boolean
 }
 
 export interface ChannelMeta {
@@ -232,15 +268,23 @@ export interface VoiceMeta {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  })
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (_apiKey) headers['X-API-Key'] = _apiKey
+  const res = await fetch(BASE + path, { headers, ...init })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`${res.status} ${res.statusText}: ${text}`)
   }
+  // 204 No Content — return undefined cast to T
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+/** Build a WebSocket URL with the current api key (for auth). */
+export function wsUrl(jobId: string): string {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const base  = `${proto}://${location.host}/ws/${jobId}`
+  return _apiKey ? `${base}?api_key=${encodeURIComponent(_apiKey)}` : base
 }
 
 // ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -253,11 +297,19 @@ export const api = {
       req<{ status: string }>(`/jobs/${id}`, { method: 'DELETE' }),
     approve: (id: string, stage: string) =>
       req<{ approved: boolean; stage: string }>(`/jobs/${id}/approve?stage=${stage}`, { method: 'POST' }),
+    regenImages: (id: string) =>
+      req<{ job_id: string; validation: Record<string, unknown> }>(`/jobs/${id}/regen-images`, { method: 'POST' }),
+    regenScript: (id: string) =>
+      req<{ job_id: string; word_count: number; block_count: number }>(`/jobs/${id}/regen-script`, { method: 'POST' }),
   },
 
   pipeline: {
     run: (body: PipelineRunRequest) =>
       req<Job>('/pipeline/run', { method: 'POST', body: JSON.stringify(body) }),
+    quick: (body: QuickRunRequest) =>
+      req<Job>('/pipeline/quick', { method: 'POST', body: JSON.stringify(body) }),
+    quickBatch: (body: QuickBatchRequest) =>
+      req<Job[]>('/pipeline/quick-batch', { method: 'POST', body: JSON.stringify(body) }),
   },
 
   batch: {
@@ -265,6 +317,8 @@ export const api = {
       req<Job>('/batch/run', { method: 'POST', body: JSON.stringify(body) }),
     runMulti: (body: MultiBatchRequest) =>
       req<Job[]>('/batch/multi', { method: 'POST', body: JSON.stringify(body) }),
+    appendMulti: (body: MultiBatchRequest) =>
+      req<Job[]>('/batch/append', { method: 'POST', body: JSON.stringify(body) }),
   },
 
   videos: {
@@ -380,7 +434,9 @@ export const api = {
     analyze: async (image: File): Promise<{ style: string }> => {
       const form = new FormData()
       form.append('image', image)
-      const res = await fetch(BASE + '/style/analyze', { method: 'POST', body: form })
+      const headers: Record<string, string> = {}
+      if (_apiKey) headers['X-API-Key'] = _apiKey
+      const res = await fetch(BASE + '/style/analyze', { method: 'POST', body: form, headers })
       if (!res.ok) {
         const text = await res.text()
         throw new Error(`${res.status}: ${text.slice(0, 200)}`)
@@ -391,6 +447,12 @@ export const api = {
 
   music: {
     list: () => req<MusicTrack[]>('/music'),
+  },
+
+  projects: {
+    /** List subfolders of projects/ with metadata: has_config, video_count */
+    folders: () =>
+      req<{ name: string; has_config: boolean; video_count: number }[]>('/projects/folders'),
   },
 
   fs: {
@@ -416,6 +478,58 @@ export const api = {
       req<YoutubeUploadJob[]>('/youtube/uploads'),
     uploadJob: (id: string) =>
       req<YoutubeUploadJob>(`/youtube/uploads/${id}`),
+  },
+
+  presets: {
+    list: () =>
+      req<Preset[]>('/presets'),
+    create: (body: PresetCreate) =>
+      req<Preset>('/presets', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: PresetCreate) =>
+      req<Preset>(`/presets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    delete: (id: string) =>
+      req<void>(`/presets/${id}`, { method: 'DELETE' }),
+  },
+
+  drive: {
+    status: () =>
+      req<{ authenticated: boolean; root_folder_id: string }>('/drive/status'),
+    auth: () =>
+      req<{ status: string; message: string }>('/drive/auth', { method: 'POST' }),
+    revoke: () =>
+      req<{ status: string; message: string }>('/drive/auth/revoke', { method: 'POST' }),
+    upload: (body: { project_dir: string; channel?: string; channel_name?: string; root_folder_id?: string }) =>
+      req<{ upload_id: string; status: string }>('/drive/upload', { method: 'POST', body: JSON.stringify(body) }),
+    uploadStatus: (id: string) =>
+      req<DriveUploadJob>(`/drive/uploads/${id}`),
+    uploads: () =>
+      req<DriveUploadJob[]>('/drive/uploads'),
+    ensureChannelFolders: () =>
+      req<{ job_id: string; status: string; channels: string[] }>('/drive/ensure-channel-folders', { method: 'POST' }),
+    channels: () =>
+      req<DriveChannel[]>('/drive/channels'),
+  },
+
+  status: {
+    balances: () => req<{
+      voiceapi:  { balance_chars?: number; balance_text?: string; error?: string }
+      voidai:    { balance_usd?: number | null; note?: string; error?: string }
+      wavespeed: { subscription_end?: string | null; note?: string; error?: string }
+    }>('/status/balances'),
+  },
+
+  auth: {
+    status: () =>
+      fetch(BASE + '/auth/status').then(r => r.json()) as Promise<{ protected: boolean }>,
+    verify: (code: string) =>
+      fetch(BASE + '/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }).then(async r => {
+        if (!r.ok) throw new Error('Wrong access code')
+        return r.json() as Promise<{ ok: boolean }>
+      }),
   },
 }
 
@@ -522,3 +636,49 @@ export interface TranscribeJob {
   error: string
   out_dir: string
 }
+
+// ── Google Drive interfaces ────────────────────────────────────────────────────
+
+export interface DriveChannel {
+  id: string           // "config/channels/history.json"
+  file: string
+  channel_name: string // "History Explained"
+  niche: string
+  language: string
+}
+
+export interface DriveUploadJob {
+  upload_id: string
+  status: string   // running | done | failed
+  project_dir: string
+  channel_name: string
+  folder_url: string | null
+  uploaded_files: string[]
+  error: string | null
+}
+
+// ── Presets interfaces ─────────────────────────────────────────────────────────
+
+export interface Preset {
+  id: string
+  name: string
+  channel: string
+  quality: string
+  duration_min: number
+  duration_max: number
+  template: string
+  parallel: number
+  skip_thumbnail: boolean
+  auto_approve: boolean
+  image_backend: string
+  background_music: boolean
+  burn_subtitles: boolean
+  no_ken_burns: boolean
+  master_prompt: string | null
+  image_style: string
+  voice_id: string
+  music_volume: number | null
+  vision_model: string
+}
+
+export type PresetCreate = Omit<Preset, 'id'>

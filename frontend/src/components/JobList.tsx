@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { type Job, type PipelineRunRequest, type BatchRunRequest, type MultiBatchRequest, type MultiTopicItem, type PromptMeta, type MusicTrack, api } from '../api'
+import { type Job, type PipelineRunRequest, type BatchRunRequest, type MultiBatchRequest, type MultiTopicItem, type PromptMeta, type MusicTrack, type QuickBatchRequest, type Preset, api } from '../api'
 import { JobCard } from './JobCard'
 import { TranscriberPanel } from './TranscriberPanel'
 
@@ -85,6 +85,7 @@ const LS_SOURCE_DIR    = 'vf_last_source_dir'
 const LS_INPUT_DIR     = 'vf_last_input_dir'
 const LS_MULTI_ITEMS   = 'vf_multi_items'
 const LS_MULTI_SETTINGS = 'vf_multi_settings'
+const LS_PRESET_ID     = 'vf_last_preset_id'
 
 function lsGet<T>(key: string, fallback: T): T {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) as T : fallback }
@@ -105,6 +106,7 @@ type PFormState = PipelineRunRequest & {
   burn_subtitles: boolean   // override optional → required
   no_ken_burns: boolean     // override optional → required
   auto_approve: boolean     // override optional → required
+  force: boolean            // override optional → required
   image_style: string       // override optional → required
   voice_id: string          // override optional → required
   duration_min: number      // override optional → required
@@ -123,6 +125,32 @@ export function JobList() {
   const [voices, setVoices]   = useState<{ id: string; name: string }[]>([])
   const [prompts, setPrompts] = useState<PromptMeta[]>([])
   const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([])
+  const [channels, setChannels] = useState<{ name: string; channel_name: string }[]>([])
+  const [projectFolders, setProjectFolders] = useState<{ name: string; has_config: boolean; video_count: number }[]>([])
+  const [refreshingFolders, setRefreshingFolders] = useState(false)
+  const [presets, setPresets]           = useState<Preset[]>([])
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(
+    localStorage.getItem(LS_PRESET_ID) ?? ''
+  )
+  const [driveStatus, setDriveStatus]   = useState<{ authenticated: boolean; root_folder_id: string } | null>(null)
+  const [driveAuthing, setDriveAuthing] = useState(false)
+  const [driveEnsuring, setDriveEnsuring] = useState(false)
+  const [driveEnsureResult, setDriveEnsureResult] = useState<string | null>(null)
+  const [balances, setBalances] = useState<{
+    voiceapi:  { balance_chars?: number; balance_text?: string; error?: string }
+    voidai:    { balance_usd?: number | null; note?: string }
+    wavespeed: { subscription_end?: string | null; note?: string }
+  } | null>(null)
+  const [wsExpiry, setWsExpiry] = useState<string>(
+    localStorage.getItem('vf_wavespeed_expiry') ?? ''
+  )
+  const [wsExpiryEdit, setWsExpiryEdit] = useState(false)
+
+  // Only real channel configs (exclude example_* templates)
+  const allChannelNames = channels
+    .map(c => c.name)
+    .filter(n => !n.includes('example'))
+    .sort()
 
   const [pForm, setPForm] = useState<PFormState>({
     source_dir:       localStorage.getItem(LS_SOURCE_DIR) ?? '',
@@ -133,16 +161,17 @@ export function JobList() {
     dry_run:          false,
     from_step:        1,
     to_step:          6,
-    background_music: true,
+    background_music: false,
     skip_thumbnail:   false,
-    burn_subtitles:   true,
+    burn_subtitles:   false,
     no_ken_burns:     false,
     auto_approve:     false,
+    force:            false,
     image_style:      '',
     voice_id:         '',
     master_prompt:    null,
-    duration_min:     8,
-    duration_max:     12,
+    duration_min:     25,
+    duration_max:     30,
     music_volume:     null,
     music_track:      null,
     custom_topic:     '',
@@ -173,6 +202,7 @@ export function JobList() {
   const _savedSettings = lsGet<Record<string, unknown>>(LS_MULTI_SETTINGS, {})
   const _ms = _savedSettings  // shorthand
 
+  const [mQuick, setMQuick]             = useState<boolean>(false)
   const [mItems, setMItems]             = useState<MultiTopicItem[]>(_savedItems.length ? _savedItems : [DEFAULT_MULTI_ITEM()])
   const [mParallel, setMParallel]       = useState<number>((_ms.parallel as number) ?? 2)
   const [mStyle, setMStyle]             = useState<string>((_ms.image_style as string) ?? '')
@@ -181,8 +211,8 @@ export function JobList() {
   const [mFromStep, setMFromStep]       = useState<number>((_ms.from_step as number) ?? 1)
   const [mToStep, setMToStep]           = useState<number>((_ms.to_step as number) ?? 6)
   const [mTemplate, setMTemplate]       = useState<string>((_ms.template as string) ?? 'auto')
-  const [mDurMin, setMDurMin]           = useState<number>((_ms.duration_min as number) ?? 8)
-  const [mDurMax, setMDurMax]           = useState<number>((_ms.duration_max as number) ?? 12)
+  const [mDurMin, setMDurMin]           = useState<number>((_ms.duration_min as number) ?? 25)
+  const [mDurMax, setMDurMax]           = useState<number>((_ms.duration_max as number) ?? 30)
   // Migrate old localStorage value (stem-only → full path with prompts/ prefix)
   const _rawMaster = (_ms.master_prompt as string | null) ?? null
   const _initMaster = _rawMaster && !_rawMaster.startsWith('prompts/')
@@ -190,13 +220,14 @@ export function JobList() {
     : _rawMaster
   const [mMaster, setMMaster]           = useState<string | null>(_initMaster)
   const [mVoice, setMVoice]             = useState<string>((_ms.voice_id as string) ?? '')
-  const [mMusic, setMMusic]             = useState<boolean>((_ms.background_music as boolean) ?? true)
+  const [mMusic, setMMusic]             = useState<boolean>((_ms.background_music as boolean) ?? false)
   const [mMusicVol, setMusicVol]        = useState<number | ''>((_ms.music_volume as number | null) ?? '')
   const [mMusicTrack, setMMusicTrack]   = useState<string | null>((_ms.music_track as string | null) ?? null)
-  const [mSubs, setMSubs]               = useState<boolean>((_ms.burn_subtitles as boolean) ?? true)
+  const [mSubs, setMSubs]               = useState<boolean>((_ms.burn_subtitles as boolean) ?? false)
   const [mSkipThumb, setMSkipThumb]     = useState<boolean>((_ms.skip_thumbnail as boolean) ?? false)
   const [mNoKenBurns, setMNoKenBurns]   = useState<boolean>((_ms.no_ken_burns as boolean) ?? false)
   const [mAutoApprove, setMAutoApprove] = useState<boolean>((_ms.auto_approve as boolean) ?? false)
+  const [mForce, setMForce]             = useState<boolean>(false)
   const [mImageBackend, setMImageBackend] = useState<string>((_ms.image_backend as string) ?? '')
   const [mVisionModel, setMVisionModel]   = useState<string>((_ms.vision_model as string) ?? 'gpt-4.1')
   const [mBudget, setMBudget]           = useState<number | ''>((_ms.budget_per_video as number | null) ?? '')
@@ -226,6 +257,7 @@ export function JobList() {
     setMItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it))
 
   const [submitting, setSubmitting] = useState(false)
+  const [appending,  setAppending]  = useState(false)
   const [formError, setFormError]   = useState('')
   const sourceRef    = useRef<HTMLInputElement>(null)
 
@@ -279,17 +311,35 @@ export function JobList() {
     }
   }
 
-  // Load voices + prompts
+  // Load voices + prompts + channels + project folders + presets
   useEffect(() => {
     api.voices.list().then(setVoices).catch(() => {})
     api.prompts.list().then(setPrompts).catch(() => {})
     api.music.list().then(setMusicTracks).catch(() => {})
+    api.channels.list().then(setChannels).catch(() => {})
+    api.projects.folders().then(setProjectFolders).catch(() => {})
+    api.presets.list().then(setPresets).catch(() => {})
+    api.drive.status().then(setDriveStatus).catch(() => {})
+    api.status.balances().then(setBalances).catch(() => {})
   }, [])
 
   async function loadJobs() {
     try { setJobs(await api.jobs.list(100)) }
     catch { /* ignore */ }
     finally { setLoading(false) }
+  }
+
+  async function refreshFolderData() {
+    setRefreshingFolders(true)
+    try {
+      const [chs, folders] = await Promise.all([
+        api.channels.list(),
+        api.projects.folders(),
+      ])
+      setChannels(chs)
+      setProjectFolders(folders)
+    } catch { /* ignore */ }
+    finally { setRefreshingFolders(false) }
   }
 
   useEffect(() => {
@@ -350,6 +400,38 @@ export function JobList() {
   async function submitMulti(e: React.FormEvent) {
     e.preventDefault()
     setFormError('')
+
+    // ── Quick mode: script + voice + 1 image per item ─────────────────────
+    if (mQuick) {
+      const valid = mItems.filter(it => (it.custom_topic ?? '').trim())
+      if (!valid.length) { setFormError('У Quick mode тема обов\'язкова для кожного рядка'); return }
+      setSubmitting(true)
+      try {
+        const batchReq: QuickBatchRequest = {
+          parallel:      mParallel,
+          voice_id:      mVoice || null,
+          image_backend: mImageBackend || null,
+          duration_min:  mDurMin,
+          duration_max:  mDurMax,
+          items: valid.map(item => ({
+            topic:             item.custom_topic!.trim(),
+            transcription_url: item.source_dir.trim() || '',
+            channel:           item.channel ?? 'config/channels/history.json',
+            quality:           item.quality ?? 'max',
+          })),
+        }
+        await api.pipeline.quickBatch(batchReq)
+        await loadJobs()
+        // Don't clear items — user may want to retry failed jobs or reuse the list
+      } catch (err) {
+        setFormError(String(err))
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    // ── Normal mode ───────────────────────────────────────────────────────
     // Each item needs at least source_dir OR custom_topic
     const valid = mItems.filter(it => it.source_dir.trim() || (it.custom_topic ?? '').trim())
     if (!valid.length) { setFormError('Додайте хоча б одне відео (source_dir або тему)'); return }
@@ -377,16 +459,60 @@ export function JobList() {
         skip_thumbnail:   mSkipThumb,
         no_ken_burns:     mNoKenBurns,
         auto_approve:     mAutoApprove,
+        force:            mForce,
         image_backend:    mImageBackend || null,
         vision_model:     mVisionModel || null,
         budget_per_video: mBudget !== '' ? mBudget : null,
       }
       await api.batch.runMulti(body)
       await loadJobs()
+      setMItems([DEFAULT_MULTI_ITEM()])  // clear form — avoid re-adding same videos
     } catch (err) {
       setFormError(String(err))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function appendMulti(e: React.MouseEvent) {
+    e.preventDefault()
+    setFormError('')
+    const valid = mItems.filter(it => it.source_dir.trim() || (it.custom_topic ?? '').trim())
+    if (!valid.length) { setFormError('Додайте хоча б одне відео'); return }
+    setAppending(true)
+    try {
+      const body: MultiBatchRequest = {
+        items:            valid,
+        parallel:         mParallel,
+        image_style:      mStyle || undefined,
+        dry_run:          mDryRun,
+        draft:            mDraft,
+        from_step:        mFromStep,
+        to_step:          mToStep,
+        template:         mTemplate,
+        duration_min:     mDurMin,
+        duration_max:     mDurMax,
+        master_prompt:    mMaster || null,
+        voice_id:         mVoice || null,
+        background_music: mMusic,
+        music_volume:     mMusicVol !== '' ? mMusicVol : null,
+        music_track:      mMusicTrack || null,
+        burn_subtitles:   mSubs,
+        skip_thumbnail:   mSkipThumb,
+        no_ken_burns:     mNoKenBurns,
+        auto_approve:     mAutoApprove,
+        force:            mForce,
+        image_backend:    mImageBackend || null,
+        vision_model:     mVisionModel || null,
+        budget_per_video: mBudget !== '' ? mBudget : null,
+      }
+      await api.batch.appendMulti(body)
+      await loadJobs()
+      setMItems([DEFAULT_MULTI_ITEM()])  // clear form after appending
+    } catch (err) {
+      setFormError(String(err))
+    } finally {
+      setAppending(false)
     }
   }
 
@@ -405,20 +531,246 @@ export function JobList() {
       })
       return
     }
+    // Single mode: if source_dir already filled — switch to multi and move existing + new
+    const currentSingle = pForm.source_dir.trim()
+    if (currentSingle) {
+      setMItems(prev => {
+        // Check if current single path already in multi list
+        const hasExisting = prev.some(it => it.source_dir.trim() === currentSingle)
+        let items = hasExisting ? [...prev] : [{ ...DEFAULT_MULTI_ITEM(), source_dir: currentSingle }, ...prev.filter(it => it.source_dir.trim() || it.custom_topic?.trim())]
+        // Add new dir
+        const emptyIdx = items.findIndex(it => !it.source_dir.trim() && !it.custom_topic?.trim())
+        if (emptyIdx >= 0) {
+          items = items.map((it, i) => i === emptyIdx ? { ...it, source_dir: dir } : it)
+        } else {
+          items = [...items, { ...DEFAULT_MULTI_ITEM(), source_dir: dir }]
+        }
+        return items.length ? items : [DEFAULT_MULTI_ITEM()]
+      })
+      setTab('multi')
+      return
+    }
+    // First path — fill single mode
     updateSourceDir(dir)
     setTab('pipeline')
     // Scroll to source dir input
     setTimeout(() => sourceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
   }
 
+  function applyPreset(id: string) {
+    setSelectedPresetId(id)
+    localStorage.setItem(LS_PRESET_ID, id)
+    if (!id) return
+    const p = presets.find(pr => pr.id === id)
+    if (!p) return
+    // Apply to pipeline form
+    setPForm(f => ({
+      ...f,
+      channel:          p.channel,
+      quality:          p.quality,
+      duration_min:     p.duration_min,
+      duration_max:     p.duration_max,
+      template:         p.template,
+      skip_thumbnail:   p.skip_thumbnail,
+      auto_approve:     p.auto_approve,
+      image_backend:    p.image_backend,
+      background_music: p.background_music,
+      burn_subtitles:   p.burn_subtitles,
+      no_ken_burns:     p.no_ken_burns,
+      master_prompt:    p.master_prompt,
+      image_style:      p.image_style,
+      voice_id:         p.voice_id,
+      music_volume:     p.music_volume,
+      vision_model:     p.vision_model,
+    }))
+    // Apply to multi form
+    setMParallel(p.parallel)
+    setMDurMin(p.duration_min)
+    setMDurMax(p.duration_max)
+    setMTemplate(p.template)
+    setMSkipThumb(p.skip_thumbnail)
+    setMAutoApprove(p.auto_approve)
+    setMImageBackend(p.image_backend)
+    setMMusic(p.background_music)
+    setMSubs(p.burn_subtitles)
+    setMNoKenBurns(p.no_ken_burns)
+    setMMaster(p.master_prompt)
+    setMStyle(p.image_style)
+    setMVoice(p.voice_id)
+    setMusicVol(p.music_volume ?? '')
+    setMVisionModel(p.vision_model)
+    // Update channel on all multi items
+    setMItems(prev => prev.map(it => ({ ...it, channel: p.channel, quality: p.quality })))
+  }
+
+  async function handleAddToQueue(dir: string) {
+    // Add single video to active queue without touching the form
+    try {
+      const channel = pForm.channel || 'config/channels/history.json'
+      await api.batch.appendMulti({
+        items: [{ source_dir: dir, channel, image_style: '', quality: 'max' }],
+        parallel:         mParallel,
+        image_style:      mStyle || '',
+        dry_run:          mDryRun,
+        draft:            mDraft,
+        from_step:        mFromStep,
+        to_step:          mToStep,
+        template:         mTemplate,
+        duration_min:     mDurMin,
+        duration_max:     mDurMax,
+        master_prompt:    mMaster || null,
+        voice_id:         mVoice || null,
+        background_music: mMusic,
+        music_volume:     mMusicVol !== '' ? mMusicVol : null,
+        music_track:      mMusicTrack || null,
+        burn_subtitles:   mSubs,
+        skip_thumbnail:   mSkipThumb,
+        no_ken_burns:     mNoKenBurns,
+        auto_approve:     mAutoApprove,
+        force:            mForce,
+        image_backend:    mImageBackend || null,
+        vision_model:     mVisionModel || null,
+        budget_per_video: mBudget !== '' ? mBudget : null,
+      })
+      await loadJobs()
+    } catch (err) {
+      setFormError(String(err))
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Transcriber integration */}
-      <TranscriberPanel onSelectDir={handleTranscriberSelect} pipelineSettings={pForm} />
+      <TranscriberPanel onSelectDir={handleTranscriberSelect} onAddToQueue={handleAddToQueue} pipelineSettings={pForm} />
+
+      {/* Google Drive status banner */}
+      {driveStatus && (
+        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border text-xs ${
+          driveStatus.authenticated && driveStatus.root_folder_id
+            ? 'bg-green-900/20 border-green-800/50 text-green-300'
+            : 'bg-gray-800 border-gray-700 text-gray-400'
+        }`}>
+          <span>☁ Google Drive:</span>
+          {driveStatus.authenticated && driveStatus.root_folder_id ? (
+            <>
+              <span className="text-green-400">підключено</span>
+              <button
+                onClick={async () => {
+                  setDriveEnsuring(true)
+                  setDriveEnsureResult(null)
+                  try {
+                    const res = await api.drive.ensureChannelFolders()
+                    setDriveEnsureResult(`✓ ${res.channels.length} папок готово`)
+                  } catch (e) {
+                    setDriveEnsureResult(`✗ ${String(e)}`)
+                  } finally {
+                    setDriveEnsuring(false)
+                  }
+                }}
+                disabled={driveEnsuring}
+                className="px-2 py-0.5 bg-green-800 hover:bg-green-700 text-green-200 rounded disabled:opacity-50 transition-colors"
+              >
+                {driveEnsuring ? '⏳ Створюю…' : '📁 Папки каналів'}
+              </button>
+              {driveEnsureResult && <span className="text-green-300">{driveEnsureResult}</span>}
+            </>
+          ) : driveStatus.authenticated ? (
+            <span className="text-amber-400">авторизовано, але GDRIVE_ROOT_FOLDER_ID не встановлено у .env</span>
+          ) : (
+            <>
+              <span>не авторизовано</span>
+              <button
+                onClick={async () => {
+                  setDriveAuthing(true)
+                  try {
+                    await api.drive.auth()
+                    const s = await api.drive.status()
+                    setDriveStatus(s)
+                  } catch { /* ignore */ }
+                  finally { setDriveAuthing(false) }
+                }}
+                disabled={driveAuthing}
+                className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded disabled:opacity-50 transition-colors"
+              >
+                {driveAuthing ? 'Відкриваю браузер…' : 'Авторизувати'}
+              </button>
+            </>
+          )}
+          <button
+            onClick={async () => { const s = await api.drive.status(); setDriveStatus(s) }}
+            className="ml-auto text-gray-500 hover:text-gray-300 transition-colors"
+            title="Оновити статус"
+          >↺</button>
+        </div>
+      )}
+
+      {/* Service balances */}
+      {balances && (
+        <div className="flex items-center gap-4 px-4 py-2 rounded-lg bg-gray-800/60 border border-gray-700/50 text-xs flex-wrap">
+          <span className="text-gray-500 shrink-0">Баланси:</span>
+          {/* VoiceAPI */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-500">🎙</span>
+            {balances.voiceapi.error ? (
+              <span className="text-red-400">Помилка</span>
+            ) : (
+              <span className="text-green-300" title={balances.voiceapi.balance_text}>
+                {balances.voiceapi.balance_chars != null
+                  ? `${(balances.voiceapi.balance_chars / 1000).toFixed(0)}k символів`
+                  : '—'}
+              </span>
+            )}
+            <span className="text-gray-600">VoiceAPI</span>
+          </div>
+          {/* VoidAI */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-500">🤖</span>
+            <span className="text-gray-500 italic text-[10px]">баланс недоступний</span>
+            <span className="text-gray-600">VoidAI</span>
+          </div>
+          {/* WaveSpeed — manual expiry date */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-500">🖼</span>
+            {wsExpiryEdit ? (
+              <input
+                type="date"
+                autoFocus
+                defaultValue={wsExpiry}
+                onBlur={(e) => {
+                  const v = e.target.value
+                  setWsExpiry(v)
+                  localStorage.setItem('vf_wavespeed_expiry', v)
+                  setWsExpiryEdit(false)
+                }}
+                onKeyDown={(e) => { if (e.key === 'Escape') setWsExpiryEdit(false) }}
+                className="bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+            ) : wsExpiry ? (() => {
+              const days = Math.ceil((new Date(wsExpiry).getTime() - Date.now()) / 86400000)
+              const color = days <= 3 ? 'text-red-400' : days <= 7 ? 'text-yellow-400' : 'text-green-300'
+              return (
+                <button onClick={() => setWsExpiryEdit(true)} className={`${color} hover:underline`} title="Натисни щоб змінити дату">
+                  {days > 0 ? `ще ${days}д` : `прострочено ${Math.abs(days)}д тому`}
+                </button>
+              )
+            })() : (
+              <button onClick={() => setWsExpiryEdit(true)} className="text-gray-600 hover:text-gray-400 italic" title="Вкажи дату закінчення підписки">
+                вкажи термін
+              </button>
+            )}
+            <span className="text-gray-600">WaveSpeed</span>
+          </div>
+          <button
+            onClick={() => api.status.balances().then(setBalances).catch(() => {})}
+            className="ml-auto text-gray-600 hover:text-gray-400 transition-colors"
+            title="Оновити баланси"
+          >↺</button>
+        </div>
+      )}
 
       {/* Launch form */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-4 flex-wrap items-center">
           {(['pipeline', 'batch', 'multi'] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
@@ -428,6 +780,25 @@ export function JobList() {
               {t === 'pipeline' ? 'Single Video' : t === 'batch' ? 'Batch Dir' : 'Multi-Topic'}
             </button>
           ))}
+
+          {/* Preset selector */}
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-gray-500">Preset:</span>
+            {presets.length > 0 ? (
+              <select
+                value={selectedPresetId}
+                onChange={e => applyPreset(e.target.value)}
+                className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="">— none —</option>
+                {presets.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs text-gray-600 italic">немає — створи у вкладці «Presets»</span>
+            )}
+          </div>
         </div>
 
         {tab === 'pipeline' ? (
@@ -470,11 +841,26 @@ export function JobList() {
             {/* Channel + Quality */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="space-y-1">
-                <span className="text-xs text-gray-400">Channel config</span>
-                <input value={pForm.channel}
+                <span className="text-xs text-gray-400">Канал</span>
+                <select value={pForm.channel}
                   onChange={(e) => setPForm({ ...pForm, channel: e.target.value })}
                   className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
-                />
+                >
+                  {allChannelNames.length > 0
+                    ? allChannelNames.map(name => {
+                        const hasConfig = channels.some(c => c.name === name)
+                        const folder = projectFolders.find(f => f.name === name)
+                        const suffix = !folder ? ' — нова'
+                          : folder.video_count > 0 ? ` — ${folder.video_count} відео` : ' — порожньо'
+                        return (
+                          <option key={name} value={hasConfig ? `config/channels/${name}.json` : ''} disabled={!hasConfig}>
+                            {name}{suffix}{!hasConfig ? ' ⚠ немає конфіга' : ''}
+                          </option>
+                        )
+                      })
+                    : <option value={pForm.channel}>{pForm.channel}</option>
+                  }
+                </select>
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-gray-400">
@@ -810,6 +1196,13 @@ export function JobList() {
                 <span>Auto-approve</span>
                 <Tip text="Автоматично апрувити сценарій та картинки якщо: є хук, тривалість в межах, всі картинки ОК. Інакше — ручний ревʼю." />
               </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={pForm.force}
+                  onChange={(e) => setPForm({ ...pForm, force: e.target.checked })}
+                  className="accent-red-500" />
+                <span>Force regen</span>
+                <Tip text="Видалити все (транскрипцію + проект) і згенерувати з нуля. Корисно якщо попередня генерація вийшла коротка або зіпсована." />
+              </label>
               {/* Image backend selector */}
               <label className="space-y-1 block">
                 <span className="text-xs text-gray-400">
@@ -871,11 +1264,26 @@ export function JobList() {
             </label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="space-y-1">
-                <span className="text-xs text-gray-400">Channel config</span>
-                <input value={bForm.channel}
+                <span className="text-xs text-gray-400">Канал</span>
+                <select value={bForm.channel}
                   onChange={(e) => setBForm({ ...bForm, channel: e.target.value })}
                   className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
-                />
+                >
+                  {allChannelNames.length > 0
+                    ? allChannelNames.map(name => {
+                        const hasConfig = channels.some(c => c.name === name)
+                        const folder = projectFolders.find(f => f.name === name)
+                        const suffix = !folder ? ' — нова'
+                          : folder.video_count > 0 ? ` — ${folder.video_count} відео` : ' — порожньо'
+                        return (
+                          <option key={name} value={hasConfig ? `config/channels/${name}.json` : ''} disabled={!hasConfig}>
+                            {name}{suffix}{!hasConfig ? ' ⚠ немає конфіга' : ''}
+                          </option>
+                        )
+                      })
+                    : <option value={bForm.channel}>{bForm.channel}</option>
+                  }
+                </select>
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-gray-400">Quality</span>
@@ -927,11 +1335,35 @@ export function JobList() {
 
           /* ── Multi-Topic Queue ───────────────────────────────────────────── */
           <form onSubmit={submitMulti} className="space-y-4">
-            <p className="text-xs text-gray-400">
-              Черга відео з різними темами та каналами. Всі запускаються паралельно (до
-              {' '}<strong className="text-gray-300">{mParallel}</strong> одночасно).
-              Кожне відео відображається як окремий Job.
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                <p className="text-xs text-gray-400">
+                  Черга відео з різними темами та каналами. Всі запускаються паралельно (до
+                  {' '}<strong className="text-gray-300">{mParallel}</strong> одночасно).
+                  Кожне відео відображається як окремий Job.
+                </p>
+                {/* Quick mode toggle */}
+                <label className="flex items-center gap-1.5 shrink-0 cursor-pointer select-none">
+                  <input type="checkbox" checked={mQuick} onChange={(e) => setMQuick(e.target.checked)}
+                    className="accent-yellow-500" />
+                  <span className="text-xs text-yellow-400 font-medium whitespace-nowrap">⚡ Quick mode</span>
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => api.fs.open('projects').catch(() => {})}
+                className="shrink-0 flex items-center gap-1 text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 rounded px-2 py-1 transition-colors"
+                title="Відкрити папку projects/ у Провіднику Windows"
+              >
+                📁 projects/
+              </button>
+            </div>
+            {mQuick && (
+              <p className="text-[11px] text-yellow-600 bg-yellow-950/30 rounded px-2 py-1">
+                ⚡ Quick mode: сценарій + озвучка + 1 картинка. Без монтажу відео.
+                Колонка «Посилання» приймає YouTube URL або шлях до транскрипції (необов'язково).
+              </p>
+            )}
 
             {/* Per-item rows */}
             <div className="space-y-2">
@@ -939,37 +1371,86 @@ export function JobList() {
                 <div key={i} className="grid gap-2 p-2 bg-gray-900 rounded border border-gray-700"
                   style={{ gridTemplateColumns: '1fr 1fr 1fr auto auto' }}>
 
-                  {/* Source dir */}
+                  {/* Source dir / Transcription URL */}
                   <div className="space-y-0.5">
-                    {i === 0 && <div className="text-[10px] text-gray-500">Source dir <span className="text-gray-600">(або тільки тема)</span></div>}
+                    {i === 0 && (
+                      <div className="text-[10px] text-gray-500">
+                        {mQuick
+                          ? <span>Посилання <span className="text-gray-600">(YouTube URL або шлях, необов'язково)</span></span>
+                          : <span>Source dir <span className="text-gray-600">(або тільки тема)</span></span>
+                        }
+                      </div>
+                    )}
                     <input
                       value={item.source_dir}
                       onChange={(e) => updateMItem(i, { source_dir: e.target.value })}
                       onPaste={(e) => { e.preventDefault(); updateMItem(i, { source_dir: e.clipboardData.getData('text').trim() }) }}
-                      placeholder="D:/output/Video Title (необов'язково)"
+                      placeholder={mQuick ? 'https://youtube.com/... або D:\\transcripts\\...' : "D:/output/Video Title (необов'язково)"}
                       className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
                   {/* Custom topic */}
                   <div className="space-y-0.5">
-                    {i === 0 && <div className="text-[10px] text-gray-500">Тема <span className="text-gray-600">(обов'язково без source_dir)</span></div>}
+                    {i === 0 && (
+                      <div className="text-[10px] text-gray-500">
+                        {mQuick
+                          ? <span className="text-yellow-600">Тема *</span>
+                          : <span>Тема <span className="text-gray-600">(обов'язково без source_dir)</span></span>
+                        }
+                      </div>
+                    )}
                     <input
                       value={item.custom_topic ?? ''}
                       onChange={(e) => updateMItem(i, { custom_topic: e.target.value })}
-                      placeholder="Назва теми для відео"
+                      placeholder={mQuick ? 'How the Roman Empire collapsed' : 'Назва теми для відео'}
                       className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
-                  {/* Channel */}
+                  {/* Channel / Folder */}
                   <div className="space-y-0.5">
-                    {i === 0 && <div className="text-[10px] text-gray-500">Channel</div>}
-                    <input
+                    {i === 0 && (
+                      <div className="text-[10px] text-gray-500 flex items-center gap-1">
+                        Папка (канал)
+                        <button
+                          type="button"
+                          onClick={refreshFolderData}
+                          disabled={refreshingFolders}
+                          className="text-gray-600 hover:text-blue-400 disabled:opacity-30 transition-colors"
+                          title="Оновити список каналів і папок"
+                        >{refreshingFolders ? '…' : '↻'}</button>
+                      </div>
+                    )}
+                    <select
                       value={item.channel ?? 'config/channels/history.json'}
                       onChange={(e) => updateMItem(i, { channel: e.target.value })}
                       className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
-                    />
+                    >
+                      {allChannelNames.length > 0
+                        ? allChannelNames.map(name => {
+                            const hasConfig = channels.some(c => c.name === name)
+                            const folder = projectFolders.find(f => f.name === name)
+                            const suffix = !folder
+                              ? ' — нова'
+                              : folder.video_count > 0
+                                ? ` — ${folder.video_count} відео`
+                                : ' — порожньо'
+                            return (
+                              <option
+                                key={name}
+                                value={hasConfig ? `config/channels/${name}.json` : ''}
+                                disabled={!hasConfig}
+                              >
+                                {name}{suffix}{!hasConfig ? ' ⚠ немає конфіга' : ''}
+                              </option>
+                            )
+                          })
+                        : <option value={item.channel ?? 'config/channels/history.json'}>
+                            {(item.channel ?? '').replace('config/channels/', '').replace('.json', '') || 'history'}
+                          </option>
+                      }
+                    </select>
                   </div>
 
                   {/* Quality */}
@@ -1213,6 +1694,12 @@ export function JobList() {
                   <span>Auto-approve</span>
                   <Tip text="Автоматично апрувити сценарій та картинки якщо: є хук, тривалість в межах, всі картинки ОК." />
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={mForce}
+                    onChange={(e) => setMForce(e.target.checked)} className="accent-red-500" />
+                  <span>Force regen</span>
+                  <Tip text="Видалити все (транскрипцію + проект) і згенерувати з нуля." />
+                </label>
                 {/* Image backend */}
                 <label className="space-y-1 block">
                   <span className="text-xs text-gray-400">
@@ -1248,14 +1735,27 @@ export function JobList() {
             </div>
 
             {formError && <div className="text-xs text-red-300 bg-red-950 rounded p-2">{formError}</div>}
-            <button type="submit" disabled={submitting}
-              className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded"
-            >
-              {submitting
-                ? 'Starting…'
-                : `🚀 Запустити чергу (${mItems.filter(i => i.source_dir.trim() || (i.custom_topic ?? '').trim()).length} відео)`
-              }
-            </button>
+            <div className="flex gap-2">
+              <button type="submit" disabled={submitting || appending}
+                className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded"
+              >
+                {submitting
+                  ? 'Starting…'
+                  : mQuick
+                    ? `⚡ Quick: ${mItems.filter(i => (i.custom_topic ?? '').trim()).length} відео`
+                    : `🚀 Запустити чергу (${mItems.filter(i => i.source_dir.trim() || (i.custom_topic ?? '').trim()).length} відео)`
+                }
+              </button>
+              <button type="button" onClick={appendMulti} disabled={submitting || appending}
+                title="Додати до існуючої черги — нові відео поділяють ліміт паралельності з запущеними"
+                className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded"
+              >
+                {appending
+                  ? 'Додаємо…'
+                  : `➕ Додати до черги`
+                }
+              </button>
+            </div>
           </form>
 
         )}

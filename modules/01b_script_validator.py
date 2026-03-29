@@ -226,9 +226,9 @@ def _structural_checks(
 
     # Dynamic word count thresholds based on target duration
     # too_long:  25% over max target (warns about duplicate/excessive content)
-    # too_short: 50% under min target (critical — generation likely failed)
+    # too_short: 90% of min target (critical — catches premature LLM closure)
     eff_too_long  = int(duration_max * 150 * 1.25) if duration_max else TOO_LONG_WORDS
-    eff_too_short = int(duration_min * 140 * 0.50) if duration_min else TOO_SHORT_WORDS
+    eff_too_short = int(duration_min * 140 * 0.90) if duration_min else TOO_SHORT_WORDS
     # Dynamic per-block minimum: scales with video length to avoid false positives on long-form.
     # Formula: 2 words per minute of target (8 min → 16, 25 min → 50, 35 min → 70).
     eff_block_short = max(BLOCK_SHORT_WORDS, int(duration_min * 2)) if duration_min else BLOCK_SHORT_WORDS

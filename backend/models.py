@@ -21,10 +21,11 @@ class PipelineRunRequest(BaseModel):
     budget: float | None = Field(None, description="Max spend in USD")
     langs: list[str] | None = Field(None, description="Language codes for multilingual output")
     dry_run: bool = Field(False, description="Estimate costs only, no API calls")
-    background_music: bool = Field(True, description="Mix royalty-free background music under voice")
+    force: bool = Field(False, description="Force regenerate from scratch — deletes project dir and transcription")
+    background_music: bool = Field(False, description="Mix royalty-free background music under voice")
     no_ken_burns: bool = Field(False, description="Static slideshow instead of Ken Burns (1 FFmpeg call, much faster)")
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
-    burn_subtitles: bool = Field(True, description="Burn generated subtitles into video (Step 4 must have run)")
+    burn_subtitles: bool = Field(False, description="Burn generated subtitles into video (Step 4 must have run)")
     auto_approve: bool = Field(False, description="Auto-approve script/image review if quality criteria met")
     image_style: str | None = Field(None, description="Override image generation style prompt")
     voice_id: str | None = Field(None, description="Override voice ID from channel config")
@@ -52,6 +53,43 @@ class PipelineRunRequest(BaseModel):
         None,
         description="Vision model for image analysis/validation: 'gpt-4.1' (default) | 'gpt-4.1-mini'",
     )
+
+
+class QuickRunRequest(BaseModel):
+    """Start a quick job: script + voice + 1 thumbnail image."""
+    topic: str = Field(..., description="Video topic / title")
+    transcription_url: str = Field(
+        "",
+        description="YouTube URL to transcribe (starts with http) "
+                    "OR local path to existing Transcriber output dir. "
+                    "Leave empty for topic-only mode (no reference video).",
+    )
+    channel: str = Field("config/channels/history.json", description="Channel config JSON path")
+    quality: str = Field("balanced", description="LLM quality preset (max/high/balanced/bulk/test)")
+    voice_id: str | None = Field(None, description="Override voice ID from channel config")
+    image_backend: str | None = Field(None, description="Image provider: None (auto) | 'wavespeed' | 'voiceimage' | 'voidai'")
+    duration_min: int | None = Field(None, ge=1, le=240, description="Minimum target duration in minutes")
+    duration_max: int | None = Field(None, ge=1, le=240, description="Maximum target duration in minutes")
+    force: bool = Field(False, description="Force regenerate from scratch — deletes transcription + project dir")
+
+
+class QuickBatchItem(BaseModel):
+    """One item in a quick-batch queue."""
+    topic: str = Field(..., description="Video topic / title")
+    transcription_url: str = Field("", description="YouTube URL or local Transcriber output dir")
+    channel: str = Field("config/channels/history.json", description="Channel config JSON path")
+    quality: str = Field("max", description="LLM quality preset")
+
+
+class QuickBatchRequest(BaseModel):
+    """Start N quick jobs (script + voice + 1 image) with parallel limit."""
+    items: list[QuickBatchItem] = Field(..., min_length=1)
+    parallel: int = Field(2, ge=1, le=8, description="Max simultaneous quick runs")
+    voice_id: str | None = Field(None)
+    image_backend: str | None = Field(None)
+    duration_min: int | None = Field(None, ge=1, le=240)
+    duration_max: int | None = Field(None, ge=1, le=240)
+    force: bool = Field(False, description="Force regenerate from scratch")
 
 
 class BatchRunRequest(BaseModel):
@@ -98,10 +136,10 @@ class MultiBatchRequest(BaseModel):
     master_prompt: str | None = Field(None, description="Override master prompt path for all videos")
     # Voice / audio settings
     voice_id: str | None = Field(None, description="Override voice ID for all videos")
-    background_music: bool = Field(True, description="Mix royalty-free background music under voice")
+    background_music: bool = Field(False, description="Mix royalty-free background music under voice")
     music_volume: float | None = Field(None, ge=-60, le=0, description="BGM volume override in dB")
     music_track: str | None = Field(None, description="Explicit music track path (absolute)")
-    burn_subtitles: bool = Field(True, description="Burn generated subtitles into video")
+    burn_subtitles: bool = Field(False, description="Burn generated subtitles into video")
     auto_approve: bool = Field(False, description="Auto-approve script/image review if quality criteria met")
     # Video settings
     skip_thumbnail: bool = Field(False, description="Skip thumbnail generation (Step 5)")
@@ -109,6 +147,7 @@ class MultiBatchRequest(BaseModel):
     # Image settings
     image_backend: str | None = Field(None, description="Image generation provider: None (auto from channel config) | 'wavespeed' | 'voiceimage' | 'betatest' (alias) | 'voidai'")
     vision_model: str | None = Field(None, description="Vision model for image analysis/validation: 'gpt-4.1' (default) | 'gpt-4.1-mini'")
+    force: bool = Field(False, description="Force regenerate from scratch — deletes project dir")
 
 
 # ─── Job response ─────────────────────────────────────────────────────────────
@@ -178,3 +217,50 @@ class StatsResponse(BaseModel):
     cost_total_usd: float
     by_model: list[dict]
     by_preset: list[dict]
+
+
+# ─── Presets ──────────────────────────────────────────────────────────────────
+
+class Preset(BaseModel):
+    """Saved form-settings preset for reuse across sessions."""
+    id: str = Field(..., description="UUID, auto-generated on create")
+    name: str = Field(..., min_length=1, max_length=80)
+    channel: str = Field("config/channels/history.json")
+    quality: str = Field("max")
+    duration_min: int = Field(25, ge=1, le=240)
+    duration_max: int = Field(30, ge=1, le=240)
+    template: str = Field("auto")
+    parallel: int = Field(2, ge=1, le=8)
+    skip_thumbnail: bool = Field(False)
+    auto_approve: bool = Field(False)
+    image_backend: str = Field("")
+    background_music: bool = Field(False)
+    burn_subtitles: bool = Field(False)
+    no_ken_burns: bool = Field(False)
+    master_prompt: str | None = Field(None)
+    image_style: str = Field("")
+    voice_id: str = Field("")
+    music_volume: float | None = Field(None)
+    vision_model: str = Field("gpt-4.1")
+
+
+class PresetCreate(BaseModel):
+    """Payload to create or update a preset (id excluded — server assigns it)."""
+    name: str = Field(..., min_length=1, max_length=80)
+    channel: str = Field("config/channels/history.json")
+    quality: str = Field("max")
+    duration_min: int = Field(25, ge=1, le=240)
+    duration_max: int = Field(30, ge=1, le=240)
+    template: str = Field("auto")
+    parallel: int = Field(2, ge=1, le=8)
+    skip_thumbnail: bool = Field(False)
+    auto_approve: bool = Field(False)
+    image_backend: str = Field("")
+    background_music: bool = Field(False)
+    burn_subtitles: bool = Field(False)
+    no_ken_burns: bool = Field(False)
+    master_prompt: str | None = Field(None)
+    image_style: str = Field("")
+    voice_id: str = Field("")
+    music_volume: float | None = Field(None)
+    vision_model: str = Field("gpt-4.1")

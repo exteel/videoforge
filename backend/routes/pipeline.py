@@ -8,12 +8,13 @@ GET  /api/jobs/{job_id}  → job status
 DELETE /api/jobs/{job_id} → cancel job
 """
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from backend.job_manager import manager
-from backend.models import BatchRunRequest, JobResponse, MultiBatchRequest, PipelineRunRequest
+from backend.models import BatchRunRequest, JobResponse, MultiBatchRequest, PipelineRunRequest, QuickBatchRequest, QuickRunRequest
 
 router = APIRouter(tags=["jobs"])
 
@@ -31,6 +32,15 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
 
     channel_path = _resolve_channel(req.channel)
 
+    # Fallback to channel config image_style when not provided in request
+    _image_style = (req.image_style or "").strip()
+    if not _image_style:
+        try:
+            _cfg = json.loads(channel_path.read_text(encoding="utf-8"))
+            _image_style = (_cfg.get("image_style") or "").strip()
+        except Exception:
+            _image_style = ""
+
     job_id = await manager.start_pipeline(
         source_dir=source_dir,
         channel_config_path=channel_path,
@@ -46,7 +56,7 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         no_ken_burns=req.no_ken_burns,
         skip_thumbnail=req.skip_thumbnail,
         burn_subtitles=req.burn_subtitles,
-        image_style=req.image_style,
+        image_style=_image_style,
         voice_id=req.voice_id,
         master_prompt=req.master_prompt,
         duration_min=req.duration_min if req.duration_min is not None else 8,
@@ -57,8 +67,59 @@ async def run_pipeline(req: PipelineRunRequest) -> dict:
         image_backend=req.image_backend,
         vision_model=req.vision_model,
         auto_approve=req.auto_approve,
+        force=req.force,
     )
     return manager.get(job_id).to_response()  # type: ignore[union-attr]
+
+
+# ── Quick ─────────────────────────────────────────────────────────────────────
+
+@router.post("/pipeline/quick", response_model=JobResponse, status_code=202)
+async def run_quick(req: QuickRunRequest) -> dict:
+    """Start a quick job: script + voice + 1 thumbnail image. No full video compilation."""
+    if not req.topic.strip():
+        raise HTTPException(400, "topic is required")
+
+    channel_path = _resolve_channel(req.channel)
+
+    job_id = await manager.start_quick(
+        transcription_url=req.transcription_url.strip(),
+        topic=req.topic.strip(),
+        channel_config_path=channel_path,
+        quality=req.quality,
+        voice_id=req.voice_id,
+        image_backend=req.image_backend,
+        duration_min=req.duration_min if req.duration_min is not None else 25,
+        duration_max=req.duration_max if req.duration_max is not None else 30,
+        force=req.force,
+    )
+    return manager.get(job_id).to_response()  # type: ignore[union-attr]
+
+
+@router.post("/pipeline/quick-batch", response_model=list[JobResponse], status_code=202)
+async def run_quick_batch(req: QuickBatchRequest) -> list[dict]:
+    """Start N quick jobs with parallel limit. All items visible immediately; only `parallel` run at once."""
+    if not req.items:
+        raise HTTPException(400, "items is required")
+
+    specs = []
+    for it in req.items:
+        if not it.topic.strip():
+            raise HTTPException(400, f"topic is required for every item (got empty)")
+        specs.append({
+            "transcription_url": it.transcription_url.strip(),
+            "topic":             it.topic.strip(),
+            "channel_config_path": _resolve_channel(it.channel),
+            "quality":           it.quality,
+            "voice_id":          req.voice_id,
+            "image_backend":     req.image_backend,
+            "duration_min":      req.duration_min if req.duration_min is not None else 25,
+            "duration_max":      req.duration_max if req.duration_max is not None else 30,
+            "force":             req.force,
+        })
+
+    job_ids = await manager.start_quick_batch(specs, parallel=req.parallel)
+    return [manager.get(jid).to_response() for jid in job_ids]  # type: ignore[union-attr]
 
 
 # ── Batch ─────────────────────────────────────────────────────────────────────
@@ -120,8 +181,14 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
 
         channel_path = _resolve_channel(item.channel)
 
-        # Per-item style overrides global; if both empty use None (channel config fallback)
-        resolved_style = item.image_style.strip() or req.image_style.strip() or ""
+        # Per-item style overrides global; fallback to channel config image_style
+        resolved_style = item.image_style.strip() or req.image_style.strip()
+        if not resolved_style:
+            try:
+                _cfg = json.loads(channel_path.read_text(encoding="utf-8"))
+                resolved_style = (_cfg.get("image_style") or "").strip()
+            except Exception:
+                resolved_style = ""
 
         job_specs.append({
             "source_dir": source_dir,
@@ -155,10 +222,78 @@ async def run_multi_batch(req: MultiBatchRequest) -> list[dict]:
                 "image_backend":      req.image_backend,
                 "vision_model":       req.vision_model,
                 "auto_approve":       req.auto_approve,
+                "force":              req.force,
             },
         })
 
     job_ids = await manager.start_multi_batch(job_specs, parallel=req.parallel)
+    return [manager.get(jid).to_response() for jid in job_ids]  # type: ignore[union-attr]
+
+
+@router.post("/batch/append", response_model=list[JobResponse], status_code=202)
+async def append_to_queue(req: MultiBatchRequest) -> list[dict]:
+    """
+    Append more jobs to the currently running queue (shared semaphore).
+
+    Same as /batch/multi but new jobs share the concurrency limit of the
+    existing active queue instead of creating a new one.
+    If no active queue exists, behaves identically to /batch/multi.
+    """
+    if not req.items:
+        raise HTTPException(400, "items list is empty")
+
+    job_specs: list[dict] = []
+    for i, item in enumerate(req.items):
+        source_dir_str = (item.source_dir or "").strip()
+        if source_dir_str:
+            source_dir = Path(source_dir_str)
+            if not source_dir.is_dir():
+                raise HTTPException(400, f"Item {i}: source_dir not found: {source_dir}")
+        else:
+            if not (item.custom_topic or "").strip():
+                raise HTTPException(400, f"Item {i}: either source_dir or custom_topic is required")
+            source_dir = None  # type: ignore[assignment]
+
+        channel_path = _resolve_channel(item.channel)
+
+        resolved_style = item.image_style.strip() or req.image_style.strip()
+        if not resolved_style:
+            try:
+                _cfg = json.loads(channel_path.read_text(encoding="utf-8"))
+                resolved_style = (_cfg.get("image_style") or "").strip()
+            except Exception:
+                resolved_style = ""
+
+        job_specs.append({
+            "source_dir": source_dir,
+            "channel_config_path": channel_path,
+            "kwargs": {
+                "quality":            item.quality,
+                "custom_topic":       item.custom_topic or "",
+                "image_style":        resolved_style,
+                "dry_run":            req.dry_run,
+                "draft":              req.draft,
+                "from_step":          req.from_step,
+                "to_step":            req.to_step,
+                "budget":             req.budget_per_video,
+                "template":           req.template,
+                "duration_min":       req.duration_min,
+                "duration_max":       req.duration_max,
+                "master_prompt":      req.master_prompt,
+                "voice_id":           req.voice_id,
+                "background_music":   req.background_music,
+                "music_volume":       req.music_volume,
+                "music_track":        req.music_track,
+                "burn_subtitles":     req.burn_subtitles,
+                "skip_thumbnail":     req.skip_thumbnail,
+                "no_ken_burns":       req.no_ken_burns,
+                "image_backend":      req.image_backend,
+                "vision_model":       req.vision_model,
+                "auto_approve":       req.auto_approve,
+            },
+        })
+
+    job_ids = await manager.append_to_queue(job_specs)
     return [manager.get(jid).to_response() for jid in job_ids]  # type: ignore[union-attr]
 
 
@@ -200,6 +335,271 @@ async def approve_job(job_id: str, stage: str = "script") -> dict:
     if not ok:
         raise HTTPException(400, f"No pending review for stage: {stage}")
     return {"job_id": job_id, "stage": stage, "approved": True}
+
+
+@router.post("/jobs/{job_id}/regen-images", status_code=200)
+async def regen_failed_images(job_id: str) -> dict:
+    """Re-run image validator (regenerate failed images) while job waits for review."""
+    import importlib.util
+    import json
+    from urllib.parse import quote as _url_quote
+
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, f"Job not found: {job_id}")
+    if job.status != "waiting_review" or job.review_stage != "images":
+        raise HTTPException(400, "Job is not waiting for image review")
+
+    rd = job.review_data
+    script_path = Path(rd.get("script_path", ""))
+    images_dir = Path(rd.get("images_dir", ""))
+    source_name = rd.get("source_name", "")
+
+    if not script_path.exists():
+        raise HTTPException(400, f"script.json not found: {script_path}")
+    if not images_dir.is_dir():
+        raise HTTPException(400, f"images dir not found: {images_dir}")
+
+    # Load channel config from script.json metadata
+    script_data = json.loads(script_path.read_text(encoding="utf-8"))
+    chan_path_str = script_data.get("metadata", {}).get("channel_config", "")
+    chan_cfg: dict = {}
+    if chan_path_str:
+        chan_path = Path(chan_path_str)
+        if not chan_path.is_absolute():
+            chan_path = ROOT / chan_path
+        if chan_path.exists():
+            chan_cfg = json.loads(chan_path.read_text(encoding="utf-8"))
+
+    # Dynamic import of 02b_image_validator
+    mod_path = ROOT / "modules" / "02b_image_validator.py"
+    spec = importlib.util.spec_from_file_location("img_validator", mod_path)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    validate_and_fix = mod.validate_and_fix_images
+
+    threshold = float(chan_cfg.get("image_validation_threshold", 7.0))
+
+    # Emit progress to WS subscribers
+    job.emit(type="regen_started")
+    job.log("[Regen] Regenerating failed images…")
+
+    result = await validate_and_fix(
+        script_path, images_dir, chan_cfg,
+        threshold=threshold,
+    )
+    val_data = result.to_dict()
+
+    # Add image URLs — use relative path from projects root to include channel subfolder
+    try:
+        _proj_dir = images_dir.parent
+        _rel_parts = _proj_dir.relative_to(ROOT / "projects").parts
+        enc_name = "/".join(_url_quote(p, safe="") for p in _rel_parts)
+    except ValueError:
+        enc_name = _url_quote(source_name, safe="")
+    for sc in val_data.get("scores", []):
+        idx = sc.get("image_index", 0)
+        fname = f"{sc['block_id']}.png" if idx == 0 else f"{sc['block_id']}_{idx}.png"
+        sc["image_url"] = f"/projects/{enc_name}/images/{fname}"
+
+    # Update review_data in place and push to WS
+    job.review_data["validation"] = val_data
+    job.emit(
+        type="review_required", stage="images",
+        data=job.review_data,
+    )
+    job.log(
+        f"[Regen] Done: {result.ok_count}/{result.total} OK, "
+        f"{result.regenerated} regen, {result.failed} failed"
+    )
+
+    return {"job_id": job_id, "validation": val_data}
+
+
+@router.post("/jobs/{job_id}/regen-script", status_code=200)
+async def regen_script(job_id: str) -> dict:
+    """Re-run script generation (step 1) while job waits at script review."""
+    import importlib.util
+    import json as _json
+
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(404, f"Job not found: {job_id}")
+    if job.status != "waiting_review" or job.review_stage != "script":
+        raise HTTPException(400, "Job is not waiting for script review")
+
+    rd = job.review_data
+    regen = rd.get("_regen", {})
+    script_path = Path(rd.get("script_path", ""))
+    channel_config_path = Path(regen.get("channel_config_path", ""))
+    source_dir_str = regen.get("source_dir", "") or job.source_dir  # fallback to job.source_dir
+    output_dir_str = regen.get("output_dir", "") or job.project_dir or str(script_path.parent)
+    quality = regen.get("quality", job.quality or "max")
+    template = regen.get("template", "auto")
+    duration_min = int(regen.get("duration_min", 8))
+    duration_max = int(regen.get("duration_max", 12))
+    master_prompt = regen.get("master_prompt", "") or None
+    image_style = regen.get("image_style", "")
+    custom_topic = regen.get("custom_topic", "") or None
+
+    if not channel_config_path.exists():
+        # Fallback: reconstruct from job.channel
+        channel_config_path = ROOT / "config" / "channels" / f"{job.channel}.json"
+    if not channel_config_path.exists():
+        raise HTTPException(400, f"Channel config not found: {channel_config_path}")
+
+    source_dir = Path(source_dir_str) if source_dir_str else None
+    output_dir = Path(output_dir_str) if output_dir_str else Path(".")
+
+    # Load channel config
+    chan_cfg: dict = {}
+    try:
+        chan_cfg = _json.loads(channel_config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("regen-script: could not load channel config: %s", exc)
+
+    # Dynamic import of 01_script_generator
+    mod_path = ROOT / "modules" / "01_script_generator.py"
+    spec = importlib.util.spec_from_file_location("script_gen", mod_path)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    generate_scripts = mod.generate_scripts
+
+    job.emit(type="regen_started", stage="script")
+    job.log("[Regen] Regenerating script…")
+
+    try:
+        script_paths = await generate_scripts(
+            source_dir,
+            channel_config_path,
+            template=template,
+            preset=quality,
+            dry_run=False,
+            output_dir=output_dir,
+            duration_min=duration_min,
+            duration_max=duration_max,
+            master_prompt_path=master_prompt,
+            image_style=image_style,
+            custom_topic=custom_topic or "",
+        )
+    except Exception as exc:
+        job.log(f"[Regen] Script generation failed: {exc}")
+        raise HTTPException(500, f"Script generation failed: {exc}")
+
+    if not script_paths:
+        raise HTTPException(500, "generate_scripts returned empty list")
+
+    new_script_path = script_paths[0]
+
+    # Run validator + image planner (non-fatal)
+    try:
+        val_mod_path = ROOT / "modules" / "01b_script_validator.py"
+        val_spec = importlib.util.spec_from_file_location("script_val", val_mod_path)
+        val_mod = importlib.util.module_from_spec(val_spec)  # type: ignore
+        val_spec.loader.exec_module(val_mod)  # type: ignore
+        await val_mod.validate_and_fix_script(new_script_path, chan_cfg)
+        job.log("[Regen] Script validated")
+    except Exception as vexc:
+        log.warning("regen-script: validator failed (non-fatal): %s", vexc)
+
+    try:
+        plan_mod_path = ROOT / "modules" / "01c_image_planner.py"
+        plan_spec = importlib.util.spec_from_file_location("img_plan", plan_mod_path)
+        plan_mod = importlib.util.module_from_spec(plan_spec)  # type: ignore
+        plan_spec.loader.exec_module(plan_mod)  # type: ignore
+        await plan_mod.plan_images(new_script_path, chan_cfg, preset_name="high", image_style=image_style or "")
+        job.log("[Regen] Image plan updated")
+    except Exception as pexc:
+        log.warning("regen-script: image planner failed (non-fatal): %s", pexc)
+
+    # Recompute review stats
+    sd = _json.loads(new_script_path.read_text(encoding="utf-8"))
+    blocks = sd.get("blocks", [])
+    word_count = sum(len((b.get("narration") or "").split()) for b in blocks)
+    dur_min = round(word_count / 150, 1)
+    dur_max = round(word_count / 130, 1)
+    type_counts: dict[str, int] = {}
+    for b in blocks:
+        t = b.get("type", "section")
+        type_counts[t] = type_counts.get(t, 0) + 1
+    total_imgs = sum(
+        len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0)
+        for b in blocks
+    )
+    intro_blocks = [b for b in blocks if b.get("type") == "intro"]
+    has_hook = False
+    if intro_blocks:
+        hook_meta = intro_blocks[0].get("hook")
+        if isinstance(hook_meta, dict):
+            score = hook_meta.get("validation_score")
+            has_hook = score is None or score >= 3
+        else:
+            intro_text = (intro_blocks[0].get("narration") or "").strip()
+            has_hook = bool(intro_text)
+
+    new_review_data = {
+        **rd,
+        "script_path":        str(new_script_path),
+        "title":              sd.get("title", ""),
+        "block_count":        len(blocks),
+        "word_count":         word_count,
+        "duration_min":       dur_min,
+        "duration_max":       dur_max,
+        "type_counts":        type_counts,
+        "image_prompt_count": total_imgs,
+        "has_hook":           has_hook,
+        "blocks": [
+            {
+                "id":          b.get("id", ""),
+                "type":        b.get("type", "section"),
+                "title":       b.get("title", ""),
+                "word_count":  len((b.get("narration") or "").split()),
+                "image_count": len(b.get("image_prompts") or []) or (1 if (b.get("image_prompt") or "").strip() else 0),
+                "narration":   (b.get("narration") or "")[:120],
+            }
+            for b in blocks
+        ],
+    }
+
+    job.review_data = new_review_data
+    job.emit(type="review_required", stage="script", data=new_review_data)
+    job.log(f"[Regen] Script regenerated: {word_count} words, {len(blocks)} blocks")
+
+    return {"job_id": job_id, "word_count": word_count, "block_count": len(blocks)}
+
+
+# ── Project Folders ───────────────────────────────────────────────────────────
+
+@router.get("/projects/folders")
+async def list_project_folders() -> list[dict]:
+    """
+    List true channel subfolders in projects/ (new-style: projects/{channel}/{title}/).
+    Skips old-style video folders (projects/{title}/output/final.mp4).
+    Returns: name, has_config, video_count (completed videos inside).
+    """
+    projects_dir = ROOT / "projects"
+    projects_dir.mkdir(exist_ok=True)
+    result: list[dict] = []
+    for d in sorted(projects_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        # Skip old-format video folders: they have output/ directly inside
+        if (d / "output").is_dir():
+            continue
+        has_config = (ROOT / "config" / "channels" / f"{d.name}.json").exists()
+        if not has_config:
+            continue
+        # Count sub-project folders that have a compiled final.mp4
+        video_count = sum(
+            1 for v in d.iterdir()
+            if v.is_dir() and (v / "output" / "final.mp4").exists()
+        )
+        result.append({
+            "name": d.name,
+            "has_config": has_config,
+            "video_count": video_count,
+        })
+    return result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

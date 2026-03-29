@@ -111,6 +111,7 @@ class VoidAIClient:
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT)
         self._session_cost: float = 0.0
         self._http: httpx.AsyncClient | None = None
+        self.last_finish_reason: str | None = None  # set after each chat_completion call
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -262,12 +263,21 @@ class VoidAIClient:
                 data = await self._post("/chat/completions", payload)
                 elapsed = time.monotonic() - t0
 
-                content: str = data["choices"][0]["message"]["content"]
+                choice = data["choices"][0]
+                content: str = choice["message"]["content"]
+                self.last_finish_reason = choice.get("finish_reason")
                 usage = data.get("usage", {})
                 in_tok = usage.get("prompt_tokens", 0)
                 out_tok = usage.get("completion_tokens", 0)
                 cost = _estimate_cost(current_model, in_tok, out_tok)
                 self._session_cost += cost
+
+                if self.last_finish_reason == "length":
+                    log.warning(
+                        "Output truncated (finish_reason=length): model=%s requested_max_tokens=%d "
+                        "actual_output_tokens=%d — server may have a lower limit",
+                        current_model, max_tokens, out_tok,
+                    )
 
                 if current_model != model:
                     log.info(
