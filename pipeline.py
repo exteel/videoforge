@@ -53,6 +53,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 from modules.common import get_llm_preset, load_channel_config, load_env, setup_logging
+from modules.constants import TTS_WPM
 from utils.cost_tracker import estimate_cost
 
 log = setup_logging("pipeline")
@@ -553,19 +554,55 @@ async def _step_script(
         )
 
     generate_scripts = _fn("modules/01_script_generator.py", "generate_scripts")
-    script_paths: list[Path] = await generate_scripts(
-        source_dir,
-        channel_config_path,
-        template=template,
-        preset=quality,
-        dry_run=dry_run,
-        output_dir=proj,
-        duration_min=duration_min,
-        duration_max=duration_max,
-        master_prompt_path=master_prompt or None,
-        image_style=image_style or "",
-        custom_topic=custom_topic or "",
-    )
+
+    MAX_SCRIPT_REGEN = 3
+    _auto_regen_threshold = int(duration_min * TTS_WPM * 0.90)  # 90% of min target
+
+    for _regen_attempt in range(1, MAX_SCRIPT_REGEN + 1):
+        script_paths: list[Path] = await generate_scripts(
+            source_dir,
+            channel_config_path,
+            template=template,
+            preset=quality,
+            dry_run=dry_run,
+            output_dir=proj,
+            duration_min=duration_min,
+            duration_max=duration_max,
+            master_prompt_path=master_prompt or None,
+            image_style=image_style or "",
+            custom_topic=custom_topic or "",
+        )
+
+        if dry_run:
+            break
+
+        # Check word count — auto-regen if < 90% of target
+        _regen_sd = _load_script(s_path)
+        _regen_blocks = _regen_sd.get("blocks", [])
+        _regen_words = sum(len((b.get("narration") or "").split()) for b in _regen_blocks)
+
+        if _regen_words >= _auto_regen_threshold:
+            if _regen_attempt > 1:
+                log.info(
+                    "Auto-regen attempt %d/%d succeeded: %d words (threshold: %d)",
+                    _regen_attempt, MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold,
+                )
+            break
+
+        if _regen_attempt < MAX_SCRIPT_REGEN:
+            log.warning(
+                "Auto-regen %d/%d: script too short (%d words, need %d) — regenerating",
+                _regen_attempt, MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold,
+            )
+            _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                  pct=10.0, message=f"Script too short ({_regen_words}w) — auto-regen {_regen_attempt+1}/{MAX_SCRIPT_REGEN}…")
+            # Delete script.json so generate_scripts doesn't skip
+            s_path.unlink(missing_ok=True)
+        else:
+            log.warning(
+                "Auto-regen exhausted (%d attempts): %d words (need %d) — proceeding to review",
+                MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold,
+            )
 
     val_result: Any = None
 
@@ -1540,25 +1577,52 @@ async def run_pipeline(
             )
 
         generate_scripts = _fn("modules/01_script_generator.py", "generate_scripts")
-        script_paths: list[Path] = await generate_scripts(
-            source_dir,
-            channel_config_path,
-            template=template,
-            preset=quality,
-            dry_run=dry_run,
-            output_dir=proj,
-            duration_min=duration_min,
-            duration_max=duration_max,
-            master_prompt_path=master_prompt or None,
-            image_style=image_style or "",
-            custom_topic=custom_topic or "",
-        )
 
-        if not dry_run:
+        MAX_SCRIPT_REGEN = 3
+        _auto_regen_threshold = int(duration_min * TTS_WPM * 0.90)  # 90% of min target
+
+        for _regen_attempt in range(1, MAX_SCRIPT_REGEN + 1):
+            script_paths: list[Path] = await generate_scripts(
+                source_dir,
+                channel_config_path,
+                template=template,
+                preset=quality,
+                dry_run=dry_run,
+                output_dir=proj,
+                duration_min=duration_min,
+                duration_max=duration_max,
+                master_prompt_path=master_prompt or None,
+                image_style=image_style or "",
+                custom_topic=custom_topic or "",
+            )
+
+            if dry_run:
+                break
+
             if not script_paths:
                 raise RuntimeError("generate_scripts returned an empty list")
             s_path = script_paths[0]
             _require_files([s_path], min_bytes=200, step="Script")
+
+            _regen_sd = _load_script(s_path)
+            _regen_blocks = _regen_sd.get("blocks", [])
+            _regen_words = sum(len((b.get("narration") or "").split()) for b in _regen_blocks)
+
+            if _regen_words >= _auto_regen_threshold:
+                if _regen_attempt > 1:
+                    log.info("Auto-regen attempt %d/%d succeeded: %d words (threshold: %d)",
+                             _regen_attempt, MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold)
+                break
+
+            if _regen_attempt < MAX_SCRIPT_REGEN:
+                log.warning("Auto-regen %d/%d: script too short (%d words, need %d) — regenerating",
+                            _regen_attempt, MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold)
+                _emit(progress_callback, type="sub_progress", step=STEP_SCRIPT,
+                      pct=10.0, message=f"Script too short ({_regen_words}w) — auto-regen {_regen_attempt+1}/{MAX_SCRIPT_REGEN}…")
+                s_path.unlink(missing_ok=True)
+            else:
+                log.warning("Auto-regen exhausted (%d attempts): %d words (need %d) — proceeding to review",
+                            MAX_SCRIPT_REGEN, _regen_words, _auto_regen_threshold)
             log.info("Script saved: %s  (%.1fs)", s_path, time.monotonic() - t0)
 
             # ── Script validation + auto-fix ───────────────────────────────
