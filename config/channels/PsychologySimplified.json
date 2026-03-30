@@ -1,0 +1,61 @@
+{
+  "channel_name": "PsychologySimplified",
+  "niche": "psychology",
+  "language": "en",
+  "voice_id": "a4CnuaYbALRvW39mDitg",
+  "master_prompt_path": "prompts/master_script_v5.txt",
+  "image_style": "2D cartoon animation style, white round-headed character, bold black outlines, warm pastel colors, soft lighting, editorial illustration feel",
+  "subtitle_style": {
+    "font": "Montserrat-Bold",
+    "font_size": 42,
+    "primary_color": "&H00FFFFFF",
+    "outline_color": "&H00000000",
+    "outline_width": 3,
+    "shadow": true,
+    "position": "top",
+    "margin_v": 30
+  },
+  "tts": {
+    "provider": "voiceapi",
+    "fallback": "tts-1-hd"
+  },
+  "images": {
+    "provider": "wavespeed",
+    "model": "wavespeed-ai/z-image/turbo",
+    "fallback": "gpt-image-1.5"
+  },
+  "llm": {
+    "presets": {
+      "max": {
+        "script": "claude-opus-4-6-20250918",
+        "metadata": "gpt-4.1-mini",
+        "thumbnail": "gpt-4.1"
+      },
+      "high": {
+        "script": "claude-sonnet-4-5-20250929",
+        "metadata": "gpt-4.1-mini",
+        "thumbnail": "gpt-4.1"
+      },
+      "balanced": {
+        "script": "gpt-5.2",
+        "metadata": "gpt-4.1-mini",
+        "thumbnail": "gpt-4.1-mini"
+      },
+      "bulk": {
+        "script": "deepseek-v3.1",
+        "metadata": "gpt-4.1-nano",
+        "thumbnail": "gpt-4.1-mini"
+      }
+    }
+  },
+  "grok": {
+    "enabled": true,
+    "global_suffix": "2D flat cartoon animation, white round-headed character with simple dot eyes, bold black outlines, warm pastel background colors, soft lighting, consistent character design throughout",
+    "character_description": "A white round-headed cartoon character with simple features - dot eyes, small mouth, messy white hair, wearing a green sweater and beige pants. Expressive face with minimalist features. Style similar to Cyanide & Happiness but softer and warmer.",
+    "aspect_ratio": "16:9",
+    "resolution": "720p",
+    "extend_duration": "6s",
+    "max_scene_duration": 12.0,
+    "min_scene_duration": 3.0
+  }
+}
