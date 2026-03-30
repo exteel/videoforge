@@ -22,6 +22,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import sys
+from pathlib import Path as _Path
+sys.path.insert(0, str(_Path(__file__).parent.parent))
+
 from modules.common import setup_logging, load_channel_config
 
 log = setup_logging("grok_export")

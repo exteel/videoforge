@@ -34,6 +34,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import sys
+from pathlib import Path as _Path
+sys.path.insert(0, str(_Path(__file__).parent.parent))
+
 from modules.common import (
     setup_logging,
     load_env,
@@ -132,7 +136,6 @@ async def _call_llm_for_scenes(
 
     api_key = require_env("VOIDAI_API_KEY")
     base_url = require_env("VOIDAI_BASE_URL")
-    client = VoidAIClient(api_key=api_key, base_url=base_url)
 
     system_prompt = _load_system_prompt()
 
@@ -149,17 +152,24 @@ async def _call_llm_for_scenes(
         llm_model,
     )
 
-    response = await client.chat_completion(
-        model=llm_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0.4,
-        max_tokens=16000,
-    )
+    async with VoidAIClient(api_key=api_key, base_url=base_url) as client:
+        response = await client.chat_completion(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.4,
+            max_tokens=16000,
+        )
 
-    raw_text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    # VoidAIClient may return str directly or dict with choices
+    if isinstance(response, str):
+        raw_text = response
+    elif isinstance(response, dict):
+        raw_text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    else:
+        raw_text = str(response)
 
     # Extract JSON from response (may be wrapped in ```json blocks)
     json_text = raw_text.strip()
