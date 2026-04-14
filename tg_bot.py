@@ -30,6 +30,9 @@ import requests
 import telebot  # pip install pyTelegramBotAPI
 from dotenv import load_dotenv
 
+# ✨ Claude Code integration
+from claude_module import register_claude_commands
+
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 ROOT = Path(__file__).parent
@@ -51,6 +54,10 @@ if not TOKEN:
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
+
+# ✨ Register Claude commands
+claude_ui = register_claude_commands(bot, lambda m: _auth(m))
+log.info("Claude Code commands registered")
 
 # ── Process tracking ──────────────────────────────────────────────────────────
 
@@ -177,7 +184,9 @@ def _keyboard() -> telebot.types.ReplyKeyboardMarkup:
     kb.row(BTN_URL, BTN_STATUS)
     kb.row(BTN_LAUNCH)
     kb.row(BTN_RESTART, BTN_NGROK)
-    kb.row(BTN_AI)
+    # ✨ Claude Code buttons
+    kb.row("🧠 Claude Sonnet", "💎 Claude Opus")
+    kb.row("🗑️ Очистити історію", "💰 Токени Opus")
     return kb
 
 def _reply(message: telebot.types.Message, text: str) -> None:
@@ -333,6 +342,25 @@ def _do_starttunnel(chat_id: int) -> None:
         bot.send_message(chat_id,
             f"❌ *Тунель не відповідає*\n• {n.get('error', '?')}",
             parse_mode="Markdown", reply_markup=_keyboard())
+
+
+# ── Claude Code button handlers ───────────────────────────────────────────────
+
+@bot.message_handler(func=lambda m: m.text == "🧠 Claude Sonnet")
+def btn_claude_sonnet(message: telebot.types.Message) -> None:
+    claude_ui["handlers"]["🧠 Claude Sonnet"](message)
+
+@bot.message_handler(func=lambda m: m.text == "💎 Claude Opus")
+def btn_claude_opus(message: telebot.types.Message) -> None:
+    claude_ui["handlers"]["💎 Claude Opus"](message)
+
+@bot.message_handler(func=lambda m: m.text == "🗑️ Очистити історію")
+def btn_claude_clear(message: telebot.types.Message) -> None:
+    claude_ui["handlers"]["🗑️ Очистити історію"](message)
+
+@bot.message_handler(func=lambda m: m.text == "💰 Токени Opus")
+def btn_claude_quota(message: telebot.types.Message) -> None:
+    claude_ui["handlers"]["💰 Токени Opus"](message)
 
 
 # ── AI Team 777 extension (handlers registered in ai_team.py) ─────────────────
